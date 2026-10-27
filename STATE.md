@@ -24,13 +24,14 @@ Root `C:\SCDA-Recomp` (git, branch `phase1-foundation`, GPL-3.0). Rules `CLAUDE.
 - `check_recomp_acceptance.py`: unrecognized=0 switch_errors=0 error_sites=0 functions=34520. 53 extra functions (`tools/fix_missing_functions.py`), manual table 821A5B50 (`config/scda_switches_manual.toml`).
 - Left: 4 undecodable words 82C51468-82C51490 (.text tail); setjmp/longjmp not located.
 - `runtime/`: `scda_ppc.lib` (flags = Unleashed) + `scda.exe` (main/loader/imports/fs/kernel.cpp, `imports_stubs.cpp` from `tools/gen_import_stubs.py`). Data imports: `tools/list_imports.py` -> `import_vars.inc` (10 vars).
-- Boot (2026-10-27, phase 2a GPU heartbeat): GPU wait passed (CP consumes ring 0xA00012C0/512K, rptr wb 0xA068133C, vsync=src0 / CP irq=src1 to cb 0x821F3620). New files: pre_loading.RAW, SplinterCell4Xenon.ini, dir `Game:\Maps\`. Then crash: T1 null deref (guest 0x4) at 0x821E4E94 <- 0x821E3E20 <- 0x821D4954 after stubbed NtQueryDirectoryFile (lr 0x821E46DC). T3 in 0x821F4E28 (D3D) <- ... <- 0x821BF91C.
+- Boot (2026-10-27 late): reaches MAIN MENU headless (mainmenu.bik playing, no crash in 90 s, ~98 file opens, ~12 guest threads). Needs `game\SC4_Offline.img` + `game\SC4_Offline.xexhdr` (xex_dump --out-header). Key fixes: GPU heartbeat (CP + vsync/CP irq), dir enum, XAudio pump, decommit zeroing + 64K large pages (heap), RtlNtStatusToDosError, XEX header/module entry, launcher cmdline `MAPNAME=menu -ll -nolog` (enables .lin linker FM), 2 MB guarded main stack + 64 MB host stack, XAM enumerators/XMsg/XOVERLAPPED.
+- Debug aids: `SCDA_WATCHDOG=<s>`, `SCDA_TRACE_MEM=1`, crash log = symbol+generated line+guest regs+all guest stacks (scda.pdb).
 - HLE done: crit sections, spinlocks, TLS, virtual/physical bump alloc, Nt file I/O, threads, Nt/Ke events/semaphores/mutants/waits, sprintf/_vsnprintf/vswprintf, Rtl string conv. 134 imports still logging stubs.
 - Installer: `tools/installer/` -> `SCDA_Setup.exe` (52 MB, embeds scda.exe, icon.jpg->ico, installer.png bg). Takes user ISO, extracts XDVDFS to `<dir>\game`, SHA-256 check SC4_Offline.xex (86d32713...2a93). Headless: `--iso --dir --no-shortcut`. Tested: 585 files, 6.7 GB. OUT OF DATE: runtime now needs `game\SC4_Offline.img` + TU3; installer does not take the TU or write the image yet (later phase).
 - `_install/` (test install, game data: never commit), `_run/`, `.venv/` (Pillow) are local only.
 
 ## Next
-1. Write Phase 2 (GPU) plan from the stall above: PM4 ring consumer + RPtr writeback + interrupts -> D3D11 with resolution scaling (spec `docs/superpowers/specs/2026-10-27-scda-playable-port-design.md`).
+1. Phase 2b plan: window + PM4 draw path -> D3D11 (shaders, textures, EDRAM resolve, res scaling) so the menu renders; then XInput.
 2. Rest of kernel/XAM HLE (XAM content/profile, XNotify, ExGetXConfigSetting, RtlImageXexHeaderField). Launch-data intercept.
 3. Audio (XMA/XAudio), input (XamInputGetState -> XInput). Playable = months.
 4. Gemini cross-check of VMX patch: bridge timed out 2x on 2026-10-27, still pending.
