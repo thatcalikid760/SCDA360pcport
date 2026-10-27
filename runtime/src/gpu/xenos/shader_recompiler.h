@@ -56,4 +56,11 @@ struct ShaderRecompiler : StringBuffer
     void recompile(const AluInstruction& instr);
 
     void recompile(const uint8_t* shaderData, const std::string_view& include);
+    void recompileBody(const be<uint32_t>* code, uint32_t shaderSize);
+
+    // SCDA: raw microcode (no D3D container). Constants/fetch/interpolators come from registers.
+    bool raw = false;
+    uint32_t rawConstOperand = 0;
+    std::string error; // set when raw microcode is malformed; out is then incomplete
+    void recompileRaw(const be<uint32_t>* code, uint32_t shaderSize, bool pixel, const std::string_view& include);
 };

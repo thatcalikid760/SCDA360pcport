@@ -178,6 +178,25 @@ void ShaderRecompiler::recompile(const VertexFetchInstruction& instr, uint32_t a
 
     out += " = ";
 
+    if (raw)
+    {
+        // SCDA raw: fetch from guest memory with the fetch constant's base/endian (see shader_common_sm5).
+        static constexpr char kComp[] = { 'x', 'y', 'z', 'w' };
+        print("FetchVertex({}, r{}.{}, {}, {}, {}, {}, {}).", instr.constIndex * 3 + instr.constIndexSelect,
+            uint32_t(instr.srcRegister), kComp[instr.srcSwizzle & 3], int32_t(instr.offset), uint32_t(instr.stride),
+            uint32_t(instr.format), uint32_t(instr.signedRfModeAll ? 1 : 0), uint32_t(instr.numFormatAll ? 0 : 1));
+        printDstSwizzle(instr.dstSwizzle, true);
+        out += ";\n";
+        printDstSwizzle01(instr.dstRegister, instr.dstSwizzle);
+        if (instr.isPredicated)
+        {
+            --indentation;
+            indent();
+            out += "}\n";
+        }
+        return;
+    }
+
     auto findResult = vertexElements.find(address);
     assert(findResult != vertexElements.end());
 
@@ -364,6 +383,7 @@ void ShaderRecompiler::recompile(const TextureFetchInstruction& instr, bool bicu
 
 void ShaderRecompiler::recompile(const AluInstruction& instr)
 {
+    rawConstOperand = 0;
     if (instr.isPredicated)
     {
         indent();
@@ -481,6 +501,14 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
                         assert(!instr.const0Relative && !instr.const1Relative);
                         regFormatted = constantName;
                     }
+                }
+                else if (raw)
+                {
+                    // SCDA raw: constants are the register file. const0Relative applies to the
+                    // instruction's first constant operand, const1Relative to the second.
+                    bool relative = rawConstOperand++ == 0 ? instr.const0Relative : instr.const1Relative;
+                    regFormatted = fmt::format("{}[{}{}]", isPixelShader ? "g_PSConstants" : "g_VSConstants", reg,
+                        relative ? (instr.constAddressRegisterRelative ? " + a0" : " + aL") : "");
                 }
                 else
                 {
@@ -629,6 +657,13 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
             {
                 auto findResult = interpolators.find(instr.vectorDest);
                 assert(findResult != interpolators.end());
+                if (findResult == interpolators.end())
+                {
+                    // SCDA: export register the raw path does not declare; fail instead of deref end().
+                    error = fmt::format("unsupported export register {}", uint32_t(instr.vectorDest));
+                    exportRegister = "r0";
+                    break;
+                }
                 exportRegister = findResult->second;
                 break;
             }
@@ -798,6 +833,11 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
 
         case AluVectorOpcode::Dst:
             print("dst({}, {})", op(VECTOR_0), op(VECTOR_1));
+            break;
+
+        default:
+            // SCDA: unused opcode; safe default so the shader still compiles.
+            print("0.0 /* unknown vector opcode {} */", uint32_t(instr.vectorOpcode));
             break;
         }
 
@@ -1011,6 +1051,11 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
 
         case AluScalarOpcode::Cos:
             print("cos({})", op(SCALAR_0));
+            break;
+
+        default:
+            // SCDA: unused opcode; safe default so the shader still compiles.
+            print("0.0 /* unknown scalar opcode {} */", uint32_t(instr.scalarOpcode));
             break;
         }
 
@@ -1494,6 +1539,12 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
     }
 
     const be<uint32_t>* code = reinterpret_cast<const be<uint32_t>*>(shaderData + shaderContainer->virtualSize + shader->physicalOffset);
+    recompileBody(code, shader->size);
+}
+
+// Control flow + instructions; shared by the container and raw (SCDA) entry points.
+void ShaderRecompiler::recompileBody(const be<uint32_t>* code, uint32_t shaderSize)
+{
 
     union
     {
@@ -1509,7 +1560,8 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
 
     auto controlFlowCode = code;
     uint32_t instrAddress = 0;
-    uint32_t instrSize = shader->size;
+    uint32_t instrSize = shaderSize;
+    const uint32_t codeDwords = shaderSize / 4;
     bool simpleControlFlow = true;
 
     while (instrAddress < instrSize)
@@ -1719,6 +1771,14 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
                 }
                 break;
             }
+            }
+
+            // SCDA: reject exec blocks past the end of the microcode instead of reading out of bounds.
+            if (raw && (address + count) * 3 > codeDwords)
+            {
+                error = fmt::format("exec at cf {} reads instructions {}..{} past microcode end ({} dwords)",
+                    pc - 1, address, address + count, codeDwords);
+                return;
             }
 
             auto instructionCode = code + address * 3;

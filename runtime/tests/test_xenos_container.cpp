@@ -19,4 +19,5 @@ TEST(container_path_translates_builtin_pixel_shader)
     r.recompile(data.data() + (0x82001D9C - 0x82000000), "");
     CHECK(r.out.find("main") != std::string::npos);
     CHECK(r.out.size() > 200);
+    if (getenv("SCDA_PRINT_HLSL")) fputs(r.out.c_str(), stdout);
 }
