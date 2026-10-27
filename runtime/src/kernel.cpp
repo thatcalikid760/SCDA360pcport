@@ -204,6 +204,12 @@ SCDA_IMPORT(NtCreateEvent)
     ctx.r3.u64 = X_STATUS_SUCCESS;
 }
 
+bool KernelSetEvent(uint32_t handle)
+{
+    HANDLE h = HostHandle(handle);
+    return h && SetEvent(h);
+}
+
 // NtSetEvent(Handle, s32* PreviousState)
 SCDA_IMPORT(NtSetEvent)
 {

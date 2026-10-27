@@ -38,6 +38,7 @@ add_executable(scda
     src/memory.cpp
     src/module.cpp
     src/thread_context.cpp
+    src/xam.cpp
     src/diag_hooks.cpp
     src/imports.cpp
     src/fs.cpp
@@ -46,11 +47,13 @@ add_executable(scda
     scda.rc)
 target_include_directories(scda PRIVATE include src)
 target_link_libraries(scda PRIVATE scda_ppc bcrypt dbghelp)
+# Recompiled code runs on the host stack; the main guest thread recurses deeply.
+target_link_options(scda PRIVATE /STACK:0x4000000)
 target_compile_definitions(scda PRIVATE SCDA_EXPECTED_IMAGE_SHA256="${SCDA_EXPECTED_IMAGE_SHA256}" NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
 
 # Tests: ctest --test-dir runtime/build
 enable_testing()
-add_executable(scda_tests tests/test_main.cpp tests/test_stfs.cpp tests/test_loader.cpp tests/test_watchdog.cpp tests/test_import_stub.cpp tests/test_video.cpp tests/test_pm4.cpp tests/test_command_processor.cpp tests/test_interrupts.cpp tests/test_fs.cpp tests/test_audio.cpp tests/test_alloc_tracker.cpp tests/test_memory.cpp tests/test_module.cpp tests/test_thread_context.cpp src/thread_context.cpp src/memory.cpp src/module.cpp src/fs.cpp src/audio.cpp src/interrupts.cpp src/video.cpp src/pm4.cpp src/command_processor.cpp src/loader.cpp src/watchdog.cpp src/import_stub.cpp "${SCDA_ROOT}/tools/stfs/stfs.cpp")
+add_executable(scda_tests tests/test_main.cpp tests/test_stfs.cpp tests/test_loader.cpp tests/test_watchdog.cpp tests/test_import_stub.cpp tests/test_video.cpp tests/test_pm4.cpp tests/test_command_processor.cpp tests/test_interrupts.cpp tests/test_fs.cpp tests/test_audio.cpp tests/test_alloc_tracker.cpp tests/test_memory.cpp tests/test_module.cpp tests/test_thread_context.cpp tests/test_xam.cpp src/thread_context.cpp src/xam.cpp src/kernel.cpp src/memory.cpp src/module.cpp src/fs.cpp src/audio.cpp src/interrupts.cpp src/video.cpp src/pm4.cpp src/command_processor.cpp src/loader.cpp src/watchdog.cpp src/import_stub.cpp "${SCDA_ROOT}/tools/stfs/stfs.cpp")
 target_include_directories(scda_tests PRIVATE tests include src "${SCDA_ROOT}/tools/stfs" "${GENERATED}" "${XENON_ROOT}/thirdparty/simde")
 target_compile_options(scda_tests PRIVATE /clang:-march=sandybridge)
 target_link_libraries(scda_tests PRIVATE bcrypt)

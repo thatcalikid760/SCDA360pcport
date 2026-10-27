@@ -5,8 +5,6 @@ SCDA_IMPORT(XNotifyGetNext) { ImportStub("XNotifyGetNext", ctx); }
 SCDA_IMPORT(XamLoaderSetLaunchData) { ImportStub("XamLoaderSetLaunchData", ctx); }
 SCDA_IMPORT(XamLoaderGetLaunchData) { ImportStub("XamLoaderGetLaunchData", ctx); }
 SCDA_IMPORT(XamLoaderGetLaunchDataSize) { ImportStub("XamLoaderGetLaunchDataSize", ctx); }
-SCDA_IMPORT(XMsgInProcessCall) { ImportStub("XMsgInProcessCall", ctx); }
-SCDA_IMPORT(XMsgStartIORequest) { ImportStub("XMsgStartIORequest", ctx); }
 SCDA_IMPORT(XamUserGetXUID) { ImportStub("XamUserGetXUID", ctx); }
 SCDA_IMPORT(XamUserReadProfileSettings) { ImportStub("XamUserReadProfileSettings", ctx); }
 SCDA_IMPORT(XamUserWriteProfileSettings) { ImportStub("XamUserWriteProfileSettings", ctx); }
@@ -42,7 +40,6 @@ SCDA_IMPORT(XamContentGetCreator) { ImportStub("XamContentGetCreator", ctx); }
 SCDA_IMPORT(XamContentCreateEnumerator) { ImportStub("XamContentCreateEnumerator", ctx); }
 SCDA_IMPORT(XamContentGetDeviceState) { ImportStub("XamContentGetDeviceState", ctx); }
 SCDA_IMPORT(XamContentGetDeviceData) { ImportStub("XamContentGetDeviceData", ctx); }
-SCDA_IMPORT(XamEnumerate) { ImportStub("XamEnumerate", ctx); }
 SCDA_IMPORT(XamNotifyCreateListener) { ImportStub("XamNotifyCreateListener", ctx); }
 SCDA_IMPORT(XGetGameRegion) { ImportStub("XGetGameRegion", ctx); }
 SCDA_IMPORT(XamLoaderLaunchTitle) { ImportStub("XamLoaderLaunchTitle", ctx); }
@@ -101,6 +98,3 @@ SCDA_IMPORT(XMAInitializeContext) { ImportStub("XMAInitializeContext", ctx); }
 SCDA_IMPORT(KeBugCheck) { ImportStub("KeBugCheck", ctx); }
 SCDA_IMPORT(RtlUnwind) { ImportStub("RtlUnwind", ctx); }
 SCDA_IMPORT(RtlCaptureContext) { ImportStub("RtlCaptureContext", ctx); }
-SCDA_IMPORT(XamCreateEnumeratorHandle) { ImportStub("XamCreateEnumeratorHandle", ctx); }
-SCDA_IMPORT(XMsgStartIORequestEx) { ImportStub("XMsgStartIORequestEx", ctx); }
-SCDA_IMPORT(XamGetPrivateEnumStructureFromHandle) { ImportStub("XamGetPrivateEnumStructureFromHandle", ctx); }
