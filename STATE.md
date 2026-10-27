@@ -30,7 +30,7 @@
 
 ## Current blocker
 - No image yet: 2b-3 (bind shaders, vertex fetch, textures, EDRAM RT + resolve) not started.
-- Run new builds from `_install\` (needs `game\` next to the exe): copy `runtimeuild\scda.exe` -> `_install\scda_dev.exe`.
+- Run new builds from `_install\` (needs `game\` next to the exe): copy `runtime\build\scda.exe` -> `_install\scda_dev.exe`.
 
 ## Next
 1. 2b-3: bind compiled shaders (`GetCompiledShader`, slots in `gpu/xenos/translate.h`), FetchVertex reads `g_Memory` (t96) + `g_Fetch` (b2), EDRAM RT + resolve to frontbuffer, present.
