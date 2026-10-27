@@ -6,6 +6,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <vector>
 #include <runtime.h>
 
 constexpr uint32_t X_STATUS_SUCCESS = 0;
@@ -18,6 +19,15 @@ std::string g_gameDir; // set by main: <exe dir>\game
 
 static std::mutex g_fileMutex;
 static std::unordered_map<uint32_t, HANDLE> g_files;
+static std::unordered_map<uint32_t, std::string> g_paths; // host path per handle
+
+// Directory enumeration state, built on the first NtQueryDirectoryFile (or a restart).
+struct DirScan
+{
+    std::vector<WIN32_FIND_DATAA> entries;
+    size_t next = 0;
+};
+static std::unordered_map<uint32_t, DirScan> g_scans;
 static uint32_t g_nextHandle = 0x1000;
 
 static uint32_t StackArg(PPCContext& ctx, int index) { return GuestLoad32(ctx.r1.u32 + 0x54 + (index - 8) * 8); }
@@ -66,6 +76,8 @@ bool CloseGuestFile(uint32_t handle)
         return false;
     CloseHandle(it->second);
     g_files.erase(it);
+    g_paths.erase(handle);
+    g_scans.erase(handle);
     return true;
 }
 
@@ -96,6 +108,7 @@ static uint32_t OpenFile(PPCContext& ctx, uint32_t pHandle, uint32_t access, uin
         handle = g_nextHandle;
         g_nextHandle += 4;
         g_files[handle] = h;
+        g_paths[handle] = host;
     }
     RuntimeLog("[fs] open %s -> 0x%X\n", guest.c_str(), handle);
     GuestStore32(pHandle, handle);
@@ -268,5 +281,84 @@ SCDA_IMPORT(NtFlushBuffersFile)
     HANDLE h = HostFile(ctx.r3.u32);
     if (h != INVALID_HANDLE_VALUE)
         FlushFileBuffers(h);
+    ctx.r3.u64 = X_STATUS_SUCCESS;
+}
+
+constexpr uint32_t X_STATUS_NO_MORE_FILES = 0x80000006;
+constexpr uint32_t X_STATUS_NO_SUCH_FILE = 0xC000000F;
+
+// NtQueryDirectoryFile(Handle, Event, ApcRoutine, ApcContext, IoStatusBlock*, FileInformation,
+//                      Length, FileMask (ANSI_STRING*), [RestartScan]). One entry per call.
+// FILE_DIRECTORY_INFORMATION: NextEntryOffset, FileIndex, Creation/LastAccess/LastWrite/Change
+// times, EndOfFile, AllocationSize (i64), FileAttributes, FileNameLength, FileName (ANSI) at 0x40.
+SCDA_IMPORT(NtQueryDirectoryFile)
+{
+    uint32_t handle = ctx.r3.u32, iosb = ctx.r7.u32, out = ctx.r8.u32, length = ctx.r9.u32, pMask = ctx.r10.u32;
+    bool restart = StackArg(ctx, 8) & 0xFF;
+    std::lock_guard lock(g_fileMutex);
+    auto path = g_paths.find(handle);
+    if (path == g_paths.end())
+    {
+        ctx.r3.u64 = X_STATUS_INVALID_HANDLE;
+        return;
+    }
+    auto scan = g_scans.find(handle);
+    if (scan == g_scans.end() || restart)
+    {
+        std::string mask = "*";
+        if (pMask && GuestLoad16(pMask))
+            mask.assign((const char*)GuestPtr(GuestLoad32(pMask + 4)), GuestLoad16(pMask));
+        std::string dir = path->second;
+        while (!dir.empty() && (dir.back() == '\\' || dir.back() == '/'))
+            dir.pop_back();
+        DirScan s;
+        WIN32_FIND_DATAA fd;
+        HANDLE find = FindFirstFileA((dir + "\\" + mask).c_str(), &fd);
+        if (find != INVALID_HANDLE_VALUE)
+        {
+            do
+            {
+                if (strcmp(fd.cFileName, ".") && strcmp(fd.cFileName, ".."))
+                    s.entries.push_back(fd);
+            } while (FindNextFileA(find, &fd));
+            FindClose(find);
+        }
+        scan = g_scans.insert_or_assign(handle, std::move(s)).first;
+        if (scan->second.entries.empty())
+        {
+            SetIoStatus(iosb, X_STATUS_NO_SUCH_FILE, 0);
+            ctx.r3.u64 = X_STATUS_NO_SUCH_FILE;
+            return;
+        }
+    }
+    DirScan& s = scan->second;
+    if (s.next >= s.entries.size())
+    {
+        SetIoStatus(iosb, X_STATUS_NO_MORE_FILES, 0);
+        ctx.r3.u64 = X_STATUS_NO_MORE_FILES;
+        return;
+    }
+    const WIN32_FIND_DATAA& fd = s.entries[s.next];
+    uint32_t nameLen = uint32_t(strlen(fd.cFileName));
+    if (0x40 + nameLen > length)
+    {
+        ctx.r3.u64 = 0x80000005; // STATUS_BUFFER_OVERFLOW
+        return;
+    }
+    s.next++;
+    auto ft = [](FILETIME t) { return (uint64_t(t.dwHighDateTime) << 32) | t.dwLowDateTime; };
+    uint64_t size = (uint64_t(fd.nFileSizeHigh) << 32) | fd.nFileSizeLow;
+    memset(GuestPtr(out), 0, 0x40);
+    GuestStore32(out + 0x04, uint32_t(s.next - 1));
+    GuestStore64(out + 0x08, ft(fd.ftCreationTime));
+    GuestStore64(out + 0x10, ft(fd.ftLastAccessTime));
+    GuestStore64(out + 0x18, ft(fd.ftLastWriteTime));
+    GuestStore64(out + 0x20, ft(fd.ftLastWriteTime));
+    GuestStore64(out + 0x28, size);
+    GuestStore64(out + 0x30, (size + 0xFFF) & ~0xFFFull);
+    GuestStore32(out + 0x38, (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 0x10 : 0x80);
+    GuestStore32(out + 0x3C, nameLen);
+    memcpy(GuestPtr(out + 0x40), fd.cFileName, nameLen);
+    SetIoStatus(iosb, X_STATUS_SUCCESS, 0x40 + nameLen);
     ctx.r3.u64 = X_STATUS_SUCCESS;
 }

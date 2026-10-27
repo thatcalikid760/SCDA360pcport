@@ -67,7 +67,6 @@ SCDA_IMPORT(RtlFreeAnsiString) { ImportStub("RtlFreeAnsiString", ctx); }
 SCDA_IMPORT(RtlUnicodeStringToAnsiString) { ImportStub("RtlUnicodeStringToAnsiString", ctx); }
 SCDA_IMPORT(RtlInitUnicodeString) { ImportStub("RtlInitUnicodeString", ctx); }
 SCDA_IMPORT(__C_specific_handler) { ImportStub("__C_specific_handler", ctx); }
-SCDA_IMPORT(NtQueryDirectoryFile) { ImportStub("NtQueryDirectoryFile", ctx); }
 SCDA_IMPORT(NtQueryVolumeInformationFile) { ImportStub("NtQueryVolumeInformationFile", ctx); }
 SCDA_IMPORT(RtlImageXexHeaderField) { ImportStub("RtlImageXexHeaderField", ctx); }
 SCDA_IMPORT(HalReturnToFirmware) { ImportStub("HalReturnToFirmware", ctx); }
