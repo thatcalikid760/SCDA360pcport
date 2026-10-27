@@ -7,6 +7,7 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <alloc_tracker.h>
 #include <command_processor.h>
 #include <image_loader.h>
 #include <interrupts.h>
@@ -51,7 +52,14 @@ static uint32_t BumpAlloc(uint32_t& cursor, uint32_t limit, uint32_t size, uint3
     }
     cursor = addr + size;
     memset(g_base + addr, 0, size);
+    GuestAllocations().Add(addr, size);
     return addr;
+}
+
+AllocTracker& GuestAllocations()
+{
+    static AllocTracker tracker;
+    return tracker;
 }
 
 static uint32_t g_virtualCursor = 0x40000000;

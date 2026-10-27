@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <vector>
 #include <runtime.h>
+#include <alloc_tracker.h>
 #include <watchdog.h>
 
 // ---- Data imports (tools/list_imports.py -> import_vars.inc) ----
@@ -156,6 +157,9 @@ SCDA_IMPORT(MmAllocatePhysicalMemoryEx)
 }
 
 SCDA_IMPORT(MmFreePhysicalMemory) {}
+
+// MmQueryAllocationSize(BaseAddress): size of the allocation holding the address.
+SCDA_IMPORT(MmQueryAllocationSize) { ctx.r3.u64 = GuestAllocations().SizeOf(ctx.r3.u32); }
 SCDA_IMPORT(MmGetPhysicalAddress) { ctx.r3.u64 = ctx.r3.u32 & 0x1FFFFFFF; }
 SCDA_IMPORT(MmQueryAddressProtect) { ctx.r3.u64 = PAGE_READWRITE; }
 

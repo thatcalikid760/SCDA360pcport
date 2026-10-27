@@ -53,7 +53,6 @@ SCDA_IMPORT(XamLoaderTerminateTitle) { ImportStub("XamLoaderTerminateTitle", ctx
 SCDA_IMPORT(XamGetExecutionId) { ImportStub("XamGetExecutionId", ctx); }
 SCDA_IMPORT(XexGetProcedureAddress) { ImportStub("XexGetProcedureAddress", ctx); }
 SCDA_IMPORT(XexGetModuleHandle) { ImportStub("XexGetModuleHandle", ctx); }
-SCDA_IMPORT(MmQueryAllocationSize) { ImportStub("MmQueryAllocationSize", ctx); }
 SCDA_IMPORT(ObOpenObjectByPointer) { ImportStub("ObOpenObjectByPointer", ctx); }
 SCDA_IMPORT(ObLookupThreadByThreadId) { ImportStub("ObLookupThreadByThreadId", ctx); }
 SCDA_IMPORT(DbgBreakPoint) { ImportStub("DbgBreakPoint", ctx); }
