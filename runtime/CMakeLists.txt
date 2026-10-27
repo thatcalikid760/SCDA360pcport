@@ -36,6 +36,7 @@ add_executable(scda
     src/interrupts.cpp
     src/audio.cpp
     src/memory.cpp
+    src/diag_hooks.cpp
     src/imports.cpp
     src/fs.cpp
     src/kernel.cpp

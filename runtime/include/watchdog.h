@@ -21,6 +21,9 @@ struct WatchdogBlockScope
 // mflr r12; stw r12,-8(r1); stwu r1,-N(r1). Back chain = [sp]; caller's saved LR = [backChain - 8].
 std::vector<uint32_t> WalkGuestStack(const uint8_t* guestBase, uint32_t r1, uint32_t lr, int maxFrames);
 
+// Guest context registered by the calling host thread, or nullptr.
+PPCContext* WatchdogCurrentContext();
+
 // One block of "[watchdog] thread <id> in <import or (guest code)> stack: 0x...".
 std::string WatchdogReport(const uint8_t* guestBase);
 

@@ -141,6 +141,10 @@ static LONG WINAPI CrashHandler(EXCEPTION_POINTERS* e)
         bool haveLine = SymGetLineFromAddr64(GetCurrentProcess(), pc, &lineDisp, &line);
         RuntimeLog("[fatal] at %s %s:%lu\n", haveSym ? sym->Name : "?", haveLine ? line.FileName : "?", haveLine ? line.LineNumber : 0);
     }
+    if (PPCContext* c = WatchdogCurrentContext())
+        RuntimeLog("[fatal] r3=%08X r4=%08X r5=%08X r6=%08X r7=%08X r8=%08X r9=%08X r10=%08X r11=%08X r12=%08X r29=%08X r30=%08X r31=%08X r1=%08X lr=%08X\n",
+            c->r3.u32, c->r4.u32, c->r5.u32, c->r6.u32, c->r7.u32, c->r8.u32, c->r9.u32, c->r10.u32, c->r11.u32, c->r12.u32,
+            c->r29.u32, c->r30.u32, c->r31.u32, c->r1.u32, uint32_t(c->lr));
     // Guest stacks of every thread: the faulting one shows the guest call chain.
     if (r->ExceptionCode == EXCEPTION_ACCESS_VIOLATION)
         RuntimeLog("%s", WatchdogReport(g_base).c_str());

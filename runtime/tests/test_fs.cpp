@@ -96,3 +96,39 @@ TEST(directory_listing_all_entries_skip_dots)
     }
     CHECK_EQ(n, 2);
 }
+
+TEST(open_in_missing_directory_is_path_not_found)
+{
+    TestGuestBase();
+    MakeGameDir();
+    PPCContext ctx{};
+    ctx.r3.u64 = 0x40100000;
+    ctx.r4.u64 = 0x80000000;
+    ctx.r5.u64 = MakeObjectAttributes(0x40100100, "game:\\system\\fxo\\lighting.fxo");
+    ctx.r6.u64 = 0x40100010;
+    __imp__NtOpenFile(ctx, g_base);
+    CHECK_EQ(ctx.r3.u32, 0xC000003Au);
+    ctx.r5.u64 = MakeObjectAttributes(0x40100100, "game:\\Maps\\missing.u");
+    __imp__NtOpenFile(ctx, g_base);
+    CHECK_EQ(ctx.r3.u32, 0xC0000034u);
+}
+
+TEST(nt_status_maps_to_win32_errors)
+{
+    auto map = [](uint32_t status)
+    {
+        PPCContext ctx{};
+        ctx.r3.u64 = status;
+        __imp__RtlNtStatusToDosError(ctx, g_base);
+        return ctx.r3.u32;
+    };
+    CHECK_EQ(map(0), 0u);
+    CHECK_EQ(map(0xC0000034), 2u);   // ERROR_FILE_NOT_FOUND
+    CHECK_EQ(map(0xC000003A), 3u);   // ERROR_PATH_NOT_FOUND
+    CHECK_EQ(map(0xC0000022), 5u);   // ERROR_ACCESS_DENIED
+    CHECK_EQ(map(0xC0000008), 6u);   // ERROR_INVALID_HANDLE
+    CHECK_EQ(map(0xC0000011), 38u);  // ERROR_HANDLE_EOF
+    CHECK_EQ(map(0x80000006), 18u);  // ERROR_NO_MORE_FILES
+    CHECK_EQ(map(0xC0000035), 183u); // ERROR_ALREADY_EXISTS
+    CHECK(map(0xC0123456) != 0u);    // unknown failure is never "success"
+}

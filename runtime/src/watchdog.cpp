@@ -48,6 +48,8 @@ WatchdogBlockScope::~WatchdogBlockScope()
         t_self->blocking = previous;
 }
 
+PPCContext* WatchdogCurrentContext() { return t_self ? t_self->ctx : nullptr; }
+
 static uint32_t Load32(const uint8_t* base, uint32_t addr) { return _byteswap_ulong(*(const uint32_t*)(base + addr)); }
 
 std::vector<uint32_t> WalkGuestStack(const uint8_t* guestBase, uint32_t r1, uint32_t lr, int maxFrames)

@@ -13,6 +13,7 @@ constexpr uint32_t X_STATUS_SUCCESS = 0;
 constexpr uint32_t X_STATUS_INVALID_HANDLE = 0xC0000008;
 constexpr uint32_t X_STATUS_END_OF_FILE = 0xC0000011;
 constexpr uint32_t X_STATUS_OBJECT_NAME_NOT_FOUND = 0xC0000034;
+constexpr uint32_t X_STATUS_OBJECT_PATH_NOT_FOUND = 0xC000003A;
 constexpr uint32_t X_STATUS_INVALID_INFO_CLASS = 0xC0000003;
 
 std::string g_gameDir; // set by main: <exe dir>\game
@@ -97,9 +98,13 @@ static uint32_t OpenFile(PPCContext& ctx, uint32_t pHandle, uint32_t access, uin
         kDisposition[disposition < 6 ? disposition : 1], isDir ? FILE_FLAG_BACKUP_SEMANTICS : 0, nullptr);
     if (h == INVALID_HANDLE_VALUE)
     {
-        RuntimeLog("[fs] open FAIL %s -> %s\n", guest.c_str(), host.c_str());
-        SetIoStatus(iosb, X_STATUS_OBJECT_NAME_NOT_FOUND, 0);
-        return X_STATUS_OBJECT_NAME_NOT_FOUND;
+        // Missing parent directory -> PATH_NOT_FOUND, like the real kernel (XAPI maps it to
+        // ERROR_PATH_NOT_FOUND, which the game treats differently from a missing file).
+        DWORD err = GetLastError();
+        uint32_t status = err == ERROR_PATH_NOT_FOUND ? X_STATUS_OBJECT_PATH_NOT_FOUND : X_STATUS_OBJECT_NAME_NOT_FOUND;
+        RuntimeLog("[fs] open FAIL %s -> %s (0x%08X)\n", guest.c_str(), host.c_str(), status);
+        SetIoStatus(iosb, status, 0);
+        return status;
     }
 
     uint32_t handle;
@@ -361,4 +366,26 @@ SCDA_IMPORT(NtQueryDirectoryFile)
     memcpy(GuestPtr(out + 0x40), fd.cFileName, nameLen);
     SetIoStatus(iosb, X_STATUS_SUCCESS, 0x40 + nameLen);
     ctx.r3.u64 = X_STATUS_SUCCESS;
+}
+
+// RtlNtStatusToDosError(Status): the subset of the NT -> Win32 table this title hits.
+// Unknown failures map to ERROR_GEN_FAILURE, never to ERROR_SUCCESS.
+SCDA_IMPORT(RtlNtStatusToDosError)
+{
+    static const struct { uint32_t status, error; } kMap[] = {
+        { 0x00000000, 0 },   { 0x00000103, 997 }, { 0x80000005, 234 }, { 0x80000006, 18 },
+        { 0xC0000008, 6 },   { 0xC000000D, 87 },  { 0xC000000F, 2 },   { 0xC0000011, 38 },
+        { 0xC0000017, 8 },   { 0xC0000022, 5 },   { 0xC0000034, 2 },   { 0xC000003A, 3 },
+        { 0xC0000035, 183 }, { 0xC0000043, 32 },  { 0xC00000BA, 5 },   { 0xC0000102, 1392 },
+        { 0x00000102, 258 }, { 0xC000007F, 112 }, { 0xC0000120, 995 },
+    };
+    uint32_t status = ctx.r3.u32;
+    for (auto& m : kMap)
+        if (m.status == status)
+        {
+            ctx.r3.u64 = m.error;
+            return;
+        }
+    // Success/informational codes without an entry map to themselves' low word like NT does.
+    ctx.r3.u64 = (status >> 30) == 0 ? status & 0xFFFF : 31; // ERROR_GEN_FAILURE
 }

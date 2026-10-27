@@ -65,3 +65,15 @@ TEST(release_with_zero_size_frees_whole_allocation)
     CHECK_EQ(GuestAllocations().SizeOf(a), 0u);
     CHECK_EQ(GuestLoad32(a + 0x8000), 0u);
 }
+
+// MEM_LARGE_PAGES (0x20000000) uses 64 KB pages: sizes round up to 64 KB (Xenia semantics).
+TEST(large_page_commit_rounds_to_64k)
+{
+    TestGuestBase();
+    uint32_t st;
+    uint32_t a = Allocate(0, 0x100000, 0x60002000, &st);
+    CHECK_EQ(Allocate(a, 0x87000, 0x60001000, &st), a);
+    CHECK_EQ(GuestLoad32(0x40300004), 0x90000u);
+    Allocate(0, 0x3001, kMemCommit, &st);
+    CHECK_EQ(GuestLoad32(0x40300004), 0x4000u); // 4 KB pages otherwise
+}

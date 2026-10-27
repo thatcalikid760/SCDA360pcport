@@ -56,7 +56,6 @@ SCDA_IMPORT(XexGetModuleHandle) { ImportStub("XexGetModuleHandle", ctx); }
 SCDA_IMPORT(ObOpenObjectByPointer) { ImportStub("ObOpenObjectByPointer", ctx); }
 SCDA_IMPORT(ObLookupThreadByThreadId) { ImportStub("ObLookupThreadByThreadId", ctx); }
 SCDA_IMPORT(DbgBreakPoint) { ImportStub("DbgBreakPoint", ctx); }
-SCDA_IMPORT(RtlNtStatusToDosError) { ImportStub("RtlNtStatusToDosError", ctx); }
 SCDA_IMPORT(RtlTimeToTimeFields) { ImportStub("RtlTimeToTimeFields", ctx); }
 SCDA_IMPORT(RtlTimeFieldsToTime) { ImportStub("RtlTimeFieldsToTime", ctx); }
 SCDA_IMPORT(NtQueryVirtualMemory) { ImportStub("NtQueryVirtualMemory", ctx); }

@@ -1,12 +1,13 @@
 // Virtual and physical memory kernel HLE over the runtime's guest bump allocators.
 #include <windows.h>
+#include <cstdlib>
 #include <cstring>
 #include <alloc_tracker.h>
 #include <runtime.h>
 
 // ---- Memory ----
 
-constexpr uint32_t kMemDecommit = 0x4000, kMemRelease = 0x8000;
+constexpr uint32_t kMemDecommit = 0x4000, kMemRelease = 0x8000, kMemLargePages = 0x20000000;
 constexpr uint32_t kStatusNoMemory = 0xC0000017, kStatusConflictingAddresses = 0xC0000018;
 
 // NtAllocateVirtualMemory(u32* BaseAddress, u32* RegionSize, AllocationType, Protect, ...)
@@ -14,12 +15,14 @@ constexpr uint32_t kStatusNoMemory = 0xC0000017, kStatusConflictingAddresses = 0
 SCDA_IMPORT(NtAllocateVirtualMemory)
 {
     uint32_t pBase = ctx.r3.u32, pSize = ctx.r4.u32;
-    uint32_t want = GuestLoad32(pBase), size = (GuestLoad32(pSize) + 0xFFF) & ~0xFFF;
+    // MEM_LARGE_PAGES allocations use 64 KB pages; sizes and bases round to the page size.
+    uint32_t page = (ctx.r5.u32 & kMemLargePages) ? 0x10000 : 0x1000;
+    uint32_t want = GuestLoad32(pBase), size = (GuestLoad32(pSize) + page - 1) & ~(page - 1);
     uint32_t addr;
     if (want)
     {
         // Commit inside an existing reservation. Anywhere else would overlap other allocations.
-        addr = want & ~0xFFFu;
+        addr = want & ~(page - 1);
         if (!GuestAllocations().SizeOf(addr))
         {
             ctx.r3.u64 = kStatusConflictingAddresses;
@@ -33,6 +36,8 @@ SCDA_IMPORT(NtAllocateVirtualMemory)
     }
     GuestStore32(pBase, addr);
     GuestStore32(pSize, size);
+    if (getenv("SCDA_TRACE_MEM"))
+        RuntimeLog("[mem] alloc want 0x%08X size 0x%X type 0x%X -> 0x%08X\n", want, size, ctx.r5.u32, addr);
     ctx.r3.u64 = 0;
 }
 
