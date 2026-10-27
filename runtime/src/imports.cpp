@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <vector>
 #include <runtime.h>
+#include <guest_time.h>
 #include <module.h>
 #include <alloc_tracker.h>
 #include <watchdog.h>
@@ -29,6 +30,10 @@ static void FillVariable(const char* name, uint32_t block)
         // What the disc launcher (default.xex) selects when dvd.dat is present: the arguments
         // sub_821D7850 builds from its launch data. "-ll" turns on the linker (.lin) file manager.
         strcpy((char*)GuestPtr(block), "\"SC4_Offline.xex\" MAPNAME=menu -ll -nolog ");
+    }
+    else if (!strcmp(name, "KeTimeStampBundle"))
+    {
+        GuestTimeStart(block);
     }
     else if (!strcmp(name, "XexExecutableModuleHandle"))
     {
@@ -115,7 +120,8 @@ SCDA_IMPORT(RtlLeaveCriticalSection)
 
 SCDA_IMPORT(KeGetCurrentProcessType) { ctx.r3.u64 = 1; }
 SCDA_IMPORT(XexCheckExecutablePrivilege) { ctx.r3.u64 = 0; }
-SCDA_IMPORT(KeQueryPerformanceFrequency) { ctx.r3.u64 = 49875000; }
+// Must match mftb, which recompiles to the host TSC.
+SCDA_IMPORT(KeQueryPerformanceFrequency) { ctx.r3.u64 = TimebaseFrequency(); }
 SCDA_IMPORT(KeEnterCriticalRegion) {}
 SCDA_IMPORT(KeLeaveCriticalRegion) {}
 SCDA_IMPORT(KeRaiseIrqlToDpcLevel) { ctx.r3.u64 = 0; }

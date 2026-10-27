@@ -103,7 +103,7 @@ static void TraceSync(const char* what, PPCContext& ctx, uint32_t handle)
     static std::atomic<int> lines;
     static thread_local uint64_t last;
     uint64_t key = (uint64_t(handle) << 32) | uint32_t(uintptr_t(what));
-    if (!on || key == last || lines++ > 4000)
+    if (!on || key == last || lines++ > 200000)
         return;
     last = key;
     uint32_t teb = GuestLoad32(ctx.r13.u32 + 0x100);
