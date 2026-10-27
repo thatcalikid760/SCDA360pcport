@@ -87,14 +87,8 @@ SCDA_IMPORT(NetDll_XNetXnAddrToMachineId) { ImportStub("NetDll_XNetXnAddrToMachi
 SCDA_IMPORT(NetDll_XNetConnect) { ImportStub("NetDll_XNetConnect", ctx); }
 SCDA_IMPORT(NetDll_XNetGetConnectStatus) { ImportStub("NetDll_XNetGetConnectStatus", ctx); }
 SCDA_IMPORT(NetDll_XNetGetTitleXnAddr) { ImportStub("NetDll_XNetGetTitleXnAddr", ctx); }
-SCDA_IMPORT(XAudioGetVoiceCategoryVolume) { ImportStub("XAudioGetVoiceCategoryVolume", ctx); }
-SCDA_IMPORT(XAudioGetVoiceCategoryVolumeChangeMask) { ImportStub("XAudioGetVoiceCategoryVolumeChangeMask", ctx); }
 SCDA_IMPORT(XMAReleaseContext) { ImportStub("XMAReleaseContext", ctx); }
 SCDA_IMPORT(XMACreateContext) { ImportStub("XMACreateContext", ctx); }
-SCDA_IMPORT(XAudioRegisterRenderDriverClient) { ImportStub("XAudioRegisterRenderDriverClient", ctx); }
-SCDA_IMPORT(XAudioUnregisterRenderDriverClient) { ImportStub("XAudioUnregisterRenderDriverClient", ctx); }
-SCDA_IMPORT(XAudioSubmitRenderDriverFrame) { ImportStub("XAudioSubmitRenderDriverFrame", ctx); }
-SCDA_IMPORT(XAudioGetSpeakerConfig) { ImportStub("XAudioGetSpeakerConfig", ctx); }
 SCDA_IMPORT(XMAEnableContext) { ImportStub("XMAEnableContext", ctx); }
 SCDA_IMPORT(XMADisableContext) { ImportStub("XMADisableContext", ctx); }
 SCDA_IMPORT(XMASetOutputBufferReadOffset) { ImportStub("XMASetOutputBufferReadOffset", ctx); }
