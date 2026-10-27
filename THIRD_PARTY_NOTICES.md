@@ -5,6 +5,7 @@ SCDA Recomp is licensed under GPL-3.0 (see `LICENSE`). It builds on or adapts:
 | Project | License | Use | URL |
 |-|-|-|-|
 | XenonRecomp / XenonAnalyse / XenonUtils | MIT | PPC recompiler, XEX loader (patched: `tools/patches/xenonrecomp_scda.patch`) | https://github.com/hedge-dev/XenonRecomp |
+| XenosRecomp | MIT | Shader microcode translator, forked into `runtime/src/gpu/xenos/` (modified) | https://github.com/hedge-dev/XenosRecomp |
 | UnleashedRecomp | GPL-3.0 | Reference runtime; kernel/XAM HLE patterns adapted | https://github.com/hedge-dev/UnleashedRecomp |
 | Xenia | BSD-3-Clause | XEX patching code inside XenonUtils (`xex_patcher`); format reference | https://github.com/xenia-project/xenia |
 | simde | MIT | SIMD intrinsics used by recompiled code | https://github.com/simd-everywhere/simde |
