@@ -24,11 +24,7 @@ Root `C:\SCDA-Recomp` (git, branch `phase1-foundation`, GPL-3.0). Rules `CLAUDE.
 - `check_recomp_acceptance.py`: unrecognized=0 switch_errors=0 error_sites=0 functions=34520. 53 extra functions (`tools/fix_missing_functions.py`), manual table 821A5B50 (`config/scda_switches_manual.toml`).
 - Left: 4 undecodable words 82C51468-82C51490 (.text tail); setjmp/longjmp not located.
 - `runtime/`: `scda_ppc.lib` (flags = Unleashed) + `scda.exe` (main/loader/imports/fs/kernel.cpp, `imports_stubs.cpp` from `tools/gen_import_stubs.py`). Data imports: `tools/list_imports.py` -> `import_vars.inc` (10 vars).
-- Boot (2026-10-27, TU3 image, `SCDA_WATCHDOG=15`): CRT + D3D init, dvd.dat, loading_*.dds, CHECKPOINT.RAW, threads 2/3 start, then stall:
-  - T1 in NtWaitForSingleObjectEx: 0x821E4590 <- 0x821C33B8 (sub_821C2DD8) <- 0x821D7F88 <- 0x821DF738 <- 0x821E43E0.
-  - T2 in KeWaitForSingleObject: 0x8220ABE4 (sub_8220AB48).
-  - T3 spins in guest code: sub_821FA428 (D3D wait-for-GPU: polls ring RPtr writeback [r29+10768], 5000-tick timeout) <- sub_821F4088 <- sub_821F46E0 <- sub_821F49A4 <- sub_821BF770.
-  - Cause: no GPU consumes the PM4 ring (VdInitializeRingBuffer / VdEnableRingBufferRPtrWriteBack stubbed). Phase 2 = GPU.
+- Boot (2026-10-27, phase 2a GPU heartbeat): GPU wait passed (CP consumes ring 0xA00012C0/512K, rptr wb 0xA068133C, vsync=src0 / CP irq=src1 to cb 0x821F3620). New files: pre_loading.RAW, SplinterCell4Xenon.ini, dir `Game:\Maps\`. Then crash: T1 null deref (guest 0x4) at 0x821E4E94 <- 0x821E3E20 <- 0x821D4954 after stubbed NtQueryDirectoryFile (lr 0x821E46DC). T3 in 0x821F4E28 (D3D) <- ... <- 0x821BF91C.
 - HLE done: crit sections, spinlocks, TLS, virtual/physical bump alloc, Nt file I/O, threads, Nt/Ke events/semaphores/mutants/waits, sprintf/_vsnprintf/vswprintf, Rtl string conv. 134 imports still logging stubs.
 - Installer: `tools/installer/` -> `SCDA_Setup.exe` (52 MB, embeds scda.exe, icon.jpg->ico, installer.png bg). Takes user ISO, extracts XDVDFS to `<dir>\game`, SHA-256 check SC4_Offline.xex (86d32713...2a93). Headless: `--iso --dir --no-shortcut`. Tested: 585 files, 6.7 GB. OUT OF DATE: runtime now needs `game\SC4_Offline.img` + TU3; installer does not take the TU or write the image yet (later phase).
 - `_install/` (test install, game data: never commit), `_run/`, `.venv/` (Pillow) are local only.

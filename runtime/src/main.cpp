@@ -122,6 +122,9 @@ static LONG WINAPI CrashHandler(EXCEPTION_POINTERS* e)
     RuntimeLog("[fatal] exception 0x%08lX at host %p, fault addr %p (guest 0x%08llX)\n",
         r->ExceptionCode, r->ExceptionAddress, (void*)fault,
         (unsigned long long)(fault - (uintptr_t)g_base));
+    // Guest stacks of every thread: the faulting one shows the guest call chain.
+    if (r->ExceptionCode == EXCEPTION_ACCESS_VIOLATION)
+        RuntimeLog("%s", WatchdogReport(g_base).c_str());
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
