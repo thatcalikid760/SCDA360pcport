@@ -89,3 +89,26 @@ TEST(sprintf_reads_stack_varargs_from_r1_plus_0x50)
     __imp__sprintf(ctx, g_base);
     CHECK_EQ(std::string((const char*)GuestPtr(0x40600100)), std::string("1 2 3 4 5 6 7 8"));
 }
+
+// Signals through the referenced object (Ke*) and through the handle (Nt*) must hit the same event.
+TEST(referenced_object_shares_the_handle_event)
+{
+    TestGuestBase();
+    PPCContext ev{};
+    ev.r3.u64 = 0x40600200; ev.r5.u64 = 1; ev.r6.u64 = 0; // synchronization event, not signalled
+    __imp__NtCreateEvent(ev, g_base);
+    uint32_t handle = GuestLoad32(0x40600200);
+    PPCContext ref{};
+    ref.r3.u64 = handle; ref.r4.u64 = 0; ref.r5.u64 = 0x40600204;
+    __imp__ObReferenceObjectByHandle(ref, g_base);
+    uint32_t body = GuestLoad32(0x40600204);
+    CHECK(body != 0);
+    PPCContext set{};
+    set.r3.u64 = body;
+    __imp__KeSetEvent(set, g_base);
+    PPCContext w{};
+    GuestStore64(0x40600210, 0);
+    w.r3.u64 = handle; w.r6.u64 = 0x40600210;
+    __imp__NtWaitForSingleObjectEx(w, g_base);
+    CHECK_EQ(w.r3.u32, 0u); // signalled through the object
+}

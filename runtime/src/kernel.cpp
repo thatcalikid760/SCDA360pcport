@@ -180,7 +180,11 @@ SCDA_IMPORT(ObReferenceObjectByHandle)
         if (it != g_handles.end())
         {
             if (!it->second.guestBody)
+            {
                 it->second.guestBody = GuestAllocVirtual(0x200, 0x10);
+                // Ke* calls on the object must reach the same host object as Nt* on the handle.
+                g_dispatchers[it->second.guestBody] = it->second.host;
+            }
             body = it->second.guestBody;
         }
     }
