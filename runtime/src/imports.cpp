@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <vector>
 #include <runtime.h>
+#include <watchdog.h>
 
 void ImportStub(const char* name, PPCContext& ctx)
 {
@@ -77,6 +78,7 @@ SCDA_IMPORT(RtlInitializeCriticalSection)
 
 SCDA_IMPORT(RtlEnterCriticalSection)
 {
+    WatchdogBlockScope watch("RtlEnterCriticalSection");
     uint32_t cs = ctx.r3.u32;
     // Owner is stored host-endian; only this runtime reads it.
     uint32_t self = ctx.r13.u32;

@@ -10,6 +10,7 @@
 #include <string>
 #include <unordered_map>
 #include <runtime.h>
+#include <watchdog.h>
 
 constexpr uint32_t X_STATUS_SUCCESS = 0;
 constexpr uint32_t X_STATUS_TIMEOUT = 0x102;
@@ -106,6 +107,7 @@ static DWORD WINAPI GuestThreadMain(void* p)
     delete (ThreadStart*)p;
     auto* ctx = new PPCContext{};
     InitThreadContext(*ctx, 0, s.id);
+    WatchdogRegisterThread(s.id, ctx);
     // XAPI threads start in the startup thunk: startup(entry, context).
     uint32_t target = s.startup ? s.startup : s.entry;
     ctx->r3.u64 = s.startup ? s.entry : s.context;
@@ -113,6 +115,7 @@ static DWORD WINAPI GuestThreadMain(void* p)
     RuntimeLog("[thread] %u start 0x%08X (entry 0x%08X ctx 0x%08X)\n", s.id, target, s.entry, s.context);
     (PPC_LOOKUP_FUNC(g_base, target))(*ctx, g_base);
     RuntimeLog("[thread] %u exit\n", s.id);
+    WatchdogUnregisterThread(s.id);
     return 0;
 }
 
@@ -176,6 +179,7 @@ SCDA_IMPORT(KeResumeThread) { ctx.r3.u64 = 0; }
 // KeDelayExecutionThread(Mode, Alertable, Interval*)
 SCDA_IMPORT(KeDelayExecutionThread)
 {
+    WatchdogBlockScope watch("KeDelayExecutionThread");
     DWORD ms = TimeoutMs(ctx.r5.u32);
     if (ms == 0)
         SwitchToThread();
@@ -260,6 +264,7 @@ SCDA_IMPORT(NtDuplicateObject)
 // NtWaitForSingleObjectEx(Handle, WaitMode, Alertable, Timeout*)
 SCDA_IMPORT(NtWaitForSingleObjectEx)
 {
+    WatchdogBlockScope watch("NtWaitForSingleObjectEx");
     HANDLE h = HostHandle(ctx.r3.u32);
     ctx.r3.u64 = h ? WaitResult(WaitForSingleObjectEx(h, TimeoutMs(ctx.r6.u32), ctx.r5.u32 != 0)) : X_STATUS_INVALID_HANDLE;
 }
@@ -267,6 +272,7 @@ SCDA_IMPORT(NtWaitForSingleObjectEx)
 // NtWaitForMultipleObjectsEx(Count, Handles*, WaitType (0 all, 1 any), WaitMode, Alertable, Timeout*)
 SCDA_IMPORT(NtWaitForMultipleObjectsEx)
 {
+    WatchdogBlockScope watch("NtWaitForMultipleObjectsEx");
     uint32_t count = ctx.r3.u32;
     HANDLE hs[64];
     for (uint32_t i = 0; i < count && i < 64; i++)
@@ -314,12 +320,14 @@ SCDA_IMPORT(KeReleaseSemaphore)
 // KeWaitForSingleObject(Object*, WaitReason, WaitMode, Alertable, Timeout*)
 SCDA_IMPORT(KeWaitForSingleObject)
 {
+    WatchdogBlockScope watch("KeWaitForSingleObject");
     ctx.r3.u64 = WaitResult(WaitForSingleObjectEx(DispatcherObject(ctx.r3.u32), TimeoutMs(ctx.r7.u32), ctx.r6.u32 != 0));
 }
 
 // KeWaitForMultipleObjects(Count, Objects*, WaitType, WaitReason, WaitMode, Alertable, Timeout*, WaitBlocks*)
 SCDA_IMPORT(KeWaitForMultipleObjects)
 {
+    WatchdogBlockScope watch("KeWaitForMultipleObjects");
     uint32_t count = ctx.r3.u32;
     HANDLE hs[64];
     for (uint32_t i = 0; i < count && i < 64; i++)

@@ -26,6 +26,7 @@ target_compile_options(scda_ppc PRIVATE -Wno-unused-label -Wno-unused-variable)
 add_executable(scda
     src/main.cpp
     src/loader.cpp
+    src/watchdog.cpp
     src/imports.cpp
     src/fs.cpp
     src/kernel.cpp
@@ -37,8 +38,9 @@ target_compile_definitions(scda PRIVATE SCDA_EXPECTED_IMAGE_SHA256="${SCDA_EXPEC
 
 # Tests: ctest --test-dir runtime/build
 enable_testing()
-add_executable(scda_tests tests/test_main.cpp tests/test_stfs.cpp tests/test_loader.cpp src/loader.cpp "${SCDA_ROOT}/tools/stfs/stfs.cpp")
-target_include_directories(scda_tests PRIVATE tests include src "${SCDA_ROOT}/tools/stfs")
+add_executable(scda_tests tests/test_main.cpp tests/test_stfs.cpp tests/test_loader.cpp tests/test_watchdog.cpp src/loader.cpp src/watchdog.cpp "${SCDA_ROOT}/tools/stfs/stfs.cpp")
+target_include_directories(scda_tests PRIVATE tests include src "${SCDA_ROOT}/tools/stfs" "${GENERATED}" "${XENON_ROOT}/thirdparty/simde")
+target_compile_options(scda_tests PRIVATE /clang:-march=sandybridge)
 target_link_libraries(scda_tests PRIVATE bcrypt)
 target_compile_definitions(scda_tests PRIVATE SCDA_EXPECTED_IMAGE_SHA256="${SCDA_EXPECTED_IMAGE_SHA256}" SCDA_TESTS SCDA_ROOT="${SCDA_ROOT}" NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
 add_test(NAME scda_tests COMMAND scda_tests)

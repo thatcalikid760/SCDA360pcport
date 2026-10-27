@@ -23,7 +23,11 @@ Root `C:\SCDA-Recomp`. Rules `CLAUDE.md`. Triage `docs/triage_*.txt`.
 - 34,230 functions. Unrecognized 0. Switch errors 0. Padding drop (16,291 `.long 0`) verified.
 - Left: 4 undecodable words 82C51468-82C51490 (.text tail); bctr at 821A5B50 has no switch entry (add by hand); setjmp/longjmp not located.
 - `runtime/`: `scda_ppc.lib` (flags = Unleashed) + `scda.exe` (main/loader/imports/fs/kernel.cpp, `imports_stubs.cpp` from `tools/gen_import_stubs.py`). Data imports: `tools/list_imports.py` -> `import_vars.inc` (10 vars).
-- Boot (2026-10-27): `_xstart` runs CRT + D3D init, opens `GAME:\System\dvd.dat`, loading_*.dds, CHECKPOINT.RAW, starts guest threads 2 (0x8220AB48) and 3 (0x821BF770). Then blocks: no crash, 60 s timeout. Suspect GPU ring buffer (VdInitializeRingBuffer / RPtr writeback / VdSetGraphicsInterruptCallback all stubbed).
+- Boot (2026-10-27, TU3 image, `SCDA_WATCHDOG=15`): CRT + D3D init, dvd.dat, loading_*.dds, CHECKPOINT.RAW, threads 2/3 start, then stall:
+  - T1 in NtWaitForSingleObjectEx: 0x821E4590 <- 0x821C33B8 (sub_821C2DD8) <- 0x821D7F88 <- 0x821DF738 <- 0x821E43E0.
+  - T2 in KeWaitForSingleObject: 0x8220ABE4 (sub_8220AB48).
+  - T3 spins in guest code: sub_821FA428 (D3D wait-for-GPU: polls ring RPtr writeback [r29+10768], 5000-tick timeout) <- sub_821F4088 <- sub_821F46E0 <- sub_821F49A4 <- sub_821BF770.
+  - Cause: no GPU consumes the PM4 ring (VdInitializeRingBuffer / VdEnableRingBufferRPtrWriteBack stubbed). Phase 2 = GPU.
 - HLE done: crit sections, spinlocks, TLS, virtual/physical bump alloc, Nt file I/O, threads, Nt/Ke events/semaphores/mutants/waits, sprintf/_vsnprintf/vswprintf, Rtl string conv. 134 imports still logging stubs.
 - Installer: `tools/installer/` -> `SCDA_Setup.exe` (52 MB, embeds scda.exe, icon.jpg->ico, installer.png bg). Takes user ISO, extracts XDVDFS to `<dir>\game`, SHA-256 check SC4_Offline.xex (86d32713...2a93). Headless: `--iso --dir --no-shortcut`. Tested: 585 files, 6.7 GB.
 - `_install/` (test install, game data: never commit), `_run/`, `.venv/` (Pillow) are local only.

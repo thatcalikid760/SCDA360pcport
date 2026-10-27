@@ -9,6 +9,7 @@
 #include <string>
 #include <image_loader.h>
 #include <runtime.h>
+#include <watchdog.h>
 
 uint8_t* g_base;
 
@@ -157,6 +158,9 @@ int main(int argc, char** argv)
 
     static PPCContext ctx{};
     InitThreadContext(ctx, 0, 1);
+    WatchdogRegisterThread(1, &ctx);
+    if (const char* w = getenv("SCDA_WATCHDOG"))
+        WatchdogStart((unsigned)atoi(w));
     RuntimeLog("[boot] calling _xstart (r1=0x%08X r13=0x%08X)\n", ctx.r1.u32, ctx.r13.u32);
     _xstart(ctx, g_base);
     RuntimeLog("[boot] _xstart returned r3=0x%08X\n", ctx.r3.u32);
