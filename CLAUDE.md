@@ -34,7 +34,8 @@ Call `consult_gemini` (or the `--cli` form) without asking the user when hitting
 ## 4. Stack & skills
 Open-source stack (sources in `external/`): `hedge-dev/XenonAnalyse`, `hedge-dev/XenonRecomp`, `hedge-dev/XenosRecomp`, `rexglue/rexglue-sdk`, `hedge-dev/UnleashedRecomp` (reference runtime).
 
-Layout: `assets/` (extracted XEX, git-ignored), `config/` (TOML), `tools/`, `external/`, `runtime/include/`, `runtime/src/`, `generated/` (recompiled C++), `docs/` (triage reports).
+Layout: `assets/` (extracted XEX, TU, flat image; git-ignored), `config/` (TOML, expected image hash), `tools/` (incl. `stfs/`, `xex_dump/`, `installer/`, `tests/`), `external/` (git-ignored), `runtime/include/`, `runtime/src/`, `runtime/tests/`, `generated/` (recompiled C++, git-ignored), `docs/` (triage reports, `superpowers/` specs + plans).
+Tests: `python -I -m unittest discover -s tools/tests -t .` and `tools/test_runtime.bat` (C++, ctest). License GPL-3.0; TTT2 (`external/TTT2`) is reference only, never copied.
 
 Project commands (`.claude/commands/`):
 - `/triage` — run `tools/pe_ppc_inspect.py` on `assets/`, consult Gemini on import/section tables, update `STATE.md`.

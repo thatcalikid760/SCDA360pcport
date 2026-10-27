@@ -1,6 +1,6 @@
 # STATE — SCDA Xbox 360 static recomp (Title 555307D7)
 
-Root `C:\SCDA-Recomp`. Rules `CLAUDE.md`. Triage `docs/triage_*.txt`.
+Root `C:\SCDA-Recomp` (git, branch `phase1-foundation`, GPL-3.0). Rules `CLAUDE.md`. Spec/plans `docs/superpowers/`. Tests: `python -I -m unittest discover -s tools/tests -t .` + `tools/test_runtime.bat`.
 
 ## Target
 - `assets/SC4_Offline.xex` (`SC4.pe`), entry 0x821E4248, image 0x82000000/0x1300000. `default.xex` = launcher, skipped.
@@ -19,9 +19,10 @@ Root `C:\SCDA-Recomp`. Rules `CLAUDE.md`. Triage `docs/triage_*.txt`.
 - `config/scda_config.toml`: save/restore helpers (restgprlr 82B7FE20, savegprlr 82B7FDD0, restfpr 82B8039C, savefpr 82B80350, restvmx14 82B867E8, savevmx14 82B86550, restvmx64 82B8687C, savevmx64 82B865E4); padding skip `0x00000000`; 81 `functions` from `tools/fix_switch_bounds.py`.
 - Loop: `sh tools/recomp.sh` -> `python -I tools/fix_switch_bounds.py` -> repeat until switcherr=0.
 
-## Recomp status (2026-10-27)
-- 34,230 functions. Unrecognized 0. Switch errors 0. Padding drop (16,291 `.long 0`) verified.
-- Left: 4 undecodable words 82C51468-82C51490 (.text tail); bctr at 821A5B50 has no switch entry (add by hand); setjmp/longjmp not located.
+## Recomp status (2026-10-27, TU3 0.0.3.3)
+- Input `assets/SC4_Offline_tu3.xex` (xex_dump --patch); flat image `assets/SC4_Offline.img` sha256 01193b25...aea4e (`config/expected_image.txt`). TU3 changes header only: image data == 0.0.0.3.
+- `check_recomp_acceptance.py`: unrecognized=0 switch_errors=0 error_sites=0 functions=34520. 53 extra functions (`tools/fix_missing_functions.py`), manual table 821A5B50 (`config/scda_switches_manual.toml`).
+- Left: 4 undecodable words 82C51468-82C51490 (.text tail); setjmp/longjmp not located.
 - `runtime/`: `scda_ppc.lib` (flags = Unleashed) + `scda.exe` (main/loader/imports/fs/kernel.cpp, `imports_stubs.cpp` from `tools/gen_import_stubs.py`). Data imports: `tools/list_imports.py` -> `import_vars.inc` (10 vars).
 - Boot (2026-10-27, TU3 image, `SCDA_WATCHDOG=15`): CRT + D3D init, dvd.dat, loading_*.dds, CHECKPOINT.RAW, threads 2/3 start, then stall:
   - T1 in NtWaitForSingleObjectEx: 0x821E4590 <- 0x821C33B8 (sub_821C2DD8) <- 0x821D7F88 <- 0x821DF738 <- 0x821E43E0.
@@ -33,7 +34,7 @@ Root `C:\SCDA-Recomp`. Rules `CLAUDE.md`. Triage `docs/triage_*.txt`.
 - `_install/` (test install, game data: never commit), `_run/`, `.venv/` (Pillow) are local only.
 
 ## Next
-1. Find what main thread waits on (dump guest lr per thread on timeout). Likely GPU: Xenos PM4 command processor or Unleashed-style D3D hooks + XenosRecomp shaders.
+1. Write Phase 2 (GPU) plan from the stall above: PM4 ring consumer + RPtr writeback + interrupts -> D3D11 with resolution scaling (spec `docs/superpowers/specs/2026-10-27-scda-playable-port-design.md`).
 2. Rest of kernel/XAM HLE (XAM content/profile, XNotify, ExGetXConfigSetting, RtlImageXexHeaderField). Launch-data intercept.
 3. Audio (XMA/XAudio), input (XamInputGetState -> XInput). Playable = months.
 4. Gemini cross-check of VMX patch: bridge timed out 2x on 2026-10-27, still pending.
