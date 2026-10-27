@@ -49,3 +49,22 @@ TEST(stfs_rejects_non_package)
     CHECK(!p.Open(SCDA_ROOT "/icon.jpg", &err));
     CHECK(!err.empty());
 }
+
+TEST(stfs_file_table_block_count)
+{
+    StfsPackage p;
+    std::string err;
+    CHECK(p.Open(kTu, &err));
+    CHECK_EQ(p.FileTableBlocks(), 1u); // LE16 at 0x37C; 0x37B is block separation
+}
+
+TEST(stfs_entry_names_cannot_escape)
+{
+    CHECK(StfsSafeName("Menu_text.ENG"));
+    CHECK(!StfsSafeName(".."));
+    CHECK(!StfsSafeName("."));
+    CHECK(!StfsSafeName("a\\b"));
+    CHECK(!StfsSafeName("a/b"));
+    CHECK(!StfsSafeName("C:x"));
+    CHECK(!StfsSafeName(""));
+}

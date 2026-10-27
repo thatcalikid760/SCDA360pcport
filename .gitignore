@@ -7,7 +7,7 @@
 *.xexp
 *.img
 *.bin
-TU_*
+/TU_*
 assets/
 _install/
 _run/

@@ -25,7 +25,25 @@ static const Pattern kPatterns[] = {
     { "savevmx_64_address",   { 0x39, 0x60, 0xFC, 0x00, 0x10, 0x0B, 0x61, 0xCB }, 8 },
 };
 
+constexpr uint32_t kExpectedBaseVersion = 0x00000003;    // 0.0.0.3 (disc)
 constexpr uint32_t kExpectedPatchedVersion = 0x00000303; // 0.0.3.3 (TU3)
+
+// Writes to <path>.tmp, checks the flush, then replaces <path>: no partial or stale output on failure.
+static bool WriteFileAtomic(const char* path, const uint8_t* data, size_t size)
+{
+    std::string tmp = std::string(path) + ".tmp";
+    {
+        std::ofstream out(tmp, std::ios::binary);
+        if (!out.write((const char*)data, size) || !out.flush())
+            return false;
+    }
+    if (!MoveFileExA(tmp.c_str(), path, MOVEFILE_REPLACE_EXISTING))
+    {
+        DeleteFileA(tmp.c_str());
+        return false;
+    }
+    return true;
+}
 
 static const char* ResultName(XexPatcher::Result r)
 {
@@ -104,8 +122,9 @@ int main(int argc, char** argv)
         return 1;
     }
     const char *patchPath = nullptr, *outXex = nullptr, *outImg = nullptr;
-    for (int i = 2; i + 1 < argc; i += 2)
+    for (int i = 2; i < argc; i += 2)
     {
+        if (i + 1 == argc) { printf("ERROR: %s needs a value\n", argv[i]); return 1; }
         if (!strcmp(argv[i], "--patch")) patchPath = argv[i + 1];
         else if (!strcmp(argv[i], "--out-xex")) outXex = argv[i + 1];
         else if (!strcmp(argv[i], "--out-img")) outImg = argv[i + 1];
@@ -120,29 +139,38 @@ int main(int argc, char** argv)
     }
     if (patchPath)
     {
+        const std::string expected = "base version " + Version(kExpectedBaseVersion) + " -> " + Version(kExpectedPatchedVersion);
+        if (XexVersion(file.data()) != kExpectedBaseVersion)
+        {
+            printf("ERROR: base version %s, expected %s (need %s)\n", Version(XexVersion(file.data())).c_str(), Version(kExpectedBaseVersion).c_str(), expected.c_str());
+            return 2;
+        }
         auto patch = LoadFile(patchPath);
         std::vector<uint8_t> patched;
         auto r = patch.empty() ? XexPatcher::Result::FileOpenFailed
                                : XexPatcher::apply(file.data(), file.size(), patch.data(), patch.size(), patched, false);
         if (r != XexPatcher::Result::Success)
         {
-            printf("ERROR: patch failed: %s\n", ResultName(r));
+            printf("ERROR: patch failed: %s (need the TU3 patch for %s)\n", ResultName(r), expected.c_str());
             return 2;
         }
         if (XexVersion(patched.data()) != kExpectedPatchedVersion)
         {
-            printf("ERROR: patch targets %s, expected %s\n", Version(XexVersion(patched.data())).c_str(), Version(kExpectedPatchedVersion).c_str());
+            printf("ERROR: patch targets %s, expected %s\n", Version(XexVersion(patched.data())).c_str(), expected.c_str());
             return 2;
         }
         file = std::move(patched);
-        if (outXex)
-            std::ofstream(outXex, std::ios::binary).write((const char*)file.data(), file.size());
     }
 
     auto image = Image::ParseImage(file.data(), file.size());
     if (!image.data)
     {
         printf("ERROR: XenonUtils cannot parse the image\n");
+        return 1;
+    }
+    if (outXex && !WriteFileAtomic(outXex, file.data(), file.size()))
+    {
+        printf("ERROR: cannot write %s\n", outXex);
         return 1;
     }
     printf("base=0x%zX size=0x%X entry=0x%zX version=%s\n", image.base, image.size, image.entry_point, Version(XexVersion(file.data())).c_str());
@@ -170,9 +198,7 @@ int main(int argc, char** argv)
     {
         std::vector<uint8_t> flat(image.size, 0);
         memcpy(flat.data(), image.data.get(), ImageBufferSize(file.data(), image));
-        std::ofstream out(outImg, std::ios::binary);
-        out.write((const char*)flat.data(), flat.size());
-        if (!out)
+        if (!WriteFileAtomic(outImg, flat.data(), flat.size()))
         {
             printf("ERROR: cannot write %s\n", outImg);
             return 1;

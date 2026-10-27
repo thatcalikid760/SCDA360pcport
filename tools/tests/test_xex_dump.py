@@ -38,7 +38,24 @@ class XexDump(unittest.TestCase):
             r = run(XEX, "--patch", TU / "default.xexp", "--out-img", img)
             self.assertEqual(r.returncode, 2, r.stdout)
             self.assertIn("ERROR", r.stdout)
+            self.assertIn("0.0.0.3", r.stdout)
             self.assertFalse(img.exists())
+
+    def test_already_patched_base_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            img = Path(d) / "x.img"
+            r = run(ROOT / "assets/SC4_Offline_tu3.xex", "--patch", TU / "SC4_Offline.xexp", "--out-img", img)
+            self.assertEqual(r.returncode, 2, r.stdout)
+            self.assertIn("base version 0.0.3.3, expected 0.0.0.3", r.stdout)
+            self.assertFalse(img.exists())
+
+    def test_unwritable_outputs_fail(self):
+        bad = ROOT / "no such dir" / "x.img"
+        r = run(XEX, "--patch", TU / "SC4_Offline.xexp", "--out-xex", bad.with_suffix(".xex"))
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        r = run(XEX, "--out-img", bad)
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertNotIn("sha256=", r.stdout)
 
 
 if __name__ == "__main__":

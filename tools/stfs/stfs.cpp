@@ -11,6 +11,11 @@ static uint32_t Be32(const uint8_t* p) { return (p[0] << 24) | (p[1] << 16) | (p
 static uint32_t Le24(const uint8_t* p) { return p[0] | (p[1] << 8) | (p[2] << 16); }
 static uint32_t Be24(const uint8_t* p) { return (p[0] << 16) | (p[1] << 8) | p[2]; }
 
+bool StfsSafeName(const std::string& name)
+{
+    return !name.empty() && name != "." && name != ".." && name.find_first_of("\\/:") == std::string::npos;
+}
+
 StfsPackage::~StfsPackage()
 {
     if (m_file)
@@ -67,7 +72,10 @@ bool StfsPackage::Open(const std::filesystem::path& file, std::string* error)
     if (((headerSize + 0xFFF) & 0xF000) != 0xB000)
         return fail("unsupported STFS layout (two hash-table copies)");
 
-    uint32_t tableBlocks = h[0x37B] | (h[0x37C] << 8);
+    // Volume descriptor at 0x379: size, reserved, block separation (0x37B),
+    // file table block count LE16 (0x37C), file table first block LE24 (0x37E).
+    m_fileTableBlocks = h[0x37C] | (h[0x37D] << 8);
+    uint32_t tableBlocks = m_fileTableBlocks;
     uint32_t block = Le24(h + 0x37E);
 
     struct Raw { std::string name; int16_t parent; StfsEntry e; };
@@ -86,6 +94,8 @@ bool StfsPackage::Open(const std::filesystem::path& file, std::string* error)
                 continue;
             Raw x;
             x.name.assign((const char*)r, nameLen);
+            if (!StfsSafeName(x.name))
+                return fail("unsafe file name in package");
             x.parent = int16_t((r[0x32] << 8) | r[0x33]);
             x.e = { {}, Be32(r + 0x34), Le24(r + 0x2F), Le24(r + 0x29), (flags & 0x80) != 0 };
             raw.push_back(std::move(x));

@@ -1,4 +1,5 @@
 """Repo rules from CLAUDE.md: no game data or secrets tracked; GPL-3.0 license and notices present."""
+import re
 import subprocess
 import unittest
 from pathlib import Path
@@ -18,6 +19,16 @@ class RepoHygiene(unittest.TestCase):
                or f.startswith(("assets/", "_install/", "_run/", "generated/"))
                or f.startswith("TU_")]
         self.assertEqual(bad, [])
+
+    def test_build_script_sources_are_tracked(self):
+        tracked = set(self.tracked())
+        missing = []
+        for bat in ROOT.glob("tools/**/build.bat"):
+            for src in re.findall(r"\b([\w.-]+\.(?:cpp|rc))\b", bat.read_text()):
+                rel = (bat.parent / src).relative_to(ROOT).as_posix()
+                if (bat.parent / src).exists() and rel not in tracked:
+                    missing.append(rel)
+        self.assertEqual(missing, [])
 
     def test_license_is_gpl3(self):
         text = (ROOT / "LICENSE").read_text()
