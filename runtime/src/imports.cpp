@@ -10,24 +10,6 @@
 #include <runtime.h>
 #include <watchdog.h>
 
-void ImportStub(const char* name, PPCContext& ctx)
-{
-    // Log the first 16 calls per import, then every 4096th.
-    static std::mutex m;
-    static std::unordered_map<const char*, uint32_t> calls;
-    uint32_t n;
-    {
-        std::lock_guard lock(m);
-        n = ++calls[name];
-    }
-    ctx.r3.u64 = 0;
-    if (n > 16 && (n & 0xFFF))
-        return;
-    RuntimeLog("[stub #%u] ", n);
-    RuntimeLog("[stub] %s(0x%08X, 0x%08X, 0x%08X, 0x%08X) lr=0x%08X\n",
-        name, ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, uint32_t(ctx.lr));
-}
-
 // ---- Data imports (tools/list_imports.py -> import_vars.inc) ----
 
 static void FillVariable(const char* name, uint32_t block)
