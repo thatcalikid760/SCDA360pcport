@@ -4,7 +4,10 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <algorithm>
+#include <vector>
 #include <command_processor.h>
+#include <gpu/shader_cache.h>
 #include <gpu_state.h>
 #include <pm4.h>
 #include <runtime.h>
@@ -12,6 +15,8 @@
 enum : uint32_t
 {
     kOpNop = 0x10,
+    kOpImLoad = 0x27,
+    kOpImLoadImmediate = 0x2B,
     kOpIndirectBuffer = 0x37,
     kOpIndirectBufferPfp = 0x3F,
     kOpRegRmw = 0x21,
@@ -171,6 +176,26 @@ static bool ExecutePacket(uint32_t h, const Pm4Payload& p, int depth, CpStats& s
             Gpu().pendingSwaps++;
         }
         return true;
+    case kOpImLoad:
+    {
+        // p0 = physical address | shader type (bits 0-1), p1 = start << 16 | size in dwords.
+        uint32_t dwords = p(1) & 0xFFFF, guest = GuestPhysical(p(0) & ~3u);
+        if (dwords && Committed(guest, dwords * 4))
+            SetCurrentShader(ShaderCacheInsert(ShaderType(p(0) & 1), (const uint32_t*)GuestPtr(guest), dwords));
+        else
+            st.skipped++;
+        return true;
+    }
+    case kOpImLoadImmediate:
+    {
+        // p0 = shader type, p1 = start << 16 | size, then the microcode.
+        uint32_t dwords = std::min<uint32_t>(p(1) & 0xFFFF, count >= 2 ? count - 2 : 0);
+        std::vector<uint32_t> be(dwords);
+        for (uint32_t i = 0; i < dwords; i++)
+            be[i] = _byteswap_ulong(p(2 + i));
+        SetCurrentShader(ShaderCacheInsert(ShaderType(p(0) & 1), be.data(), dwords));
+        return true;
+    }
     case kOpWaitRegMem:
         return WaitSatisfied(p);
     case kOpCondWrite:
