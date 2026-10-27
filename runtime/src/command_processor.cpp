@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <vector>
 #include <command_processor.h>
+#include <gpu/frame_queue.h>
 #include <gpu/shader_cache.h>
 #include <gpu_state.h>
 #include <pm4.h>
@@ -20,6 +21,8 @@ enum : uint32_t
     kOpIndirectBuffer = 0x37,
     kOpIndirectBufferPfp = 0x3F,
     kOpRegRmw = 0x21,
+    kOpDrawIndx = 0x22,
+    kOpDrawIndx2 = 0x36,
     kOpCondWrite = 0x45,
     kOpWaitRegMem = 0x3C,
     kOpMemWrite = 0x3D,
@@ -34,7 +37,44 @@ static std::function<void(uint32_t)> g_interruptSink;
 static std::mutex g_sinkMutex;
 
 uint32_t GpuRegister(uint32_t index) { return GuestLoad32(kGpuRegBase + index * 4); }
-static void SetGpuRegister(uint32_t index, uint32_t v) { GuestStore32(kGpuRegBase + (index & 0x7FFF) * 4, v); }
+static bool g_regsDirty = true;
+static void SetGpuRegister(uint32_t index, uint32_t v)
+{
+    GuestStore32(kGpuRegBase + (index & 0x7FFF) * 4, v);
+    g_regsDirty = true;
+}
+
+FrameQueue& Frames()
+{
+    static FrameQueue queue(3);
+    return queue;
+}
+
+// Register snapshot shared by consecutive draws until a register changes.
+static std::shared_ptr<const RegisterFile> Snapshot()
+{
+    static std::shared_ptr<const RegisterFile> current;
+    if (g_regsDirty || !current)
+    {
+        auto regs = std::make_shared<RegisterFile>();
+        for (uint32_t i = 0; i < regs->size(); i++)
+            (*regs)[i] = GuestLoad32(kGpuRegBase + i * 4);
+        current = regs;
+        g_regsDirty = false;
+    }
+    return current;
+}
+
+static void SubmitDraw(DrawCall d)
+{
+    d.regs = Snapshot();
+    d.vs = CurrentShader(ShaderType::Vertex);
+    d.ps = CurrentShader(ShaderType::Pixel);
+    if (IsResolve(*d.regs))
+        Frames().AddResolve(DecodeResolve(*d.regs));
+    else
+        Frames().AddDraw(std::move(d));
+}
 
 void CommandProcessorReset()
 {
@@ -174,7 +214,14 @@ static bool ExecutePacket(uint32_t h, const Pm4Payload& p, int depth, CpStats& s
         {
             Gpu().swapCounter++;
             Gpu().pendingSwaps++;
+            Frames().EndFrame();
         }
+        return true;
+    case kOpDrawIndx:
+        SubmitDraw(DecodeDrawIndx(p, count));
+        return true;
+    case kOpDrawIndx2:
+        SubmitDraw(DecodeDrawIndx2(p, count));
         return true;
     case kOpImLoad:
     {

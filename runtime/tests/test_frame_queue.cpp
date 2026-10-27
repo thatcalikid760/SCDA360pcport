@@ -1,0 +1,85 @@
+#include "check.h"
+#include "guest_memory.h"
+#include <command_processor.h>
+#include <gpu/frame_queue.h>
+#include <gpu_state.h>
+#include <runtime.h>
+
+TEST(frame_queue_keeps_order)
+{
+    FrameQueue q(3);
+    for (uint32_t i = 0; i < 2; i++)
+    {
+        DrawCall d;
+        d.indexCount = i + 10;
+        q.AddDraw(std::move(d));
+        q.EndFrame();
+    }
+    Frame f;
+    CHECK(q.PopFrame(f));
+    CHECK_EQ(f.draws.size(), (size_t)1);
+    CHECK_EQ(f.draws[0].indexCount, 10u);
+    CHECK_EQ(f.stats.frame, 0ull);
+    CHECK(q.PopFrame(f));
+    CHECK_EQ(f.stats.frame, 1ull);
+    CHECK(!q.PopFrame(f));
+}
+
+// Review Focus: a slow renderer never blocks the CP; the oldest frames are dropped.
+TEST(frame_queue_drops_oldest_when_full)
+{
+    FrameQueue q(3);
+    for (int i = 0; i < 5; i++)
+        q.EndFrame();
+    Frame f;
+    int n = 0;
+    uint64_t first = 99;
+    while (q.PopFrame(f))
+    {
+        if (!n)
+            first = f.stats.frame;
+        n++;
+    }
+    CHECK_EQ(n, 3);
+    CHECK_EQ(first, 2ull);
+    CHECK_EQ(q.Dropped(), 2ull);
+}
+
+TEST(end_frame_counts_stats)
+{
+    FrameQueue q(3);
+    q.AddDraw(DrawCall{});
+    q.AddDraw(DrawCall{});
+    q.AddResolve(Resolve{});
+    q.EndFrame();
+    Frame f;
+    CHECK(q.PopFrame(f));
+    CHECK_EQ(f.stats.draws, 2u);
+    CHECK_EQ(f.stats.resolves, 1u);
+}
+
+// CP wiring: draws between swaps form one frame; the swap marker closes it.
+TEST(cp_draws_and_swap_form_a_frame)
+{
+    TestGuestBase();
+    CommandProcessorReset();
+    Frame drain;
+    while (Frames().PopFrame(drain)) {}
+    const uint32_t ring = 0xA0090000;
+    Gpu().ringSize = 0x10000;
+    Gpu().ringBase = ring;
+    Gpu().rptrWriteback = 0;
+    uint32_t w = 0;
+    auto E = [&](uint32_t v) { GuestStore32(ring + w++ * 4, v); };
+    E(0xC0012200); E(0); E(4 | (2 << 6) | (6u << 16));                      // DRAW_INDX auto, 6 indices
+    E(0xC03E1000); E(kSwapMarker); for (int i = 0; i < 62; i++) E(0);         // VdSwap slot
+    GuestStore32(kGpuRegBase + kRegCpRbWptr * 4, w);
+    CpStats st{};
+    CommandProcessorTick(&st);
+    Frame f;
+    CHECK(Frames().PopFrame(f));
+    CHECK_EQ(f.stats.draws, 1u);
+    CHECK_EQ(f.draws[0].indexCount, 6u);
+    CHECK(f.draws[0].regs != nullptr);
+    Gpu().pendingSwaps = 0;
+}
