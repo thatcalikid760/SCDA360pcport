@@ -19,8 +19,8 @@ Root `C:\SCDA-Recomp` (git, branch `phase1-foundation`, GPL-3.0). Rules `CLAUDE.
 - `config/scda_config.toml`: save/restore helpers (restgprlr 82B7FE20, savegprlr 82B7FDD0, restfpr 82B8039C, savefpr 82B80350, restvmx14 82B867E8, savevmx14 82B86550, restvmx64 82B8687C, savevmx64 82B865E4); padding skip `0x00000000`; `functions` from `tools/fix_switch_bounds.py` + `tools/fix_missing_functions.py`; manual tables `config/scda_switches_manual.toml`.
 - Loop: `sh tools/recomp.sh` -> `python -I tools/fix_switch_bounds.py` / `tools/fix_missing_functions.py` -> repeat until `python -I tools/check_recomp_acceptance.py docs/recomp_SC4_Offline.log` exits 0.
 
-## Recomp status (2026-10-27, TU3 0.0.3.3)
-- Input `assets/SC4_Offline_tu3.xex` (xex_dump --patch); flat image `assets/SC4_Offline.img` sha256 01193b25...aea4e (`config/expected_image.txt`). TU3 changes header only: image data == 0.0.0.3.
+## Recomp status (2026-10-27)
+- Input disc `assets/SC4_Offline.xex`; flat image `assets/SC4_Offline.img` sha256 01193b25...aea4e (`config/expected_image.txt`). TU3 NOT needed (header-only patch, identical image); user dropped it for SP.
 - `check_recomp_acceptance.py`: unrecognized=0 switch_errors=0 error_sites=0 functions=34520. 53 extra functions (`tools/fix_missing_functions.py`), manual table 821A5B50 (`config/scda_switches_manual.toml`).
 - Left: 4 undecodable words 82C51468-82C51490 (.text tail); setjmp/longjmp not located.
 - `runtime/`: `scda_ppc.lib` (flags = Unleashed) + `scda.exe` (main/loader/imports/fs/kernel.cpp, `imports_stubs.cpp` from `tools/gen_import_stubs.py`). Data imports: `tools/list_imports.py` -> `import_vars.inc` (10 vars).

@@ -1,9 +1,9 @@
-# XenonRecomp config: Splinter Cell Double Agent (X360, 555307D7), SC4_Offline.xex (SC4.pe) + TU3 (0.0.3.3)
-# SC4_Offline_tu3.xex comes from: tools/xex_dump/xex_dump.exe assets/SC4_Offline.xex --patch assets/tu3/SC4_Offline.xexp --out-xex assets/SC4_Offline_tu3.xex --out-img assets/SC4_Offline.img
+# XenonRecomp config: Splinter Cell Double Agent (X360, 555307D7), SC4_Offline.xex (SC4.pe) from the disc.
+# TU3 is not needed: its SC4_Offline.xexp changes the header only; the flat image is identical (sha256 in expected_image.txt).
 # Paths are relative to this file.
 # Run from repo root: external/XenonRecomp/build/XenonRecomp/XenonRecomp.exe config/scda_config.toml external/XenonRecomp/XenonUtils/ppc_context.h
 [main]
-file_path = "../assets/SC4_Offline_tu3.xex"
+file_path = "../assets/SC4_Offline.xex"
 out_directory_path = "../generated"
 switch_table_file_path = "scda_switches.toml"
 

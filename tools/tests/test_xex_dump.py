@@ -1,4 +1,5 @@
 """xex_dump: applies the TU3 xexp, writes the full patched flat image, refuses the wrong patch."""
+import hashlib
 import subprocess
 import tempfile
 import unittest
@@ -30,6 +31,15 @@ class XexDump(unittest.TestCase):
         r = run(XEX)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("version=0.0.0.3", r.stdout)
+
+    def test_disc_and_tu3_images_are_identical(self):
+        # TU3 changes the XEX header only, so the title update is optional.
+        with tempfile.TemporaryDirectory() as d:
+            a, b = Path(d) / "disc.img", Path(d) / "tu3.img"
+            run(XEX, "--out-img", a)
+            run(XEX, "--patch", TU / "SC4_Offline.xexp", "--out-img", b)
+            self.assertEqual(a.read_bytes(), b.read_bytes())
+            self.assertEqual(hashlib.sha256(a.read_bytes()).hexdigest(), (ROOT / "config/expected_image.txt").read_text().strip())
 
     def test_wrong_patch_refused(self):
         # Review Focus: wrong title update.

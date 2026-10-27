@@ -27,8 +27,8 @@ class Acceptance(unittest.TestCase):
         r = check(ROOT / "docs/recomp_SC4_Offline.log")
         self.assertEqual(r.returncode, 0, r.stdout)
 
-    def test_generated_is_from_tu3_image(self):
-        self.assertIn("SC4_Offline_tu3.xex", (ROOT / "config/scda_config.toml").read_text())
+    def test_generated_is_from_disc_xex(self):
+        self.assertIn('file_path = "../assets/SC4_Offline.xex"', (ROOT / "config/scda_config.toml").read_text())
 
     def test_expected_image_hash_recorded(self):
         line = (ROOT / "config/expected_image.txt").read_text().strip()

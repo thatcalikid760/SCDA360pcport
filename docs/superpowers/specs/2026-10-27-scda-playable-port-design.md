@@ -31,8 +31,10 @@ Why: the user wants to play the single-player campaign on PC. Online play is wan
    the start (render-target sizing, EDRAM resolve, texture-copy paths), not bolted on later.
 4. **Installer like TTT2's** (section 6): user's ISO + title update in, everything game-related
    produced on the user's PC, no game files shipped.
-5. **Title update 3 required** (for now). All recompiled code comes from the TU-patched
-   `SC4_Offline.xex` (version 0.0.3.3).
+5. **Title update not needed** (user decision 2026-10-27, after finding that TU3's
+   `SC4_Offline.xexp` changes the XEX header only: disc and TU3 flat images are byte-identical,
+   sha256 `01193b25...aea4e`). Recompiled code comes from the disc `SC4_Offline.xex`. The TU may
+   come back for multiplayer (`default.xexp` is a real code patch).
 
 ## 3. Non-goals (this phase)
 
@@ -42,7 +44,6 @@ Why: the user wants to play the single-player campaign on PC. Online play is wan
 - TTT2's fighting-game-specific parts: rollback netcode, Steam, community servers, ranked,
   Tekken menus.
 - Android/Linux ports (TTT2 has them; we target Windows 10/11 x64 only).
-- Running without the title update.
 - Mods, widescreen/FOV hacks, texture packs (may come later; not designed for here).
 - Keyboard and mouse input (controller only for now).
 - Frame-rate unlock above the console's rate.
