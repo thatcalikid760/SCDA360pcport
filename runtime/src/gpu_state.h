@@ -10,6 +10,8 @@ struct GpuState
     std::atomic<uint32_t> rptrWriteback{ 0 }; // guest virtual; 0 = none
     std::atomic<uint32_t> sysCmdBuf{ 0 };     // guest virtual of the VdSetSystemCommandBufferGpuIdentifierAddress arg
     std::atomic<uint32_t> interruptCallback{ 0 }, interruptContext{ 0 };
+    std::atomic<uint32_t> pendingSwaps{ 0 }; // swaps the CP reached, not yet completed by a vsync
+    std::atomic<uint64_t> swapsSubmitted{ 0 }, swapsSeen{ 0 }, vsyncs{ 0 }; // diagnostics (SCDA_TRACE_CP)
 };
 
 GpuState& Gpu();
@@ -25,3 +27,5 @@ constexpr uint32_t kRegCpRbWptr = 0x01C5u;
 // the ring so the command processor raises it in stream order.
 constexpr uint32_t kSwapPendingReg = 0x7FC86544u;
 constexpr uint32_t kSwapMarker = 0x53574150u; // 'SWAP'
+
+inline uint32_t PendingSwaps() { return Gpu().pendingSwaps.load(); }

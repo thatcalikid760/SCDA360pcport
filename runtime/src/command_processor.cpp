@@ -156,7 +156,7 @@ static bool Execute(uint32_t h, const Pm4Payload& p, int depth, CpStats& st)
     }
     case kOpNop:
         if (count >= 1 && p(0) == kSwapMarker)
-            GuestStore32(kSwapPendingReg, GuestLoad32(kSwapPendingReg) | 1u);
+            Gpu().pendingSwaps++;
         return true;
     case kOpWaitRegMem:
         return WaitSatisfied(p);
@@ -239,6 +239,7 @@ void CommandProcessorStart()
                         snprintf(buf, sizeof(buf), " %02X:%llu", op, (unsigned long long)n);
                         line += buf;
                     }
+                RuntimeLog("[cp] swaps %llu seen %llu vsyncs %llu\n", (unsigned long long)Gpu().swapsSubmitted.load(), (unsigned long long)Gpu().swapsSeen.load(), (unsigned long long)Gpu().vsyncs.load());
                 RuntimeLog("[cp] packets %llu fences %llu ib %llu irq %llu unhandled:%s\n",
                     (unsigned long long)st.packets, (unsigned long long)st.fences, (unsigned long long)st.indirect,
                     (unsigned long long)st.interrupts, line.c_str());

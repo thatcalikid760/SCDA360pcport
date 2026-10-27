@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -94,6 +95,21 @@ static uint32_t WaitResult(DWORD r)
     return X_STATUS_SUCCESS;
 }
 
+
+// SCDA_TRACE_SYNC=1: log waits/signals with the guest thread id and lr (first 4000 lines).
+static void TraceSync(const char* what, PPCContext& ctx, uint32_t handle)
+{
+    static const bool on = getenv("SCDA_TRACE_SYNC") != nullptr;
+    static std::atomic<int> lines;
+    static thread_local uint64_t last;
+    uint64_t key = (uint64_t(handle) << 32) | uint32_t(uintptr_t(what));
+    if (!on || key == last || lines++ > 4000)
+        return;
+    last = key;
+    uint32_t teb = GuestLoad32(ctx.r13.u32 + 0x100);
+    RuntimeLog("[sync] T%u %s 0x%08X lr 0x%08X\n", teb ? GuestLoad32(teb + 0x14C) : 0, what, handle, uint32_t(ctx.lr));
+}
+
 // ---- Threads ----
 
 struct ThreadStart
@@ -128,6 +144,7 @@ SCDA_IMPORT(ExCreateThread)
     DWORD hostId;
     HANDLE t = CreateThread(nullptr, 16 * 1024 * 1024, GuestThreadMain, s, (flags & 1) ? CREATE_SUSPENDED : 0, &hostId);
     uint32_t h = AddHandle(t);
+    TraceSync("create-thread", ctx, h);
     if (pHandle) GuestStore32(pHandle, h);
     if (pId) GuestStore32(pId, s->id);
     ctx.r3.u64 = X_STATUS_SUCCESS;
@@ -201,6 +218,7 @@ SCDA_IMPORT(NtCreateEvent)
 {
     HANDLE e = CreateEventW(nullptr, ctx.r5.u32 == 0, ctx.r6.u32 != 0, nullptr);
     GuestStore32(ctx.r3.u32, AddHandle(e));
+    TraceSync("create-event", ctx, GuestLoad32(ctx.r3.u32));
     ctx.r3.u64 = X_STATUS_SUCCESS;
 }
 
@@ -213,6 +231,7 @@ bool KernelSetEvent(uint32_t handle)
 // NtSetEvent(Handle, s32* PreviousState)
 SCDA_IMPORT(NtSetEvent)
 {
+    TraceSync("set", ctx, ctx.r3.u32);
     HANDLE h = HostHandle(ctx.r3.u32);
     if (h) SetEvent(h);
     ctx.r3.u64 = h ? X_STATUS_SUCCESS : X_STATUS_INVALID_HANDLE;
@@ -230,12 +249,14 @@ SCDA_IMPORT(NtCreateSemaphore)
 {
     HANDLE s = CreateSemaphoreW(nullptr, ctx.r5.s32, ctx.r6.s32, nullptr);
     GuestStore32(ctx.r3.u32, AddHandle(s));
+    TraceSync("create-sem", ctx, GuestLoad32(ctx.r3.u32));
     ctx.r3.u64 = X_STATUS_SUCCESS;
 }
 
 // NtReleaseSemaphore(Handle, ReleaseCount, s32* PreviousCount)
 SCDA_IMPORT(NtReleaseSemaphore)
 {
+    TraceSync("release", ctx, ctx.r3.u32);
     HANDLE h = HostHandle(ctx.r3.u32);
     LONG prev = 0;
     if (h) ReleaseSemaphore(h, ctx.r4.s32, &prev);
@@ -248,11 +269,13 @@ SCDA_IMPORT(NtCreateMutant)
 {
     HANDLE m = CreateMutexW(nullptr, ctx.r5.u32 != 0, nullptr);
     GuestStore32(ctx.r3.u32, AddHandle(m));
+    TraceSync(ctx.r5.u32 ? "create-mutant-owned" : "create-mutant", ctx, GuestLoad32(ctx.r3.u32));
     ctx.r3.u64 = X_STATUS_SUCCESS;
 }
 
 SCDA_IMPORT(NtReleaseMutant)
 {
+    TraceSync("release-mutant", ctx, ctx.r3.u32);
     HANDLE h = HostHandle(ctx.r3.u32);
     if (h) ReleaseMutex(h);
     ctx.r3.u64 = h ? X_STATUS_SUCCESS : X_STATUS_INVALID_HANDLE;
@@ -261,6 +284,7 @@ SCDA_IMPORT(NtReleaseMutant)
 // NtDuplicateObject(SourceHandle, TargetHandle*, Options)
 SCDA_IMPORT(NtDuplicateObject)
 {
+    TraceSync("duplicate", ctx, ctx.r3.u32);
     HANDLE src = HostHandle(ctx.r3.u32), dup = nullptr;
     if (src) DuplicateHandle(GetCurrentProcess(), src, GetCurrentProcess(), &dup, 0, FALSE, DUPLICATE_SAME_ACCESS);
     if (ctx.r4.u32) GuestStore32(ctx.r4.u32, dup ? AddHandle(dup) : 0);
@@ -270,6 +294,7 @@ SCDA_IMPORT(NtDuplicateObject)
 // NtWaitForSingleObjectEx(Handle, WaitMode, Alertable, Timeout*)
 SCDA_IMPORT(NtWaitForSingleObjectEx)
 {
+    TraceSync("wait", ctx, ctx.r3.u32);
     WatchdogBlockScope watch("NtWaitForSingleObjectEx");
     HANDLE h = HostHandle(ctx.r3.u32);
     ctx.r3.u64 = h ? WaitResult(WaitForSingleObjectEx(h, TimeoutMs(ctx.r6.u32), ctx.r5.u32 != 0)) : X_STATUS_INVALID_HANDLE;
@@ -291,6 +316,7 @@ SCDA_IMPORT(NtWaitForMultipleObjectsEx)
 // KeSetEvent(KEVENT*, Increment, Wait) -> previous state
 SCDA_IMPORT(KeSetEvent)
 {
+    TraceSync("keset", ctx, ctx.r3.u32);
     SetEvent(DispatcherObject(ctx.r3.u32));
     GuestStore32(ctx.r3.u32 + 4, 1);
     ctx.r3.u64 = 0;
@@ -318,6 +344,7 @@ SCDA_IMPORT(KeInitializeSemaphore)
 // KeReleaseSemaphore(KSEMAPHORE*, Increment, Adjustment, Wait) -> previous count
 SCDA_IMPORT(KeReleaseSemaphore)
 {
+    TraceSync("kerelease", ctx, ctx.r3.u32);
     LONG prev = 0;
     ReleaseSemaphore(DispatcherObject(ctx.r3.u32), ctx.r5.s32, &prev);
     ctx.r3.u64 = prev;
@@ -326,6 +353,7 @@ SCDA_IMPORT(KeReleaseSemaphore)
 // KeWaitForSingleObject(Object*, WaitReason, WaitMode, Alertable, Timeout*)
 SCDA_IMPORT(KeWaitForSingleObject)
 {
+    TraceSync("kewait", ctx, ctx.r3.u32);
     WatchdogBlockScope watch("KeWaitForSingleObject");
     ctx.r3.u64 = WaitResult(WaitForSingleObjectEx(DispatcherObject(ctx.r3.u32), TimeoutMs(ctx.r7.u32), ctx.r6.u32 != 0));
 }

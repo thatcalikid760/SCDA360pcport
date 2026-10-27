@@ -106,6 +106,7 @@ SCDA_IMPORT(VdGetSystemCommandBuffer)
 SCDA_IMPORT(VdSwap)
 {
     uint32_t buffer = ctx.r3.u32;
+    Gpu().swapsSubmitted++;
     GuestStore32(buffer, 0xC0000000u | (62u << 16) | (0x10u << 8)); // type 3 NOP, 63 payload dwords
     GuestStore32(buffer + 4, kSwapMarker);
     for (uint32_t i = 2; i < 64; i++)

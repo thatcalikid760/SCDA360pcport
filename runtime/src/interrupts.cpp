@@ -1,4 +1,5 @@
 #include <windows.h>
+#include <atomic>
 #include <mutex>
 #include <vector>
 #include <command_processor.h>
@@ -11,8 +12,11 @@
 
 constexpr uint32_t kInterruptThreadId = 0x100;
 
+static std::atomic<bool> g_paused;
 static std::mutex g_queueMutex;
 static std::vector<uint32_t> g_queue;
+
+void InterruptsSetPaused(bool paused) { g_paused = paused; }
 
 void InterruptsQueue(uint32_t source)
 {
@@ -32,6 +36,25 @@ static void Deliver(PPCContext& ctx, uint32_t source)
 
 void InterruptsDeliverForTest(PPCContext& ctx, uint32_t source) { Deliver(ctx, source); }
 
+static bool Vsync(PPCContext& ctx)
+{
+    Gpu().vsyncs++;
+    bool swap = false;
+    for (uint32_t n = Gpu().pendingSwaps.load(); n && !swap;)
+        swap = Gpu().pendingSwaps.compare_exchange_weak(n, n - 1);
+    if (swap)
+    {
+        Gpu().swapsSeen++;
+        GuestStore32(kSwapPendingReg, GuestLoad32(kSwapPendingReg) | 1u);
+    }
+    Deliver(ctx, kVblankSource);
+    if (swap)
+        GuestStore32(kSwapPendingReg, GuestLoad32(kSwapPendingReg) & ~1u);
+    return swap;
+}
+
+bool VsyncForTest(PPCContext& ctx) { return Vsync(ctx); }
+
 static DWORD WINAPI InterruptThread(void*)
 {
     auto* ctx = new PPCContext{};
@@ -43,6 +66,11 @@ static DWORD WINAPI InterruptThread(void*)
     const LONGLONG period = freq.QuadPart / 60;
     for (;;)
     {
+        if (g_paused)
+        {
+            Sleep(1);
+            continue;
+        }
         std::vector<uint32_t> pending;
         {
             std::lock_guard lock(g_queueMutex);
@@ -57,9 +85,7 @@ static DWORD WINAPI InterruptThread(void*)
             next.QuadPart += period;
             if (now.QuadPart > next.QuadPart + period * 4)
                 next.QuadPart = now.QuadPart + period; // fell far behind: do not burst
-            Deliver(*ctx, kVblankSource);
-            // The vsync handler has seen the pending swap; the next frame needs a new VdSwap.
-            GuestStore32(kSwapPendingReg, GuestLoad32(kSwapPendingReg) & ~1u);
+            Vsync(*ctx);
         }
         Sleep(1);
     }
