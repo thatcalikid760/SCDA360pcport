@@ -16,7 +16,8 @@ struct Pm4Ring
 };
 
 using Pm4Payload = std::function<uint32_t(uint32_t)>;
-using Pm4Exec = std::function<void(uint32_t header, const Pm4Payload& payload)>;
+// Returns false to stop before this packet (it is retried on the next walk).
+using Pm4Exec = std::function<bool(uint32_t header, const Pm4Payload& payload)>;
 
 // Walks whole packets from readDword up to writeDword (dword indices into the ring), calling
 // exec once per packet. A packet not completely below writeDword waits for the next call.

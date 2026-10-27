@@ -29,7 +29,8 @@ uint32_t Pm4WalkRing(const Pm4Ring& ring, uint32_t read, uint32_t write, const P
         if (size > available)
             break;
         uint32_t start = read;
-        exec(header, [&](uint32_t i) { return at(start + 1 + i); });
+        if (!exec(header, [&](uint32_t i) { return at(start + 1 + i); }))
+            break;
         read = (read + size) % dwords;
     }
     return read;

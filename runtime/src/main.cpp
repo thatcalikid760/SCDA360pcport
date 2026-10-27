@@ -7,6 +7,7 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <command_processor.h>
 #include <image_loader.h>
 #include <runtime.h>
 #include <watchdog.h>
@@ -155,6 +156,7 @@ int main(int argc, char** argv)
     RuntimeLog("[loader] %s: sha256 %s\n", imagePath, sha.c_str());
 
     InitDataImports();
+    CommandProcessorStart();
 
     static PPCContext ctx{};
     InitThreadContext(ctx, 0, 1);

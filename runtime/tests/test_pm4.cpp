@@ -29,6 +29,7 @@ TEST(pm4_walk_executes_each_packet_once)
         lastPayload = {};
         for (uint32_t i = 0; i + 1 < Pm4PacketDwords(h); i++)
             lastPayload.push_back(p(i));
+        return true;
     };
     CHECK_EQ(Pm4WalkRing(ring, 0, 6, exec), 6u);
     CHECK_EQ(headers.size(), (size_t)2);
@@ -47,7 +48,7 @@ TEST(pm4_wrap_mid_packet_waits_for_whole_packet)
     Put(62, 0xC0025800); Put(63, 4); Put(0, 0xA0681308); Put(1, 0xCAFE);
     int calls = 0;
     uint32_t addr = 0, value = 0;
-    auto exec = [&](uint32_t, const std::function<uint32_t(uint32_t)>& p) { calls++; addr = p(1); value = p(2); };
+    auto exec = [&](uint32_t, const std::function<uint32_t(uint32_t)>& p) { calls++; addr = p(1); value = p(2); return true; };
     CHECK_EQ(Pm4WalkRing(ring, 62, 0, exec), 62u);
     CHECK_EQ(calls, 0);
     CHECK_EQ(Pm4WalkRing(ring, 62, 2, exec), 2u);
@@ -63,7 +64,7 @@ TEST(pm4_never_reads_past_write)
     Pm4Ring ring{ kRing, 64 * 4 };
     Put(10, 0xC0025800);
     int calls = 0;
-    auto exec = [&](uint32_t, const std::function<uint32_t(uint32_t)>&) { calls++; };
+    auto exec = [&](uint32_t, const std::function<uint32_t(uint32_t)>&) { calls++; return true; };
     CHECK_EQ(Pm4WalkRing(ring, 10, 13, exec), 10u);
     CHECK_EQ(calls, 0);
 }
