@@ -136,3 +136,22 @@ TEST(cp_interrupt_packet_reaches_sink)
     CHECK_EQ(got, 1u);
     CommandProcessorSetInterruptSink(nullptr);
 }
+
+// COND_WRITE: wait_info, poll addr/reg, ref, mask, write addr/reg, value. Writes only when the
+// condition holds; bit 4 = poll memory, bit 8 = write memory (Xenia semantics).
+TEST(cp_cond_write_writes_only_when_condition_holds)
+{
+    SetupRing();
+    GuestStore32(0xA0681700, 7);
+    GuestStore32(0xA0681710, 0);
+    GuestStore32(0xA0681720, 0);
+    g_w = 0;
+    Emit(0xC0054500); Emit(0x113); Emit(0x00681702); Emit(7); Emit(0xFFFFFFFF); Emit(0x00681712); Emit(0xAB); // == 7: write
+    Emit(0xC0054500); Emit(0x113); Emit(0x00681702); Emit(8); Emit(0xFFFFFFFF); Emit(0x00681722); Emit(0xCD); // == 8: no write
+    Publish();
+    CpStats st{};
+    CommandProcessorTick(&st);
+    CHECK_EQ(GuestLoad32(0xA0681710), 0xABu);
+    CHECK_EQ(GuestLoad32(0xA0681720), 0u);
+    CHECK_EQ(GuestLoad32(kRptr), 14u);
+}

@@ -132,3 +132,30 @@ TEST(nt_status_maps_to_win32_errors)
     CHECK_EQ(map(0xC0000035), 183u); // ERROR_ALREADY_EXISTS
     CHECK(map(0xC0123456) != 0u);    // unknown failure is never "success"
 }
+
+// Async reads (Bink) pass an event: it must be signalled when the read completes.
+TEST(read_file_signals_event)
+{
+    TestGuestBase();
+    MakeGameDir();
+    PPCContext o{};
+    o.r3.u64 = 0x40100000; o.r4.u64 = 0x80000000; o.r6.u64 = 0x40100010;
+    o.r5.u64 = MakeObjectAttributes(0x40100100, "game:\\Maps\\a.u");
+    __imp__NtOpenFile(o, g_base);
+    uint32_t file = GuestLoad32(0x40100000);
+    PPCContext ev{};
+    ev.r3.u64 = 0x40100020; ev.r5.u64 = 0; ev.r6.u64 = 0;
+    __imp__NtCreateEvent(ev, g_base);
+    uint32_t event = GuestLoad32(0x40100020);
+    // NtReadFile(Handle, Event, Apc, ApcContext, Iosb, Buffer, Length, ByteOffset*)
+    PPCContext r{};
+    r.r3.u64 = file; r.r4.u64 = event; r.r7.u64 = 0x40100030; r.r8.u64 = 0x40100400; r.r9.u64 = 3; r.r10.u64 = 0;
+    __imp__NtReadFile(r, g_base);
+    CHECK_EQ(r.r3.u32, 0u);
+    CHECK_EQ(GuestLoad32(0x40100034), 3u);
+    PPCContext w{};
+    GuestStore64(0x40100040, 0);
+    w.r3.u64 = event; w.r6.u64 = 0x40100040;
+    __imp__NtWaitForSingleObjectEx(w, g_base);
+    CHECK_EQ(w.r3.u32, 0u); // signalled, not STATUS_TIMEOUT (0x102)
+}

@@ -16,7 +16,8 @@ constexpr uint32_t X_STATUS_OBJECT_NAME_NOT_FOUND = 0xC0000034;
 constexpr uint32_t X_STATUS_OBJECT_PATH_NOT_FOUND = 0xC000003A;
 constexpr uint32_t X_STATUS_INVALID_INFO_CLASS = 0xC0000003;
 
-std::string g_gameDir; // set by main: <exe dir>\game
+std::string g_gameDir;
+bool KernelSetEvent(uint32_t handle); // set by main: <exe dir>\game
 
 static std::mutex g_fileMutex;
 static std::unordered_map<uint32_t, HANDLE> g_files;
@@ -153,7 +154,12 @@ SCDA_IMPORT(NtReadFile)
     ReadFile(h, GuestPtr(buffer), length, &got, nullptr);
     uint32_t status = (got == 0 && length != 0) ? X_STATUS_END_OF_FILE : X_STATUS_SUCCESS;
     SetIoStatus(iosb, status, got);
-    // shortcut: I/O completes synchronously; the Event (r4) is not signalled yet.
+    // I/O completes synchronously; async callers (Bink) wait on the Event, so signal it.
+    // shortcut: an APC completion routine (r5) is not queued.
+    if (ctx.r4.u32)
+        KernelSetEvent(ctx.r4.u32);
+    if (ctx.r5.u32)
+        RuntimeLog("[fs] NtReadFile APC 0x%08X not delivered\n", ctx.r5.u32);
     ctx.r3.u64 = status;
 }
 
@@ -175,6 +181,8 @@ SCDA_IMPORT(NtWriteFile)
     DWORD wrote = 0;
     WriteFile(h, GuestPtr(ctx.r8.u32), ctx.r9.u32, &wrote, nullptr);
     SetIoStatus(ctx.r7.u32, X_STATUS_SUCCESS, wrote);
+    if (ctx.r4.u32)
+        KernelSetEvent(ctx.r4.u32);
     ctx.r3.u64 = X_STATUS_SUCCESS;
 }
 

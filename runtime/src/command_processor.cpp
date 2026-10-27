@@ -1,6 +1,8 @@
 // PM4 packet semantics follow Xenia's command processor (BSD) and TTT2's notes (reference only).
 #include <windows.h>
+#include <atomic>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <command_processor.h>
 #include <gpu_state.h>
@@ -13,6 +15,7 @@ enum : uint32_t
     kOpIndirectBuffer = 0x37,
     kOpIndirectBufferPfp = 0x3F,
     kOpRegRmw = 0x21,
+    kOpCondWrite = 0x45,
     kOpWaitRegMem = 0x3C,
     kOpMemWrite = 0x3D,
     kOpInterrupt = 0x54,
@@ -21,6 +24,7 @@ enum : uint32_t
 constexpr int kMaxIndirectDepth = 4;
 
 static uint32_t g_read, g_lastBase;
+static std::atomic<uint64_t> g_opcodeCounts[128]; // unhandled type-3 opcodes (SCDA_TRACE_CP)
 static std::function<void(uint32_t)> g_interruptSink;
 static std::mutex g_sinkMutex;
 
@@ -85,9 +89,9 @@ static void WalkIndirect(uint32_t guest, uint32_t dwords, int depth, CpStats& st
     }
 }
 
-static bool WaitSatisfied(const Pm4Payload& p)
+// Shared by WAIT_REG_MEM and COND_WRITE: wait_info bits 0-2 = function, bit 4 = poll memory.
+static bool PollCondition(uint32_t info, uint32_t poll, uint32_t ref, uint32_t mask)
 {
-    uint32_t info = p(0), poll = p(1), ref = p(2), mask = p(3);
     uint32_t value = (info & 0x10) ? GpuLoad(poll) : GpuRegister(poll & 0x7FFF);
     value &= mask;
     switch (info & 7)
@@ -102,6 +106,8 @@ static bool WaitSatisfied(const Pm4Payload& p)
     default: return false;
     }
 }
+
+static bool WaitSatisfied(const Pm4Payload& p) { return PollCondition(p(0), p(1), p(2), p(3)); }
 
 static bool Execute(uint32_t h, const Pm4Payload& p, int depth, CpStats& st)
 {
@@ -154,6 +160,17 @@ static bool Execute(uint32_t h, const Pm4Payload& p, int depth, CpStats& st)
         return true;
     case kOpWaitRegMem:
         return WaitSatisfied(p);
+    case kOpCondWrite:
+        // wait_info, poll, ref, mask, write address/register, value; bit 8 = write memory.
+        if (PollCondition(p(0), p(1), p(2), p(3)))
+        {
+            if (p(0) & 0x100)
+                GpuStore(p(4), p(5));
+            else
+                SetGpuRegister(p(4), p(5));
+            st.memWrites++;
+        }
+        return true;
     case kOpInterrupt:
     {
         st.interrupts++;
@@ -177,6 +194,7 @@ static bool Execute(uint32_t h, const Pm4Payload& p, int depth, CpStats& st)
     }
     default:
         st.skipped++;
+        g_opcodeCounts[Pm4Opcode(h)]++;
         return true;
     }
 }
@@ -206,8 +224,25 @@ void CommandProcessorStart()
     std::thread([]
     {
         CpStats st{};
+        bool trace = getenv("SCDA_TRACE_CP") != nullptr;
+        DWORD lastReport = GetTickCount();
         for (;;)
         {
+            if (trace && GetTickCount() - lastReport > 10000)
+            {
+                lastReport = GetTickCount();
+                std::string line;
+                char buf[32];
+                for (int op = 0; op < 128; op++)
+                    if (uint64_t n = g_opcodeCounts[op].load())
+                    {
+                        snprintf(buf, sizeof(buf), " %02X:%llu", op, (unsigned long long)n);
+                        line += buf;
+                    }
+                RuntimeLog("[cp] packets %llu fences %llu ib %llu irq %llu unhandled:%s\n",
+                    (unsigned long long)st.packets, (unsigned long long)st.fences, (unsigned long long)st.indirect,
+                    (unsigned long long)st.interrupts, line.c_str());
+            }
             uint64_t before = st.packets;
             if (!CommandProcessorTick(&st) || st.packets == before)
                 Sleep(1);
