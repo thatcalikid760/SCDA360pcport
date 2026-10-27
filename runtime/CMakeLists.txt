@@ -41,7 +41,7 @@ target_compile_definitions(scda PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE
 
 # Tests: ctest --test-dir runtime/build
 enable_testing()
-add_executable(scda_tests tests/test_main.cpp)
-target_include_directories(scda_tests PRIVATE tests include src)
+add_executable(scda_tests tests/test_main.cpp tests/test_stfs.cpp "${SCDA_ROOT}/tools/stfs/stfs.cpp")
+target_include_directories(scda_tests PRIVATE tests include src "${SCDA_ROOT}/tools/stfs")
 target_compile_definitions(scda_tests PRIVATE SCDA_TESTS SCDA_ROOT="${SCDA_ROOT}" NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
 add_test(NAME scda_tests COMMAND scda_tests)
