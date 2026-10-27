@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <thread>
 #include <gpu/d3d11_renderer.h>
 #include <host_window.h>
@@ -81,6 +82,19 @@ static void RenderThread(DisplaySettings s)
         {
             Sleep(1);
             continue;
+        }
+        // SCDA_TRACE_FRAME=<n>: log every draw and resolve of frame n (renderer development).
+        static const long long traceFrame = getenv("SCDA_TRACE_FRAME") ? atoll(getenv("SCDA_TRACE_FRAME")) : -1;
+        if ((long long)frame.stats.frame == traceFrame)
+        {
+            for (auto& d : frame.draws)
+                RuntimeLog("[frame] draw prim %u src %u idx32 %d count %u base 0x%08X vs %016llx ps %016llx rt 0x%08X/0x%08X mode %u\n",
+                    d.primType, uint32_t(d.source), d.index32, d.indexCount, d.indexBase,
+                    (unsigned long long)(d.vs ? d.vs->hash : 0), (unsigned long long)(d.ps ? d.ps->hash : 0),
+                    (*d.regs)[kRegRbSurfaceInfo], (*d.regs)[kRegRbColorInfo], (*d.regs)[kRegRbModeControl] & 7);
+            for (auto& r : frame.resolves)
+                RuntimeLog("[frame] resolve ctrl 0x%08X dest 0x%08X pitch 0x%08X info 0x%08X surf 0x%08X color 0x%08X depth 0x%08X\n",
+                    r.copyControl, r.destBase, r.destPitch, r.destInfo, r.surfaceInfo, r.colorInfo, r.depthInfo);
         }
         renderer.Present(frame);
         if (GetTickCount() - lastTitle > 500)

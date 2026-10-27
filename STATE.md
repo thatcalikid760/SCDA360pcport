@@ -32,7 +32,8 @@ Root `C:\SCDA-Recomp` (git, branch `phase1-foundation`, GPL-3.0). Rules `CLAUDE.
 
 ## Next
 1. DONE 2026-10-27: menu stall fixed (frozen KeTimeStampBundle + QPF vs TSC). Menu now runs headless at a paced 60 fps (VdSwap caps 2 swaps in flight; EVENT_WRITE_SHD swap counter).
-2. Phase 2b plan: window + PM4 draw path -> D3D11 (shaders, textures, EDRAM resolve, res scaling) so the menu renders; then XInput.
+2. Phase 2b-1 DONE: window + D3D11 present (settings.ini Scale/Mode/VSync), CP decodes draws/resolves/IM_LOAD into frames (title shows counters). Menu frame 1000: 27 draws, all auto-index (24 prim 1 point list, 2 prim 6 tri strip, 1 prim 8 rect list), 8 shaders (5 VS/3 PS, 36-108 B, `SCDA_DUMP_SHADERS`), 1 resolve -> phys 0x00682000 1280x720 info 0x01000300 surf 0x14000500 (frontbuffer). `SCDA_TRACE_FRAME=<n>` logs a frame.
+3. Phase 2b-2: Xenos ucode -> HLSL (adapt XenosRecomp, MIT) for the dumped blobs. 2b-3: vertex fetch, textures, EDRAM RT + resolve to frontbuffer, present it. Then XInput.
 2. Rest of kernel/XAM HLE (XAM content/profile, XNotify, ExGetXConfigSetting, RtlImageXexHeaderField). Launch-data intercept.
 3. Audio (XMA/XAudio), input (XamInputGetState -> XInput). Playable = months.
 4. Gemini cross-check of VMX patch: bridge timed out 2x on 2026-10-27, still pending.
