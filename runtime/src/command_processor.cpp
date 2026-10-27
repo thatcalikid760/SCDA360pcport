@@ -148,8 +148,8 @@ static bool ExecutePacket(uint32_t h, const Pm4Payload& p, int depth, CpStats& s
     switch (Pm4Opcode(h))
     {
     case kOpEventWriteShd:
-        // initiator, address, value; bit 31 of initiator selects the swap counter (not tracked yet).
-        GpuStore(p(1), p(2));
+        // initiator, address, value; initiator bit 31 = write the swap counter instead.
+        GpuStore(p(1), (p(0) & 0x80000000u) ? Gpu().swapCounter.load() : p(2));
         st.fences++;
         return true;
     case kOpMemWrite:
@@ -166,7 +166,10 @@ static bool ExecutePacket(uint32_t h, const Pm4Payload& p, int depth, CpStats& s
     }
     case kOpNop:
         if (count >= 1 && p(0) == kSwapMarker)
+        {
+            Gpu().swapCounter++;
             Gpu().pendingSwaps++;
+        }
         return true;
     case kOpWaitRegMem:
         return WaitSatisfied(p);

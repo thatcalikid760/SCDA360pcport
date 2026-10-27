@@ -1,5 +1,6 @@
 // Vd* (video) kernel HLE: records the GPU setup for the command processor and reports
 // a 1280x720 widescreen display. Struct layouts follow Xenia's xboxkrnl_video.cc (BSD).
+#include <windows.h>
 #include <cstring>
 #include <gpu_state.h>
 #include <runtime.h>
@@ -106,6 +107,10 @@ SCDA_IMPORT(VdGetSystemCommandBuffer)
 SCDA_IMPORT(VdSwap)
 {
     uint32_t buffer = ctx.r3.u32;
+    // Frame pacing: at most 2 swaps in flight ahead of vsync, as the hardware queue allows.
+    // Bounded wait so a stopped interrupt thread can never deadlock the caller.
+    for (int i = 0; i < 100 && Gpu().swapsSubmitted.load() > Gpu().swapsSeen.load() + 2; i++)
+        Sleep(1);
     Gpu().swapsSubmitted++;
     GuestStore32(buffer, 0xC0000000u | (62u << 16) | (0x10u << 8)); // type 3 NOP, 63 payload dwords
     GuestStore32(buffer + 4, kSwapMarker);

@@ -173,3 +173,19 @@ TEST(cp_stalled_wait_makes_no_progress)
     GuestStore32(0xA0681800, 5);
     CommandProcessorTick(&st);
 }
+
+// EVENT_WRITE_SHD with initiator bit 31 writes the swap counter (swaps the CP processed), not
+// the packet value (Xenia semantics); D3D frame pacing waits on it.
+TEST(cp_event_write_shd_swap_counter)
+{
+    SetupRing();
+    g_w = 0;
+    Emit(0xC03E1000); Emit(kSwapMarker); for (int i = 0; i < 62; i++) Emit(0); // VdSwap slot
+    Emit(0xC0025800); Emit(0x80000004); Emit(0x0068190A); Emit(0x99);          // swap counter fence
+    Publish();
+    uint32_t before = SwapCounter();
+    CpStats st{};
+    CommandProcessorTick(&st);
+    CHECK_EQ(GuestLoad32(0xA0681908), before + 1);
+    Gpu().pendingSwaps = 0;
+}

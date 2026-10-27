@@ -31,7 +31,7 @@ Root `C:\SCDA-Recomp` (git, branch `phase1-foundation`, GPL-3.0). Rules `CLAUDE.
 - `_install/` (test install, game data: never commit), `_run/`, `.venv/` (Pillow) are local only.
 
 ## Next
-1. Menu stall (nondeterministic): after 12-40 frames the Bink path stalls (T3 sub_82C73250 waits; T5/T10 Bink workers wait at 0x82C756FC). One lucky run went 85k swaps. Suspect lost wakeups in Ke* dispatcher mapping (guest KEVENT state vs lazily created host object) or Bink mutex/event ordering. Tools: SCDA_TRACE_SYNC=1, SCDA_TRACE_CP=1.
+1. DONE 2026-10-27: menu stall fixed (frozen KeTimeStampBundle + QPF vs TSC). Menu now runs headless at a paced 60 fps (VdSwap caps 2 swaps in flight; EVENT_WRITE_SHD swap counter).
 2. Phase 2b plan: window + PM4 draw path -> D3D11 (shaders, textures, EDRAM resolve, res scaling) so the menu renders; then XInput.
 2. Rest of kernel/XAM HLE (XAM content/profile, XNotify, ExGetXConfigSetting, RtlImageXexHeaderField). Launch-data intercept.
 3. Audio (XMA/XAudio), input (XamInputGetState -> XInput). Playable = months.
