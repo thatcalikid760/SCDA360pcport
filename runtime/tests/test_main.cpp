@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include <string>
+#include <alloc_tracker.h>
 
 // Runtime globals normally defined in src/main.cpp. RuntimeLog output is captured for tests.
 uint8_t* g_base;
@@ -14,6 +15,7 @@ static uint32_t TestBump(uint32_t& cursor, uint32_t size, uint32_t align)
         align = 16;
     uint32_t a = (cursor + align - 1) & ~(align - 1);
     cursor = a + size;
+    GuestAllocations().Add(a, size);
     return a;
 }
 uint32_t GuestAllocVirtual(uint32_t size, uint32_t align)

@@ -128,41 +128,6 @@ SCDA_IMPORT(KfReleaseSpinLock) { std::atomic_ref<uint32_t>(*(uint32_t*)GuestPtr(
 SCDA_IMPORT(KeAcquireSpinLockAtRaisedIrql) { __imp__KfAcquireSpinLock(ctx, base); }
 SCDA_IMPORT(KeReleaseSpinLockFromRaisedIrql) { __imp__KfReleaseSpinLock(ctx, base); }
 
-// ---- Memory ----
-
-// NtAllocateVirtualMemory(u32* BaseAddress, u32* RegionSize, AllocationType, Protect, ...)
-SCDA_IMPORT(NtAllocateVirtualMemory)
-{
-    uint32_t pBase = ctx.r3.u32, pSize = ctx.r4.u32;
-    uint32_t want = GuestLoad32(pBase), size = (GuestLoad32(pSize) + 0xFFF) & ~0xFFF;
-    // MEM_COMMIT on an existing reservation: memory is already committed host-side.
-    uint32_t addr = want ? want : GuestAllocVirtual(size, 0x10000);
-    if (!addr)
-    {
-        ctx.r3.u64 = 0xC0000017; // STATUS_NO_MEMORY
-        return;
-    }
-    GuestStore32(pBase, addr);
-    GuestStore32(pSize, size);
-    ctx.r3.u64 = 0;
-}
-
-SCDA_IMPORT(NtFreeVirtualMemory) { ctx.r3.u64 = 0; }
-
-// MmAllocatePhysicalMemoryEx(Flags, Size, Protect, MinAddress, MaxAddress, Alignment)
-SCDA_IMPORT(MmAllocatePhysicalMemoryEx)
-{
-    uint32_t size = ctx.r4.u32, align = ctx.r8.u32 ? ctx.r8.u32 : 0x1000;
-    ctx.r3.u64 = GuestAllocPhysical(size, align);
-}
-
-SCDA_IMPORT(MmFreePhysicalMemory) {}
-
-// MmQueryAllocationSize(BaseAddress): size of the allocation holding the address.
-SCDA_IMPORT(MmQueryAllocationSize) { ctx.r3.u64 = GuestAllocations().SizeOf(ctx.r3.u32); }
-SCDA_IMPORT(MmGetPhysicalAddress) { ctx.r3.u64 = ctx.r3.u32 & 0x1FFFFFFF; }
-SCDA_IMPORT(MmQueryAddressProtect) { ctx.r3.u64 = PAGE_READWRITE; }
-
 // XamAlloc(Flags, Size, u32* Result)
 SCDA_IMPORT(XamAlloc)
 {

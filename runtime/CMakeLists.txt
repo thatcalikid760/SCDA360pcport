@@ -14,7 +14,9 @@ file(STRINGS "${SCDA_ROOT}/config/expected_image.txt" SCDA_EXPECTED_IMAGE_SHA256
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${SCDA_ROOT}/config/expected_image.txt")
 
 # Flags match UnleashedRecomp's recompiled library.
-add_compile_options(/clang:-march=sandybridge -fno-strict-aliasing /fp:strict)
+add_compile_options(/clang:-march=sandybridge -fno-strict-aliasing /fp:strict /Zi)
+# PDBs let the crash handler map a host fault to the generated line (its comment is the PPC instruction).
+add_link_options(/DEBUG)
 
 # Recompiled PPC code (XenonRecomp output).
 file(GLOB SCDA_PPC_SOURCES "${GENERATED}/ppc_recomp.*.cpp")
@@ -33,18 +35,19 @@ add_executable(scda
     src/command_processor.cpp
     src/interrupts.cpp
     src/audio.cpp
+    src/memory.cpp
     src/imports.cpp
     src/fs.cpp
     src/kernel.cpp
     src/imports_stubs.cpp
     scda.rc)
 target_include_directories(scda PRIVATE include src)
-target_link_libraries(scda PRIVATE scda_ppc bcrypt)
+target_link_libraries(scda PRIVATE scda_ppc bcrypt dbghelp)
 target_compile_definitions(scda PRIVATE SCDA_EXPECTED_IMAGE_SHA256="${SCDA_EXPECTED_IMAGE_SHA256}" NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
 
 # Tests: ctest --test-dir runtime/build
 enable_testing()
-add_executable(scda_tests tests/test_main.cpp tests/test_stfs.cpp tests/test_loader.cpp tests/test_watchdog.cpp tests/test_import_stub.cpp tests/test_video.cpp tests/test_pm4.cpp tests/test_command_processor.cpp tests/test_interrupts.cpp tests/test_fs.cpp tests/test_audio.cpp tests/test_alloc_tracker.cpp src/fs.cpp src/audio.cpp src/interrupts.cpp src/video.cpp src/pm4.cpp src/command_processor.cpp src/loader.cpp src/watchdog.cpp src/import_stub.cpp "${SCDA_ROOT}/tools/stfs/stfs.cpp")
+add_executable(scda_tests tests/test_main.cpp tests/test_stfs.cpp tests/test_loader.cpp tests/test_watchdog.cpp tests/test_import_stub.cpp tests/test_video.cpp tests/test_pm4.cpp tests/test_command_processor.cpp tests/test_interrupts.cpp tests/test_fs.cpp tests/test_audio.cpp tests/test_alloc_tracker.cpp tests/test_memory.cpp src/memory.cpp src/fs.cpp src/audio.cpp src/interrupts.cpp src/video.cpp src/pm4.cpp src/command_processor.cpp src/loader.cpp src/watchdog.cpp src/import_stub.cpp "${SCDA_ROOT}/tools/stfs/stfs.cpp")
 target_include_directories(scda_tests PRIVATE tests include src "${SCDA_ROOT}/tools/stfs" "${GENERATED}" "${XENON_ROOT}/thirdparty/simde")
 target_compile_options(scda_tests PRIVATE /clang:-march=sandybridge)
 target_link_libraries(scda_tests PRIVATE bcrypt)

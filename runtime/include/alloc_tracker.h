@@ -33,4 +33,8 @@ private:
     std::map<uint32_t, uint32_t> m_sizes;
 };
 
-AllocTracker& GuestAllocations();
+inline AllocTracker& GuestAllocations()
+{
+    static AllocTracker tracker;
+    return tracker;
+}

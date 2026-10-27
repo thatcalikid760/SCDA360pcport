@@ -2,6 +2,7 @@
 // Boot: reserve guest memory, fill the function table, load the image,
 // fill data imports, build the main thread's PCR/TLS/TEB/stack, call _xstart.
 #include <windows.h>
+#include <dbghelp.h>
 #include <cstdarg>
 #include <cstdlib>
 #include <cstring>
@@ -54,12 +55,6 @@ static uint32_t BumpAlloc(uint32_t& cursor, uint32_t limit, uint32_t size, uint3
     memset(g_base + addr, 0, size);
     GuestAllocations().Add(addr, size);
     return addr;
-}
-
-AllocTracker& GuestAllocations()
-{
-    static AllocTracker tracker;
-    return tracker;
 }
 
 static uint32_t g_virtualCursor = 0x40000000;
@@ -130,6 +125,22 @@ static LONG WINAPI CrashHandler(EXCEPTION_POINTERS* e)
     RuntimeLog("[fatal] exception 0x%08lX at host %p, fault addr %p (guest 0x%08llX)\n",
         r->ExceptionCode, r->ExceptionAddress, (void*)fault,
         (unsigned long long)(fault - (uintptr_t)g_base));
+    // Host fault -> recompiled function and generated line (needs scda.pdb next to the exe).
+    {
+        static std::once_flag symInit;
+        std::call_once(symInit, [] { SymSetOptions(SYMOPT_LOAD_LINES | SYMOPT_UNDNAME); SymInitialize(GetCurrentProcess(), nullptr, TRUE); });
+        alignas(SYMBOL_INFO) char buf[sizeof(SYMBOL_INFO) + 256] = {};
+        auto* sym = (SYMBOL_INFO*)buf;
+        sym->SizeOfStruct = sizeof(SYMBOL_INFO);
+        sym->MaxNameLen = 255;
+        DWORD64 disp = 0;
+        DWORD lineDisp = 0;
+        IMAGEHLP_LINE64 line{ sizeof(line) };
+        DWORD64 pc = (DWORD64)r->ExceptionAddress;
+        bool haveSym = SymFromAddr(GetCurrentProcess(), pc, &disp, sym);
+        bool haveLine = SymGetLineFromAddr64(GetCurrentProcess(), pc, &lineDisp, &line);
+        RuntimeLog("[fatal] at %s %s:%lu\n", haveSym ? sym->Name : "?", haveLine ? line.FileName : "?", haveLine ? line.LineNumber : 0);
+    }
     // Guest stacks of every thread: the faulting one shows the guest call chain.
     if (r->ExceptionCode == EXCEPTION_ACCESS_VIOLATION)
         RuntimeLog("%s", WatchdogReport(g_base).c_str());
