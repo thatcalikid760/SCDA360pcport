@@ -9,6 +9,7 @@
 
 enum : uint32_t
 {
+    kOpNop = 0x10,
     kOpIndirectBuffer = 0x37,
     kOpIndirectBufferPfp = 0x3F,
     kOpRegRmw = 0x21,
@@ -147,6 +148,10 @@ static bool Execute(uint32_t h, const Pm4Payload& p, int depth, CpStats& st)
         st.regWrites++;
         return true;
     }
+    case kOpNop:
+        if (count >= 1 && p(0) == kSwapMarker)
+            GuestStore32(kSwapPendingReg, GuestLoad32(kSwapPendingReg) | 1u);
+        return true;
     case kOpWaitRegMem:
         return WaitSatisfied(p);
     case kOpInterrupt:

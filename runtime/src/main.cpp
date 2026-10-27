@@ -9,6 +9,7 @@
 #include <string>
 #include <command_processor.h>
 #include <image_loader.h>
+#include <interrupts.h>
 #include <runtime.h>
 #include <watchdog.h>
 
@@ -157,6 +158,7 @@ int main(int argc, char** argv)
 
     InitDataImports();
     CommandProcessorStart();
+    InterruptsStart();
 
     static PPCContext ctx{};
     InitThreadContext(ctx, 0, 1);

@@ -76,7 +76,6 @@ SCDA_IMPORT(KeBugCheckEx) { ImportStub("KeBugCheckEx", ctx); }
 SCDA_IMPORT(RtlCompareMemoryUlong) { ImportStub("RtlCompareMemoryUlong", ctx); }
 SCDA_IMPORT(RtlRaiseException) { ImportStub("RtlRaiseException", ctx); }
 SCDA_IMPORT(KiApcNormalRoutineNop) { ImportStub("KiApcNormalRoutineNop", ctx); }
-SCDA_IMPORT(VdSwap) { ImportStub("VdSwap", ctx); }
 SCDA_IMPORT(ExRegisterTitleTerminateNotification) { ImportStub("ExRegisterTitleTerminateNotification", ctx); }
 SCDA_IMPORT(ObDeleteSymbolicLink) { ImportStub("ObDeleteSymbolicLink", ctx); }
 SCDA_IMPORT(ObCreateSymbolicLink) { ImportStub("ObCreateSymbolicLink", ctx); }

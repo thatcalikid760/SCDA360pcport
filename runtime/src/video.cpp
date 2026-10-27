@@ -99,3 +99,16 @@ SCDA_IMPORT(VdGetSystemCommandBuffer)
     if (ctx.r3.u32) GuestStore32(ctx.r3.u32, block);
     if (ctx.r4.u32) GuestStore32(ctx.r4.u32, 0xBEEF0000);
 }
+
+// VdSwap(BufferPtr, ...): the game reserved 64 ring dwords at BufferPtr for the kernel's swap
+// packet. Fill them with one NOP carrying kSwapMarker so the command processor flags the swap
+// when it reaches this point in the stream.
+SCDA_IMPORT(VdSwap)
+{
+    uint32_t buffer = ctx.r3.u32;
+    GuestStore32(buffer, 0xC0000000u | (62u << 16) | (0x10u << 8)); // type 3 NOP, 63 payload dwords
+    GuestStore32(buffer + 4, kSwapMarker);
+    for (uint32_t i = 2; i < 64; i++)
+        GuestStore32(buffer + i * 4, 0);
+    ctx.r3.u64 = 0;
+}

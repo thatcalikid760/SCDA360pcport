@@ -20,3 +20,8 @@ constexpr uint32_t GuestPhysical(uint32_t p) { return 0xA0000000u + (p & 0x1FFFF
 // GPU register block (big-endian dwords at 0x7FC80000 + index * 4).
 constexpr uint32_t kGpuRegBase = 0x7FC80000u;
 constexpr uint32_t kRegCpRbWptr = 0x01C5u;
+
+// Swap pending flag the game's vsync handler checks (bit 0), and the marker VdSwap leaves in
+// the ring so the command processor raises it in stream order.
+constexpr uint32_t kSwapPendingReg = 0x7FC86544u;
+constexpr uint32_t kSwapMarker = 0x53574150u; // 'SWAP'
