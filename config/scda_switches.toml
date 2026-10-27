@@ -13843,3 +13843,41 @@ labels = [
     0x82BC515C,
 ]
 
+# ---- MANUAL (config/scda_switches_manual.toml) ----
+# Jump tables XenonAnalyse misses. tools/recomp.sh appends this file to scda_switches.toml.
+# 821A5B50: lhzx offset table at 0x82165BE0, base 0x821A5B54, index r9, bound cmplwi cr6,r9,28 / bgt 0x821A6CA4.
+[[switch]]
+base = 0x821A5B50
+r = 9
+default = 0x821A6CA4
+labels = [
+    0x821A5B54,
+    0x821A5C90,
+    0x821A5D14,
+    0x821A5D8C,
+    0x821A5DD0,
+    0x821A5E48,
+    0x821A5EC4,
+    0x821A5F3C,
+    0x821A5FB4,
+    0x821A603C,
+    0x821A607C,
+    0x821A6098,
+    0x821A6098,
+    0x821A615C,
+    0x821A61C4,
+    0x821A6240,
+    0x821A6308,
+    0x821A65DC,
+    0x821A6698,
+    0x821A6850,
+    0x821A68B8,
+    0x821A6A00,
+    0x821A6A88,
+    0x821A6B34,
+    0x821A6B50,
+    0x821A6C40,
+    0x821A6CE0,
+    0x821A6CE8,
+    0x821A6E20,
+]

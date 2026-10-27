@@ -1,6 +1,8 @@
 #!/bin/sh
 # Regenerate generated/ from config/scda_config.toml. Log -> docs/recomp_SC4_Offline.log
 cd "$(dirname "$0")/.." || exit 1
+# Manual jump tables survive a XenonAnalyse rerun.
+grep -q "MANUAL (config/scda_switches_manual.toml)" config/scda_switches.toml || cat config/scda_switches_manual.toml >> config/scda_switches.toml
 # XenonRecomp skips unchanged files, so stale ones are not deleted here.
 external/XenonRecomp/build/XenonRecomp/XenonRecomp.exe config/scda_config.toml external/XenonRecomp/XenonUtils/ppc_context.h > docs/recomp_SC4_Offline.log 2>&1
 rc=$?

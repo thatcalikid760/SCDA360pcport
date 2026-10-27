@@ -1,8 +1,9 @@
-# XenonRecomp config: Splinter Cell Double Agent (X360, 555307D7), SC4_Offline.xex (SC4.pe)
+# XenonRecomp config: Splinter Cell Double Agent (X360, 555307D7), SC4_Offline.xex (SC4.pe) + TU3 (0.0.3.3)
+# SC4_Offline_tu3.xex comes from: tools/xex_dump/xex_dump.exe assets/SC4_Offline.xex --patch assets/tu3/SC4_Offline.xexp --out-xex assets/SC4_Offline_tu3.xex --out-img assets/SC4_Offline.img
 # Paths are relative to this file.
 # Run from repo root: external/XenonRecomp/build/XenonRecomp/XenonRecomp.exe config/scda_config.toml external/XenonRecomp/XenonUtils/ppc_context.h
 [main]
-file_path = "../assets/SC4_Offline.xex"
+file_path = "../assets/SC4_Offline_tu3.xex"
 out_directory_path = "../generated"
 switch_table_file_path = "scda_switches.toml"
 
@@ -115,5 +116,60 @@ functions = [
     { address = 0x82BFFA80, size = 0x1A8 },
     { address = 0x82BFFA88, size = 0x1A0 },
     { address = 0x82C00F88, size = 0x8C },
+# BEGIN missing functions (tools/fix_missing_functions.py)
+    { address = 0x821CD3E4, size = 0x8 },
+    { address = 0x821CD59C, size = 0x8 },
+    { address = 0x821E6AB0, size = 0x4E8 },
+    { address = 0x821E6AB8, size = 0xC },
+    { address = 0x821E6AC4, size = 0x4D4 },
+    { address = 0x821E6F90, size = 0x8 },
+    { address = 0x821E8250, size = 0x128 },
+    { address = 0x821E8334, size = 0x44 },
+    { address = 0x821E833C, size = 0x3C },
+    { address = 0x821E8368, size = 0x10 },
+    { address = 0x821E8384, size = 0x18 },
+    { address = 0x821E8394, size = 0x8 },
+    { address = 0x82238434, size = 0x264 },
+    { address = 0x822384A4, size = 0x1F4 },
+    { address = 0x8223863C, size = 0x5C },
+    { address = 0x822386D4, size = 0x31C },
+    { address = 0x822387E4, size = 0x20C },
+    { address = 0x8229F50C, size = 0xC },
+    { address = 0x822FF854, size = 0xC },
+    { address = 0x822FF858, size = 0x8 },
+    { address = 0x823073F4, size = 0x34 },
+    { address = 0x8230742C, size = 0x28 },
+    { address = 0x8230744C, size = 0x8 },
+    { address = 0x823076A4, size = 0x34 },
+    { address = 0x823076DC, size = 0x28 },
+    { address = 0x823076FC, size = 0x8 },
+    { address = 0x82426438, size = 0x48 },
+    { address = 0x82426440, size = 0x40 },
+    { address = 0x824267AC, size = 0xC },
+    { address = 0x82426848, size = 0x18 },
+    { address = 0x82426AA4, size = 0x10 },
+    { address = 0x82426D48, size = 0x18 },
+    { address = 0x824272BC, size = 0xC },
+    { address = 0x824277D0, size = 0x8 },
+    { address = 0x82427838, size = 0xC },
+    { address = 0x82427848, size = 0x38 },
+    { address = 0x82427920, size = 0x1C },
+    { address = 0x82427BE0, size = 0x14 },
+    { address = 0x82427F48, size = 0x5C },
+    { address = 0x8242C6E8, size = 0x14 },
+    { address = 0x8242C6F4, size = 0x8 },
+    { address = 0x82442C5C, size = 0x14 },
+    { address = 0x82B8C160, size = 0x8C },
+    { address = 0x82B8C200, size = 0x8 },
+    { address = 0x82B8C23C, size = 0x8 },
+    { address = 0x82B8C364, size = 0x14 },
+    { address = 0x82B8C6D8, size = 0x8 },
+    { address = 0x82B8C6E4, size = 0x8 },
+    { address = 0x82B8C818, size = 0x8 },
+    { address = 0x82B8CF00, size = 0x14 },
+    { address = 0x82B8CF08, size = 0xC },
+    { address = 0x82B8CFA4, size = 0xC },
+    { address = 0x82B8ECF8, size = 0x14 },
+# END missing functions
 ]
 # END functions
