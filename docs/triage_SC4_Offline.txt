@@ -1,0 +1,39 @@
+XEX2 module_flags=0x00000001 pe_data_offset=0x3000 security_offset=0x88 opt_headers=14
+  [0x000002FF] resource_info          0x00001E8C
+  [0x000003FF] base_file_format       0x00001EA0
+  [0x00010100] entry_point            0x821E4248
+  [0x00010201] image_base             0x82000000
+  [0x000103FF] import_libraries       0x000028F4
+  [0x00018002] checksum_timestamp     0x00001EC8
+  [0x000183FF] original_pe_name       0x00001ED0
+  [0x000200FF] static_libraries       0x00001EDC
+  [0x00020104] tls_info               0x00001F90
+  [0x00020200] default_stack_size     0x00200000
+  [0x00040006] execution_info         0x00001FA0
+  [0x00040310] game_ratings           0x00001FB8
+  [0x00040404] lan_key                0x00001FF8
+  [0x000405FF] xbox360_logo           0x00002008
+base_file_format: encryption=normal(AES) compression=basic
+execution_info: title_id=555307D7 media_id=3FA11EB0 version=0.0.0.3 base=0.0.0.3 disc=1/1
+original_pe_name: SC4.pe
+resource: 555307D7 addr=0x832A0000 size=0x51B77
+static_libraries:
+  XONLINE  2.0.3529.0
+  XAPILIB  2.0.3529.0
+  D3D9     2.0.3529.0
+  D3DX9    2.0.3529.0
+  XGRAPHC  2.0.3529.0
+  XBOXKRNL 2.0.3529.0
+  XAUD     2.0.3529.0
+  XMEDIA   2.0.3529.0
+  LIBCPMT  2.0.3529.0
+  X3DAUD   2.0.3529.0
+  XMP      2.0.3529.0
+import_libraries (2):
+  xam.xex        ver=2.0.3529.0 min=2.0.2858.0 records=126
+  xboxkrnl.exe   ver=2.0.3529.0 min=2.0.2858.0 records=296
+security: image_size=0x1300000 load_address=0x82000000 image_flags=0x00000008 page=0x10000 descriptors=304
+  rodata 0x82000000-0x821A0000 (0x1A0000)
+  code   0x821A0000-0x82C90000 (0xAF0000)
+  data   0x82C90000-0x832A0000 (0x610000)
+  rodata 0x832A0000-0x83300000 (0x60000)

@@ -1,0 +1,119 @@
+# XenonRecomp config: Splinter Cell Double Agent (X360, 555307D7), SC4_Offline.xex (SC4.pe)
+# Paths are relative to this file.
+# Run from repo root: external/XenonRecomp/build/XenonRecomp/XenonRecomp.exe config/scda_config.toml external/XenonRecomp/XenonUtils/ppc_context.h
+[main]
+file_path = "../assets/SC4_Offline.xex"
+out_directory_path = "../generated"
+switch_table_file_path = "scda_switches.toml"
+
+# Optimizations off until the recomp runs.
+skip_lr = false
+skip_msr = false
+ctr_as_local = false
+xer_as_local = false
+reserved_as_local = false
+cr_as_local = false
+non_argument_as_local = false
+non_volatile_as_local = false
+
+# Register save/restore helpers. Found by byte pattern (tools/xex_dump), one hit each.
+restgprlr_14_address = 0x82B7FE20
+savegprlr_14_address = 0x82B7FDD0
+restfpr_14_address = 0x82B8039C
+savefpr_14_address = 0x82B80350
+restvmx_14_address = 0x82B867E8
+savevmx_14_address = 0x82B86550
+restvmx_64_address = 0x82B8687C
+savevmx_64_address = 0x82B865E4
+
+# TODO: longjmp_address / setjmp_address (not located yet).
+
+invalid_instructions = [
+    { data = 0x00000000, size = 4 }, # Padding
+]
+
+# BEGIN functions (tools/fix_switch_bounds.py)
+functions = [
+    { address = 0x821C4888, size = 0xDC },
+    { address = 0x821ED4C8, size = 0xA4 },
+    { address = 0x821F3280, size = 0xEC },
+    { address = 0x822513A8, size = 0x114 },
+    { address = 0x8229F0E0, size = 0x274 },
+    { address = 0x82319DD8, size = 0x70 },
+    { address = 0x8238AF80, size = 0x78 },
+    { address = 0x823DB258, size = 0x68 },
+    { address = 0x823DB2C0, size = 0x64 },
+    { address = 0x823DB328, size = 0x5C },
+    { address = 0x823DB388, size = 0x198 },
+    { address = 0x823DB520, size = 0x16C },
+    { address = 0x8242BF38, size = 0x11C },
+    { address = 0x8242C190, size = 0xC8 },
+    { address = 0x8242C260, size = 0x49C },
+    { address = 0x8242C61C, size = 0xE0 },
+    { address = 0x8242C7E0, size = 0x364 },
+    { address = 0x82453C88, size = 0x228 },
+    { address = 0x82464E70, size = 0xC8 },
+    { address = 0x824C8EC0, size = 0x380 },
+    { address = 0x824C9020, size = 0x220 },
+    { address = 0x8253E840, size = 0x70 },
+    { address = 0x82558970, size = 0x64 },
+    { address = 0x82561680, size = 0xB4 },
+    { address = 0x8257B900, size = 0x94 },
+    { address = 0x8257B9C8, size = 0x8C },
+    { address = 0x825D0628, size = 0xB8 },
+    { address = 0x82671348, size = 0x7C },
+    { address = 0x8274A9F8, size = 0xBC },
+    { address = 0x8279B8A8, size = 0x70 },
+    { address = 0x8279CA00, size = 0x78 },
+    { address = 0x8279CA80, size = 0xEC },
+    { address = 0x827B7F10, size = 0x144 },
+    { address = 0x827B8220, size = 0xA8 },
+    { address = 0x827C1638, size = 0x94 },
+    { address = 0x827DA648, size = 0x10C },
+    { address = 0x8284A150, size = 0x840 },
+    { address = 0x828A78B0, size = 0x100 },
+    { address = 0x82923C20, size = 0x84 },
+    { address = 0x8298AA40, size = 0xA8 },
+    { address = 0x829BF898, size = 0xD0 },
+    { address = 0x829D0BF8, size = 0x164 },
+    { address = 0x82A0F0B8, size = 0x130 },
+    { address = 0x82A0F1E8, size = 0x144 },
+    { address = 0x82A12450, size = 0x270 },
+    { address = 0x82A285F8, size = 0x164 },
+    { address = 0x82A316D0, size = 0x68 },
+    { address = 0x82A32208, size = 0xB4 },
+    { address = 0x82ACF8F8, size = 0x2D0 },
+    { address = 0x82ACF900, size = 0x2C8 },
+    { address = 0x82AD4390, size = 0x3EC },
+    { address = 0x82AD4398, size = 0x3E4 },
+    { address = 0x82AD69B8, size = 0x3DC },
+    { address = 0x82AD69C0, size = 0x3D4 },
+    { address = 0x82AD76D8, size = 0xB8 },
+    { address = 0x82AE8BD8, size = 0xE04 },
+    { address = 0x82AE8BE0, size = 0xDFC },
+    { address = 0x82AF5B68, size = 0x7E4 },
+    { address = 0x82AF5B70, size = 0x7DC },
+    { address = 0x82B34968, size = 0x1A8 },
+    { address = 0x82B3D4F8, size = 0x674 },
+    { address = 0x82B3D500, size = 0x66C },
+    { address = 0x82B4E298, size = 0x744 },
+    { address = 0x82B4E2A0, size = 0x73C },
+    { address = 0x82B4EAE0, size = 0x814 },
+    { address = 0x82B4EAE8, size = 0x80C },
+    { address = 0x82B4F6E8, size = 0x11B4 },
+    { address = 0x82B4F6F0, size = 0x11AC },
+    { address = 0x82B63248, size = 0x1308 },
+    { address = 0x82B63250, size = 0x1300 },
+    { address = 0x82BF7918, size = 0x44 },
+    { address = 0x82BFDAB0, size = 0x64 },
+    { address = 0x82BFF038, size = 0x190 },
+    { address = 0x82BFF040, size = 0x188 },
+    { address = 0x82BFF4E0, size = 0x130 },
+    { address = 0x82BFF4E8, size = 0x128 },
+    { address = 0x82BFF6D8, size = 0x264 },
+    { address = 0x82BFF6E0, size = 0x25C },
+    { address = 0x82BFFA80, size = 0x1A8 },
+    { address = 0x82BFFA88, size = 0x1A0 },
+    { address = 0x82C00F88, size = 0x8C },
+]
+# END functions

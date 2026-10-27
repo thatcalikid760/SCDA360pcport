@@ -1,0 +1,30 @@
+# Secrets
+.env
+
+# Game data: never commit (user supplies their own disc + title update)
+*.iso
+*.xex
+*.xexp
+*.img
+*.bin
+TU_*
+assets/
+_install/
+_run/
+generated/
+
+# Local tooling / third-party checkouts (rebuilt per STATE.md)
+.venv/
+external/
+.superpowers/
+
+# Build outputs
+runtime/build/
+tools/**/*.exe
+tools/**/*.obj
+tools/**/*.res
+tools/**/*.lib
+*.pdb
+*.log
+__pycache__/
+.claude/settings.local.json

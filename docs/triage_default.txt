@@ -1,0 +1,41 @@
+XEX2 module_flags=0x00000001 pe_data_offset=0x3000 security_offset=0x90 opt_headers=15
+  [0x000002FF] resource_info          0x0000181C
+  [0x000003FF] base_file_format       0x00001830
+  [0x00010100] entry_point            0x82269D08
+  [0x00010201] image_base             0x82000000
+  [0x000103FF] import_libraries       0x00002488
+  [0x00018002] checksum_timestamp     0x00001858
+  [0x000183FF] original_pe_name       0x00001860
+  [0x000200FF] static_libraries       0x00001884
+  [0x00020104] tls_info               0x00001948
+  [0x00020200] default_stack_size     0x00060000
+  [0x00030000] system_flags           0x00000200
+  [0x00040006] execution_info         0x00001958
+  [0x00040310] game_ratings           0x00001970
+  [0x00040404] lan_key                0x000019B0
+  [0x000405FF] xbox360_logo           0x000019C0
+base_file_format: encryption=normal(AES) compression=basic
+execution_info: title_id=555307D7 media_id=3FA11EB0 version=0.0.0.3 base=0.0.0.3 disc=1/1
+original_pe_name: XenonLaunch_retail_engine.pe
+resource: 555307D7 addr=0x82E50000 size=0x51B77
+static_libraries:
+  D3D9     2.0.3529.0
+  D3DX9    2.0.3529.0
+  XAPILIB  2.0.3529.0
+  XGRAPHC  2.0.3529.0
+  XBOXKRNL 2.0.3529.0
+  LIBCPMT  2.0.3529.0
+  XNET     2.0.3529.0
+  XONLINE  2.0.3529.0
+  XHV      2.0.3529.0
+  XMP      2.0.3529.0
+  XAUD     2.0.3529.0
+  X3DAUD   2.0.3529.0
+import_libraries (2):
+  xam.xex        ver=2.0.3529.0 min=2.0.2858.0 records=348
+  xboxkrnl.exe   ver=2.0.3529.0 min=2.0.2858.0 records=357
+security: image_size=0xEB0000 load_address=0x82000000 image_flags=0x00000008 page=0x10000 descriptors=235
+  rodata 0x82000000-0x82180000 (0x180000)
+  code   0x82180000-0x82DA0000 (0xC20000)
+  data   0x82DA0000-0x82E50000 (0xB0000)
+  rodata 0x82E50000-0x82EB0000 (0x60000)

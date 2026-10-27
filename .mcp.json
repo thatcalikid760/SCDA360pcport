@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "gemini-coarchitect": {
+      "command": "python",
+      "args": ["tools/gemini_mcp_server.py"]
+    }
+  }
+}

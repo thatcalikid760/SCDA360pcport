@@ -1,0 +1,8 @@
+#include "resource.h"
+#include <winres.h>
+
+IDI_APP        ICON   "res/scda.ico"
+IDB_BACKGROUND BITMAP "res/background.bmp"
+IDR_SCDA_EXE   RCDATA "../../runtime/build/scda.exe"
+
+1 24 "installer.manifest"
