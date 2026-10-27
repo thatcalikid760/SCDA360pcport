@@ -16,6 +16,9 @@ public:
 
 private:
     void CreateBackBufferView();
+    void ReleaseAll();
+    HWND m_hwnd = nullptr;
+    uint32_t m_width = 0, m_height = 0;
     ID3D11Device* m_device = nullptr;
     ID3D11DeviceContext* m_context = nullptr;
     IDXGISwapChain* m_swapChain = nullptr;

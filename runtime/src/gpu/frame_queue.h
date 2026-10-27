@@ -21,11 +21,18 @@ struct Frame
 class FrameQueue
 {
 public:
+    static constexpr size_t kMaxDrawsPerFrame = 65536;
+
     explicit FrameQueue(size_t maxFrames = 3) : m_max(maxFrames) {}
 
     void AddDraw(DrawCall d)
     {
         std::lock_guard lock(m_mutex);
+        if (m_open.draws.size() >= kMaxDrawsPerFrame)
+        {
+            m_droppedDraws++;
+            return;
+        }
         m_open.draws.push_back(std::move(d));
     }
     void AddResolve(Resolve r)
@@ -63,13 +70,18 @@ public:
         std::lock_guard lock(m_mutex);
         return m_dropped;
     }
+    uint64_t DroppedDraws() const
+    {
+        std::lock_guard lock(m_mutex);
+        return m_droppedDraws;
+    }
 
 private:
     mutable std::mutex m_mutex;
     size_t m_max;
     Frame m_open;
     std::deque<Frame> m_done;
-    uint64_t m_next = 0, m_dropped = 0;
+    uint64_t m_next = 0, m_dropped = 0, m_droppedDraws = 0;
 };
 
 FrameQueue& Frames();

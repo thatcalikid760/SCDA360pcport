@@ -7,7 +7,33 @@
 #include <gpu/shader_cache.h>
 #include <pm4.h>
 
-using RegisterFile = std::array<uint32_t, 0x5003>; // host-order copy of 0x7FC80000 + index*4
+// Host-order register block (0x7FC80000 + index*4), copy-on-write in 256-dword pages:
+// copying a RegisterFile shares every page; Set() on a shared page copies only that page.
+class RegisterFile
+{
+public:
+    static constexpr uint32_t kCount = 0x5003, kPageSize = 256, kPages = (kCount + kPageSize - 1) / kPageSize;
+    using Page = std::array<uint32_t, kPageSize>;
+
+    RegisterFile()
+    {
+        static const auto zero = std::make_shared<Page>(Page{});
+        pages.fill(zero);
+    }
+    uint32_t operator[](uint32_t i) const { return i < kCount ? (*pages[i / kPageSize])[i % kPageSize] : 0; }
+    void Set(uint32_t i, uint32_t v)
+    {
+        if (i >= kCount)
+            return;
+        auto& page = pages[i / kPageSize];
+        if (page.use_count() > 1)
+            page = std::make_shared<Page>(*page);
+        (*page)[i % kPageSize] = v;
+    }
+
+private:
+    std::array<std::shared_ptr<Page>, kPages> pages;
+};
 
 enum : uint32_t
 {
@@ -24,6 +50,7 @@ struct DrawCall
     IndexSource source = IndexSource::Auto;
     bool index32 = false;
     uint32_t indexBase = 0, indexBytes = 0;     // DMA: guest physical base, bytes
+    uint32_t indexEndian = 0;                   // DMA: VGT_DMA_SIZE bits 30-31
     std::vector<uint32_t> immediateIndices;     // Immediate: host-order dwords
     const ShaderBlob* vs = nullptr;
     const ShaderBlob* ps = nullptr;

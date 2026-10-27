@@ -17,7 +17,9 @@ DrawCall DecodeDrawIndx(const Pm4Payload& p, uint32_t n)
     if (d.source == IndexSource::Dma && n >= 4)
     {
         d.indexBase = p(2);
-        d.indexBytes = p(3);
+        // VGT_DMA_SIZE: bits 0-23 = size in indices, bits 30-31 = endian swap.
+        d.indexBytes = (p(3) & 0xFFFFFF) * (d.index32 ? 4 : 2);
+        d.indexEndian = p(3) >> 30;
     }
     return d;
 }

@@ -189,3 +189,28 @@ TEST(cp_event_write_shd_swap_counter)
     CHECK_EQ(GuestLoad32(0xA0681908), before + 1);
     Gpu().pendingSwaps = 0;
 }
+
+// Constant packets (Xenia semantics): SET_CONSTANT type 0 ALU 0x4000, 1 fetch 0x4800, 2 bool 0x4900,
+// 3 loop 0x4908, 4 registers 0x2000; SET_CONSTANT2 / SET_SHADER_CONSTANTS write register indices
+// directly; LOAD_ALU_CONSTANT reads the values from memory.
+TEST(cp_constant_packets_reach_registers)
+{
+    SetupRing();
+    for (uint32_t i = 0; i < 4; i++)
+        GuestStore32(0xA0681A00 + i * 4, 0x700 + i);
+    g_w = 0;
+    Emit(0xC0022D00); Emit((0u << 16) | 4); Emit(0x11); Emit(0x22);   // ALU constants 4, 5
+    Emit(0xC0012D00); Emit((1u << 16) | 6); Emit(0x33);               // fetch constant dword 6
+    Emit(0xC0015500); Emit(0x2001); Emit(0x44);                       // SET_CONSTANT2: register 0x2001
+    Emit(0xC0022F00); Emit(0x00681A00); Emit((0u << 16) | 8); Emit(4); // LOAD_ALU_CONSTANT -> 0x4008..
+    Publish();
+    CpStats st{};
+    CommandProcessorTick(&st);
+    CHECK_EQ(GpuRegister(0x4004), 0x11u);
+    CHECK_EQ(GpuRegister(0x4005), 0x22u);
+    CHECK_EQ(GpuRegister(0x4806), 0x33u);
+    CHECK_EQ(GpuRegister(0x2001), 0x44u);
+    CHECK_EQ(GpuRegister(0x4008), 0x700u);
+    CHECK_EQ(GpuRegister(0x400B), 0x703u);
+    CHECK_EQ(st.skipped, 0ull);
+}

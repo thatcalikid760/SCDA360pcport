@@ -83,3 +83,16 @@ TEST(cp_draws_and_swap_form_a_frame)
     CHECK(f.draws[0].regs != nullptr);
     Gpu().pendingSwaps = 0;
 }
+
+// Review: a frame with no swap marker cannot grow without bound.
+TEST(open_frame_draws_are_capped)
+{
+    FrameQueue q(3);
+    for (size_t i = 0; i < FrameQueue::kMaxDrawsPerFrame + 10; i++)
+        q.AddDraw(DrawCall{});
+    q.EndFrame();
+    Frame f;
+    CHECK(q.PopFrame(f));
+    CHECK_EQ(f.draws.size(), FrameQueue::kMaxDrawsPerFrame);
+    CHECK_EQ(q.DroppedDraws(), 10ull);
+}

@@ -1,4 +1,5 @@
 #include <windows.h>
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -38,7 +39,13 @@ static void WindowThread(DisplaySettings s)
     RegisterClassExW(&wc);
 
     DWORD style = s.mode == DisplaySettings::Windowed ? WS_OVERLAPPEDWINDOW : WS_POPUP;
-    RECT r{ 0, 0, LONG(1280 * s.scale), LONG(720 * s.scale) };
+    RECT work{};
+    SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+    RECT frame{ 0, 0, 0, 0 };
+    AdjustWindowRect(&frame, style, FALSE);
+    auto [cw, ch] = WindowClientSize(uint32_t(work.right - work.left - (frame.right - frame.left)),
+                                     uint32_t(work.bottom - work.top - (frame.bottom - frame.top)));
+    RECT r{ 0, 0, LONG(cw), LONG(ch) };
     int x = CW_USEDEFAULT, y = CW_USEDEFAULT;
     if (s.mode != DisplaySettings::Windowed)
     {
@@ -106,6 +113,17 @@ static void RenderThread(DisplaySettings s)
             SetWindowTextW(hwnd, title);
         }
     }
+}
+
+std::pair<uint32_t, uint32_t> WindowClientSize(uint32_t workW, uint32_t workH)
+{
+    uint32_t w = 1280, h = 720;
+    if (w > workW || h > workH)
+    {
+        w = std::min(workW, workH * 16 / 9) / 16 * 16;
+        h = w * 9 / 16;
+    }
+    return { w, h };
 }
 
 void HostWindowStart(const DisplaySettings& s)

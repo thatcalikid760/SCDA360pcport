@@ -1,3 +1,4 @@
+#include <cstdio>
 #include <gpu/d3d11_renderer.h>
 
 template <class T> static void Release(T*& p)
@@ -7,7 +8,7 @@ template <class T> static void Release(T*& p)
     p = nullptr;
 }
 
-D3D11Renderer::~D3D11Renderer()
+void D3D11Renderer::ReleaseAll()
 {
     Release(m_backBuffer);
     Release(m_swapChain);
@@ -15,9 +16,14 @@ D3D11Renderer::~D3D11Renderer()
     Release(m_device);
 }
 
+D3D11Renderer::~D3D11Renderer() { ReleaseAll(); }
+
 bool D3D11Renderer::Init(HWND hwnd, uint32_t width, uint32_t height, bool vsync)
 {
     m_vsync = vsync;
+    m_hwnd = hwnd;
+    m_width = width;
+    m_height = height;
     DXGI_SWAP_CHAIN_DESC sd{};
     sd.BufferCount = 2;
     sd.BufferDesc.Width = width;
@@ -51,22 +57,38 @@ void D3D11Renderer::Resize(uint32_t width, uint32_t height)
 {
     if (!m_swapChain || !width || !height)
         return;
-    m_context->OMSetRenderTargets(0, nullptr, nullptr);
+    m_width = width;
+    m_height = height;
+    // Views must be gone (ClearState + Flush release deferred references) before ResizeBuffers.
+    m_context->ClearState();
     Release(m_backBuffer);
-    m_swapChain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0);
+    m_context->Flush();
+    if (FAILED(m_swapChain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0)))
+        printf("[d3d11] ResizeBuffers failed\n");
     CreateBackBufferView();
 }
 
 void D3D11Renderer::Present(const Frame& frame)
 {
+    // Lost back buffer (failed resize) or device: rebuild everything for the current size.
     if (!m_backBuffer)
-        return;
+    {
+        ReleaseAll();
+        if (!m_hwnd || !Init(m_hwnd, m_width, m_height, m_vsync))
+            return;
+    }
     // Placeholder until 2b-3 draws: a dark colour that pulses with the frame number, so a
     // running game is visibly distinct from a hung one.
     float pulse = float(frame.stats.frame % 120) / 120.0f;
     const float color[4] = { 0.02f, 0.05f + 0.10f * pulse, 0.02f, 1.0f };
     m_context->OMSetRenderTargets(1, &m_backBuffer, nullptr);
     m_context->ClearRenderTargetView(m_backBuffer, color);
-    m_swapChain->Present(m_vsync ? 1 : 0, 0);
+    HRESULT hr = m_swapChain->Present(m_vsync ? 1 : 0, 0);
+    if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)
+    {
+        printf("[d3d11] device lost (0x%08lX, reason 0x%08lX): recreating\n", (unsigned long)hr, (unsigned long)m_device->GetDeviceRemovedReason());
+        Release(m_backBuffer); // next Present rebuilds the device
+        return;
+    }
     m_presented++;
 }

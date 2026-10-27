@@ -21,6 +21,10 @@ enum : uint32_t
     kOpIndirectBuffer = 0x37,
     kOpIndirectBufferPfp = 0x3F,
     kOpRegRmw = 0x21,
+    kOpSetConstant = 0x2D,
+    kOpLoadAluConstant = 0x2F,
+    kOpSetConstant2 = 0x55,
+    kOpSetShaderConstants = 0x56,
     kOpDrawIndx = 0x22,
     kOpDrawIndx2 = 0x36,
     kOpCondWrite = 0x45,
@@ -37,10 +41,16 @@ static std::function<void(uint32_t)> g_interruptSink;
 static std::mutex g_sinkMutex;
 
 uint32_t GpuRegister(uint32_t index) { return GuestLoad32(kGpuRegBase + index * 4); }
+// Host-order shadow of the register block: snapshots copy page pointers, not 80 KB.
+// Assumes registers change through PM4 (the 360 D3D runtime does); direct guest MMIO stores
+// to 0x7FC80000 bypass the shadow.
+static RegisterFile g_shadow;
 static bool g_regsDirty = true;
 static void SetGpuRegister(uint32_t index, uint32_t v)
 {
-    GuestStore32(kGpuRegBase + (index & 0x7FFF) * 4, v);
+    index &= 0x7FFF;
+    GuestStore32(kGpuRegBase + index * 4, v);
+    g_shadow.Set(index, v);
     g_regsDirty = true;
 }
 
@@ -56,13 +66,18 @@ static std::shared_ptr<const RegisterFile> Snapshot()
     static std::shared_ptr<const RegisterFile> current;
     if (g_regsDirty || !current)
     {
-        auto regs = std::make_shared<RegisterFile>();
-        for (uint32_t i = 0; i < regs->size(); i++)
-            (*regs)[i] = GuestLoad32(kGpuRegBase + i * 4);
-        current = regs;
+        current = std::make_shared<const RegisterFile>(g_shadow);
         g_regsDirty = false;
     }
     return current;
+}
+
+// SET_CONSTANT / LOAD_ALU_CONSTANT offset_type: index bits 0-10, type bits 16-23.
+static uint32_t ConstantBase(uint32_t offsetType)
+{
+    static const uint32_t kBase[] = { 0x4000, 0x4800, 0x4900, 0x4908, 0x2000 };
+    uint32_t type = (offsetType >> 16) & 0xFF;
+    return (type < 5 ? kBase[type] : 0x4000) + (offsetType & 0x7FF);
 }
 
 static void SubmitDraw(DrawCall d)
@@ -217,6 +232,28 @@ static bool ExecutePacket(uint32_t h, const Pm4Payload& p, int depth, CpStats& s
             Frames().EndFrame();
         }
         return true;
+    case kOpSetConstant:
+        for (uint32_t i = 1; i < count; i++)
+            SetGpuRegister(ConstantBase(p(0)) + i - 1, p(i));
+        return true;
+    case kOpSetConstant2:
+    case kOpSetShaderConstants:
+        for (uint32_t i = 1; i < count; i++)
+            SetGpuRegister((p(0) & 0xFFFF) + i - 1, p(i));
+        return true;
+    case kOpLoadAluConstant:
+    {
+        // address, offset_type, size in dwords; values read big-endian from guest memory.
+        uint32_t guest = GuestPhysical(p(0) & 0x3FFFFFFC), dwords = count >= 3 ? p(2) & 0xFFFF : 0;
+        if (!Committed(guest, dwords * 4))
+        {
+            st.skipped++;
+            return true;
+        }
+        for (uint32_t i = 0; i < dwords; i++)
+            SetGpuRegister(ConstantBase(p(1)) + i, GuestLoad32(guest + i * 4));
+        return true;
+    }
     case kOpDrawIndx:
         SubmitDraw(DecodeDrawIndx(p, count));
         return true;
