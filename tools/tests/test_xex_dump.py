@@ -27,6 +27,15 @@ class XexDump(unittest.TestCase):
             self.assertEqual(img.stat().st_size, 0x1300000)
             self.assertRegex(r.stdout, r"sha256=[0-9a-f]{64}")
 
+    def test_out_header_writes_xex_header(self):
+        with tempfile.TemporaryDirectory(prefix="scda hdr (test) ") as d:
+            hdr = Path(d) / "SC4_Offline.xexhdr"
+            r = run(XEX, "--out-header", hdr)
+            self.assertEqual(r.returncode, 0, r.stdout)
+            data = hdr.read_bytes()
+            self.assertEqual(data[:4], b"XEX2")
+            self.assertEqual(len(data), int.from_bytes(XEX.read_bytes()[8:12], "big"))  # header size field
+
     def test_unpatched_reports_0003(self):
         r = run(XEX)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)

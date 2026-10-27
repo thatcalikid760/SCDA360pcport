@@ -6,15 +6,6 @@
 #include <interrupts.h>
 #include <runtime.h>
 
-// Test version of src/main.cpp InitThreadContext: a PCR block and a stack in test guest memory.
-void InitThreadContext(PPCContext& ctx, uint32_t cpu, uint32_t)
-{
-    uint32_t block = GuestAllocVirtual(0x20000, 0x10000);
-    g_base[block + 0x10C] = uint8_t(cpu);
-    ctx.r13.u64 = block;
-    ctx.r1.u64 = block + 0x20000;
-}
-
 static std::atomic<uint32_t> g_source{ 0xFFFFFFFF }, g_context, g_thread;
 
 static PPC_FUNC(FakeGraphicsCallback)

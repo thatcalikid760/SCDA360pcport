@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <vector>
 #include <runtime.h>
+#include <module.h>
 #include <alloc_tracker.h>
 #include <watchdog.h>
 
@@ -25,7 +26,13 @@ static void FillVariable(const char* name, uint32_t block)
     }
     else if (!strcmp(name, "ExLoadedCommandLine"))
     {
-        strcpy((char*)GuestPtr(block), "\"SC4_Offline.xex\"");
+        // What the disc launcher (default.xex) selects when dvd.dat is present: the arguments
+        // sub_821D7850 builds from its launch data. "-ll" turns on the linker (.lin) file manager.
+        strcpy((char*)GuestPtr(block), "\"SC4_Offline.xex\" MAPNAME=menu -ll -nolog ");
+    }
+    else if (!strcmp(name, "XexExecutableModuleHandle"))
+    {
+        SetupExecutableModule(block, g_xexHeader);
     }
     else if (!strcmp(name, "VdGpuClockInMHz"))
     {

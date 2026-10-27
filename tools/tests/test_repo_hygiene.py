@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class RepoHygiene(unittest.TestCase):
-    FORBIDDEN = (".iso", ".xex", ".xexp", ".img", ".env")
+    FORBIDDEN = (".iso", ".xex", ".xexp", ".img", ".xexhdr", ".env")
 
     def tracked(self):
         return subprocess.run(["git", "ls-files"], capture_output=True, text=True, check=True, cwd=ROOT).stdout.split()

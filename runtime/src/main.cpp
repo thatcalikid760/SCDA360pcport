@@ -11,8 +11,11 @@
 #include <alloc_tracker.h>
 #include <command_processor.h>
 #include <image_loader.h>
+#include <module.h>
+#include <fstream>
 #include <interrupts.h>
 #include <runtime.h>
+#include <thread_context.h>
 #include <watchdog.h>
 
 uint8_t* g_base;
@@ -99,25 +102,6 @@ static bool InitMemory()
 }
 
 // Layout follows UnleashedRecomp's GuestThreadContext.
-constexpr uint32_t PCR_SIZE = 0xAB0;
-constexpr uint32_t TLS_SIZE = 0x100;
-constexpr uint32_t TEB_SIZE = 0x2E0;
-constexpr uint32_t STACK_SIZE = 0x100000;
-
-void InitThreadContext(PPCContext& ctx, uint32_t cpu, uint32_t threadId)
-{
-    uint32_t thread = GuestAllocVirtual(PCR_SIZE + TLS_SIZE + TEB_SIZE + STACK_SIZE, 0x10000);
-    GuestStore32(thread, thread + PCR_SIZE);                   // TLS pointer
-    GuestStore32(thread + 0x100, thread + PCR_SIZE + TLS_SIZE); // TEB pointer
-    g_base[thread + 0x10C] = uint8_t(cpu);
-    GuestStore32(thread + PCR_SIZE + 0x10, 0xFFFFFFFF);
-    GuestStore32(thread + PCR_SIZE + TLS_SIZE + 0x14C, threadId);
-
-    ctx.r1.u64 = thread + PCR_SIZE + TLS_SIZE + TEB_SIZE + STACK_SIZE;
-    ctx.r13.u64 = thread;
-    ctx.fpscr.loadFromHost();
-}
-
 static LONG WINAPI CrashHandler(EXCEPTION_POINTERS* e)
 {
     auto* r = e->ExceptionRecord;
@@ -182,12 +166,37 @@ int main(int argc, char** argv)
     }
     RuntimeLog("[loader] %s: sha256 %s\n", imagePath, sha.c_str());
 
+    // XEX header (installer/xex_dump --out-header) for the module entry and RtlImageXexHeaderField.
+    {
+        std::ifstream hdr(g_gameDir + "/SC4_Offline.xexhdr", std::ios::binary | std::ios::ate);
+        if (hdr)
+        {
+            uint32_t size = uint32_t(hdr.tellg());
+            g_xexHeader = GuestAllocVirtual(size, 0x1000);
+            hdr.seekg(0);
+            hdr.read((char*)GuestPtr(g_xexHeader), size);
+            RuntimeLog("[loader] XEX header 0x%X bytes at 0x%08X\n", size, g_xexHeader);
+        }
+        else
+            RuntimeLog("[loader] WARNING: SC4_Offline.xexhdr missing next to the image\n");
+    }
     InitDataImports();
     CommandProcessorStart();
     InterruptsStart();
 
     static PPCContext ctx{};
-    InitThreadContext(ctx, 0, 1);
+    // Main thread stack: XEX_HEADER_DEFAULT_STACK_SIZE (0x20200), 2 MB for this title.
+    uint32_t mainStack = 0x200000;
+    if (g_xexHeader)
+    {
+        PPCContext q{};
+        q.r3.u64 = g_xexHeader;
+        q.r4.u64 = 0x00020200;
+        __imp__RtlImageXexHeaderField(q, g_base);
+        if (q.r3.u32)
+            mainStack = q.r3.u32;
+    }
+    InitThreadContext(ctx, 0, 1, mainStack);
     WatchdogRegisterThread(1, &ctx);
     if (const char* w = getenv("SCDA_WATCHDOG"))
         WatchdogStart((unsigned)atoi(w));

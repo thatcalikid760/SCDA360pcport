@@ -121,13 +121,14 @@ int main(int argc, char** argv)
         printf("usage: xex_dump <in.xex> [--patch <in.xexp>] [--out-xex <patched.xex>] [--out-img <image.img>]\n");
         return 1;
     }
-    const char *patchPath = nullptr, *outXex = nullptr, *outImg = nullptr;
+    const char *patchPath = nullptr, *outXex = nullptr, *outImg = nullptr, *outHeader = nullptr;
     for (int i = 2; i < argc; i += 2)
     {
         if (i + 1 == argc) { printf("ERROR: %s needs a value\n", argv[i]); return 1; }
         if (!strcmp(argv[i], "--patch")) patchPath = argv[i + 1];
         else if (!strcmp(argv[i], "--out-xex")) outXex = argv[i + 1];
         else if (!strcmp(argv[i], "--out-img")) outImg = argv[i + 1];
+        else if (!strcmp(argv[i], "--out-header")) outHeader = argv[i + 1];
         else { printf("ERROR: unknown option %s\n", argv[i]); return 1; }
     }
 
@@ -166,6 +167,13 @@ int main(int argc, char** argv)
     if (!image.data)
     {
         printf("ERROR: XenonUtils cannot parse the image\n");
+        return 1;
+    }
+    // The XEX header (unencrypted, headerSize bytes): the runtime maps it for the module entry
+    // (XexExecutableModuleHandle) and RtlImageXexHeaderField.
+    if (outHeader && !WriteFileAtomic(outHeader, file.data(), ((const Xex2Header*)file.data())->headerSize))
+    {
+        printf("ERROR: cannot write %s\n", outHeader);
         return 1;
     }
     if (outXex && !WriteFileAtomic(outXex, file.data(), file.size()))

@@ -28,6 +28,17 @@ public:
         return uint64_t(addr) < uint64_t(it->first) + it->second ? it->second : 0;
     }
 
+    // Base of the allocation containing addr, 0 if none.
+    uint32_t BaseOf(uint32_t addr) const
+    {
+        std::lock_guard lock(m_mutex);
+        auto it = m_sizes.upper_bound(addr);
+        if (it == m_sizes.begin())
+            return 0;
+        --it;
+        return uint64_t(addr) < uint64_t(it->first) + it->second ? it->first : 0;
+    }
+
 private:
     mutable std::mutex m_mutex;
     std::map<uint32_t, uint32_t> m_sizes;

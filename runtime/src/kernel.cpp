@@ -10,13 +10,13 @@
 #include <string>
 #include <unordered_map>
 #include <runtime.h>
+#include <thread_context.h>
 #include <watchdog.h>
 
 constexpr uint32_t X_STATUS_SUCCESS = 0;
 constexpr uint32_t X_STATUS_TIMEOUT = 0x102;
 constexpr uint32_t X_STATUS_INVALID_HANDLE = 0xC0000008;
 
-void InitThreadContext(PPCContext& ctx, uint32_t cpu, uint32_t threadId);
 
 struct GuestObject
 {
@@ -98,7 +98,7 @@ static uint32_t WaitResult(DWORD r)
 
 struct ThreadStart
 {
-    uint32_t startup, entry, context, id;
+    uint32_t startup, entry, context, id, stackSize;
 };
 
 static DWORD WINAPI GuestThreadMain(void* p)
@@ -106,7 +106,7 @@ static DWORD WINAPI GuestThreadMain(void* p)
     ThreadStart s = *(ThreadStart*)p;
     delete (ThreadStart*)p;
     auto* ctx = new PPCContext{};
-    InitThreadContext(*ctx, 0, s.id);
+    InitThreadContext(*ctx, 0, s.id, s.stackSize);
     WatchdogRegisterThread(s.id, ctx);
     // XAPI threads start in the startup thunk: startup(entry, context).
     uint32_t target = s.startup ? s.startup : s.entry;
@@ -124,7 +124,7 @@ SCDA_IMPORT(ExCreateThread)
 {
     static std::atomic<uint32_t> nextId{ 2 };
     uint32_t pHandle = ctx.r3.u32, pId = ctx.r5.u32, flags = ctx.r9.u32;
-    auto* s = new ThreadStart{ ctx.r6.u32, ctx.r7.u32, ctx.r8.u32, nextId++ };
+    auto* s = new ThreadStart{ ctx.r6.u32, ctx.r7.u32, ctx.r8.u32, nextId++, ctx.r4.u32 };
     DWORD hostId;
     HANDLE t = CreateThread(nullptr, 16 * 1024 * 1024, GuestThreadMain, s, (flags & 1) ? CREATE_SUSPENDED : 0, &hostId);
     uint32_t h = AddHandle(t);

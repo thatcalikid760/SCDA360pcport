@@ -5,9 +5,9 @@
 #include <windows.h>
 #include <atomic>
 #include <runtime.h>
+#include <thread_context.h>
 #include <watchdog.h>
 
-void InitThreadContext(PPCContext& ctx, uint32_t cpu, uint32_t threadId);
 
 constexpr uint32_t kDriverHandle = 0x41550000;
 constexpr uint32_t kAudioThreadId = 0x101;

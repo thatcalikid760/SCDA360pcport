@@ -6,6 +6,7 @@
 *.xex
 *.xexp
 *.img
+*.xexhdr
 *.bin
 /TU_*
 assets/

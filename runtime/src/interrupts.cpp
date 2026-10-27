@@ -5,9 +5,9 @@
 #include <gpu_state.h>
 #include <interrupts.h>
 #include <runtime.h>
+#include <thread_context.h>
 #include <watchdog.h>
 
-void InitThreadContext(PPCContext& ctx, uint32_t cpu, uint32_t threadId);
 
 constexpr uint32_t kInterruptThreadId = 0x100;
 

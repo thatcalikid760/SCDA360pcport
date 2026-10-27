@@ -52,6 +52,8 @@ SCDA_IMPORT(NtFreeVirtualMemory)
         GuestAllocations().Remove(region);
     }
     size = (size + 0xFFF) & ~0xFFFu;
+    if (getenv("SCDA_TRACE_MEM"))
+        RuntimeLog("[mem] free 0x%08X size 0x%X type 0x%X\n", region, size, type);
     if (type & (kMemRelease | kMemDecommit))
         memset(GuestPtr(region), 0, size);
     GuestStore32(ctx.r3.u32, region);
