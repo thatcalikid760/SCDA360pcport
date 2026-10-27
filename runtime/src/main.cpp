@@ -10,6 +10,7 @@
 #include <string>
 #include <alloc_tracker.h>
 #include <command_processor.h>
+#include <host_window.h>
 #include <image_loader.h>
 #include <module.h>
 #include <fstream>
@@ -109,9 +110,18 @@ static LONG WINAPI CrashHandler(EXCEPTION_POINTERS* e)
     static thread_local bool inHandler;
     if (inHandler)
         return EXCEPTION_CONTINUE_SEARCH;
+    auto* r = e->ExceptionRecord;
+    // First-chance handler: ignore benign/handled exceptions (thread naming, C++ throws, ...).
+    switch (r->ExceptionCode)
+    {
+    case EXCEPTION_ACCESS_VIOLATION: case EXCEPTION_STACK_OVERFLOW: case EXCEPTION_ILLEGAL_INSTRUCTION:
+    case EXCEPTION_INT_DIVIDE_BY_ZERO: case EXCEPTION_PRIV_INSTRUCTION: case EXCEPTION_IN_PAGE_ERROR:
+        break;
+    default:
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
     inHandler = true;
     struct Reset { ~Reset() { inHandler = false; } } reset;
-    auto* r = e->ExceptionRecord;
     uintptr_t fault = r->NumberParameters >= 2 ? r->ExceptionInformation[1] : 0;
     RuntimeLog("[fatal] exception 0x%08lX at host %p, fault addr %p (guest 0x%08llX)\n",
         r->ExceptionCode, r->ExceptionAddress, (void*)fault,
@@ -189,6 +199,8 @@ int main(int argc, char** argv)
     }
     InitDataImports();
     CommandProcessorStart();
+    if (!getenv("SCDA_HEADLESS"))
+        HostWindowStart(LoadDisplaySettings(SettingsPath()));
     InterruptsStart();
 
     static PPCContext ctx{};

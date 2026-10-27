@@ -42,22 +42,25 @@ add_executable(scda
     src/guest_time.cpp
     src/gpu/shader_cache.cpp
     src/gpu/draw.cpp
+    src/gpu/d3d11_renderer.cpp
+    src/settings.cpp
+    src/host_window.cpp
     src/imports.cpp
     src/fs.cpp
     src/kernel.cpp
     src/imports_stubs.cpp
     scda.rc)
 target_include_directories(scda PRIVATE include src)
-target_link_libraries(scda PRIVATE scda_ppc bcrypt dbghelp winmm)
+target_link_libraries(scda PRIVATE scda_ppc bcrypt dbghelp winmm d3d11 dxgi)
 # Recompiled code runs on the host stack; the main guest thread recurses deeply.
 target_link_options(scda PRIVATE /STACK:0x4000000)
 target_compile_definitions(scda PRIVATE SCDA_EXPECTED_IMAGE_SHA256="${SCDA_EXPECTED_IMAGE_SHA256}" NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
 
 # Tests: ctest --test-dir runtime/build
 enable_testing()
-add_executable(scda_tests tests/test_main.cpp tests/test_stfs.cpp tests/test_loader.cpp tests/test_watchdog.cpp tests/test_import_stub.cpp tests/test_video.cpp tests/test_pm4.cpp tests/test_command_processor.cpp tests/test_interrupts.cpp tests/test_fs.cpp tests/test_audio.cpp tests/test_alloc_tracker.cpp tests/test_memory.cpp tests/test_module.cpp tests/test_thread_context.cpp tests/test_xam.cpp tests/test_time.cpp tests/test_shader_cache.cpp tests/test_draw.cpp tests/test_frame_queue.cpp src/gpu/shader_cache.cpp src/gpu/draw.cpp src/guest_time.cpp src/thread_context.cpp src/xam.cpp src/kernel.cpp src/memory.cpp src/module.cpp src/fs.cpp src/audio.cpp src/interrupts.cpp src/video.cpp src/pm4.cpp src/command_processor.cpp src/loader.cpp src/watchdog.cpp src/import_stub.cpp "${SCDA_ROOT}/tools/stfs/stfs.cpp")
+add_executable(scda_tests tests/test_main.cpp tests/test_stfs.cpp tests/test_loader.cpp tests/test_watchdog.cpp tests/test_import_stub.cpp tests/test_video.cpp tests/test_pm4.cpp tests/test_command_processor.cpp tests/test_interrupts.cpp tests/test_fs.cpp tests/test_audio.cpp tests/test_alloc_tracker.cpp tests/test_memory.cpp tests/test_module.cpp tests/test_thread_context.cpp tests/test_xam.cpp tests/test_time.cpp tests/test_shader_cache.cpp tests/test_draw.cpp tests/test_frame_queue.cpp tests/test_settings.cpp tests/test_d3d11_smoke.cpp src/settings.cpp src/gpu/d3d11_renderer.cpp src/gpu/shader_cache.cpp src/gpu/draw.cpp src/guest_time.cpp src/thread_context.cpp src/xam.cpp src/kernel.cpp src/memory.cpp src/module.cpp src/fs.cpp src/audio.cpp src/interrupts.cpp src/video.cpp src/pm4.cpp src/command_processor.cpp src/loader.cpp src/watchdog.cpp src/import_stub.cpp "${SCDA_ROOT}/tools/stfs/stfs.cpp")
 target_include_directories(scda_tests PRIVATE tests include src "${SCDA_ROOT}/tools/stfs" "${GENERATED}" "${XENON_ROOT}/thirdparty/simde")
 target_compile_options(scda_tests PRIVATE /clang:-march=sandybridge)
-target_link_libraries(scda_tests PRIVATE bcrypt winmm)
+target_link_libraries(scda_tests PRIVATE bcrypt winmm d3d11 dxgi)
 target_compile_definitions(scda_tests PRIVATE SCDA_EXPECTED_IMAGE_SHA256="${SCDA_EXPECTED_IMAGE_SHA256}" SCDA_TESTS SCDA_ROOT="${SCDA_ROOT}" NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
 add_test(NAME scda_tests COMMAND scda_tests)
