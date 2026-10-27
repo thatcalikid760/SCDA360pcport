@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <atomic>
 #include <runtime.h>
+#include <watchdog.h>
 
 void InitThreadContext(PPCContext& ctx, uint32_t cpu, uint32_t threadId);
 
@@ -18,6 +19,7 @@ static DWORD WINAPI AudioPump(void*)
 {
     auto* ctx = new PPCContext{};
     InitThreadContext(*ctx, 0, kAudioThreadId);
+    WatchdogRegisterThread(kAudioThreadId, ctx);
     LARGE_INTEGER freq, next, now;
     QueryPerformanceFrequency(&freq);
     QueryPerformanceCounter(&next);

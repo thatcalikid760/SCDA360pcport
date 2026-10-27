@@ -48,7 +48,7 @@ TEST(blocked_thread_is_reported_without_import)
     ctx.lr = 0x82000500;
     WatchdogRegisterThread(7, &ctx);
     std::string report = WatchdogReport(mem.data());
-    CHECK(report.find("thread 7 in (guest code)") != std::string::npos);
+    CHECK(report.find("thread 7 [current] in (guest code)") != std::string::npos);
     CHECK(report.find("0x82000500") != std::string::npos);
     WatchdogUnregisterThread(7);
     CHECK(WatchdogReport(mem.data()).find("thread 7") == std::string::npos);
@@ -62,8 +62,18 @@ TEST(block_scope_names_the_wait)
     WatchdogRegisterThread(8, &ctx);
     {
         WatchdogBlockScope scope("KeWaitForSingleObject");
-        CHECK(WatchdogReport(mem.data()).find("thread 8 in KeWaitForSingleObject") != std::string::npos);
+        CHECK(WatchdogReport(mem.data()).find("thread 8 [current] in KeWaitForSingleObject") != std::string::npos);
     }
-    CHECK(WatchdogReport(mem.data()).find("thread 8 in (guest code)") != std::string::npos);
+    CHECK(WatchdogReport(mem.data()).find("thread 8 [current] in (guest code)") != std::string::npos);
     WatchdogUnregisterThread(8);
+}
+
+TEST(report_marks_the_calling_thread)
+{
+    std::vector<uint8_t> mem(0x10000);
+    PPCContext ctx{};
+    ctx.r1.u64 = 0x8000;
+    WatchdogRegisterThread(9, &ctx);
+    CHECK(WatchdogReport(mem.data()).find("thread 9 [current]") != std::string::npos);
+    WatchdogUnregisterThread(9);
 }

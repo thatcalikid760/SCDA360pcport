@@ -9,6 +9,7 @@
 struct WatchedThread
 {
     PPCContext* ctx;
+    DWORD hostThread;
     std::atomic<const char*> blocking{ nullptr };
 };
 
@@ -18,7 +19,7 @@ static thread_local WatchedThread* t_self;
 
 void WatchdogRegisterThread(uint32_t guestThreadId, PPCContext* ctx)
 {
-    auto* w = new WatchedThread{ ctx };
+    auto* w = new WatchedThread{ ctx, GetCurrentThreadId() };
     std::lock_guard lock(g_watchMutex);
     g_watched[guestThreadId] = w;
     t_self = w;
@@ -72,7 +73,9 @@ std::string WatchdogReport(const uint8_t* guestBase)
     for (auto& [id, w] : g_watched)
     {
         const char* in = w->blocking.load();
-        snprintf(buf, sizeof(buf), "[watchdog] thread %u in %s stack:", id, in ? in : "(guest code)");
+        // [current] = the thread producing this report (the faulting one, from the crash handler).
+        snprintf(buf, sizeof(buf), "[watchdog] thread %u%s in %s stack:", id,
+            w->hostThread == GetCurrentThreadId() ? " [current]" : "", in ? in : "(guest code)");
         out += buf;
         for (uint32_t a : WalkGuestStack(guestBase, w->ctx->r1.u32, uint32_t(w->ctx->lr), 16))
         {
