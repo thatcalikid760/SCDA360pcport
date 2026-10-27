@@ -28,6 +28,7 @@ add_executable(scda
     src/loader.cpp
     src/watchdog.cpp
     src/import_stub.cpp
+    src/video.cpp
     src/imports.cpp
     src/fs.cpp
     src/kernel.cpp
@@ -39,7 +40,7 @@ target_compile_definitions(scda PRIVATE SCDA_EXPECTED_IMAGE_SHA256="${SCDA_EXPEC
 
 # Tests: ctest --test-dir runtime/build
 enable_testing()
-add_executable(scda_tests tests/test_main.cpp tests/test_stfs.cpp tests/test_loader.cpp tests/test_watchdog.cpp tests/test_import_stub.cpp src/loader.cpp src/watchdog.cpp src/import_stub.cpp "${SCDA_ROOT}/tools/stfs/stfs.cpp")
+add_executable(scda_tests tests/test_main.cpp tests/test_stfs.cpp tests/test_loader.cpp tests/test_watchdog.cpp tests/test_import_stub.cpp tests/test_video.cpp src/video.cpp src/loader.cpp src/watchdog.cpp src/import_stub.cpp "${SCDA_ROOT}/tools/stfs/stfs.cpp")
 target_include_directories(scda_tests PRIVATE tests include src "${SCDA_ROOT}/tools/stfs" "${GENERATED}" "${XENON_ROOT}/thirdparty/simde")
 target_compile_options(scda_tests PRIVATE /clang:-march=sandybridge)
 target_link_libraries(scda_tests PRIVATE bcrypt)

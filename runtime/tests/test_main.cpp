@@ -7,6 +7,26 @@
 // Runtime globals normally defined in src/main.cpp. RuntimeLog output is captured for tests.
 uint8_t* g_base;
 
+// Bump allocators over the test guest memory (tests/guest_memory.h commits on touch).
+static uint32_t TestBump(uint32_t& cursor, uint32_t size, uint32_t align)
+{
+    if (align < 16)
+        align = 16;
+    uint32_t a = (cursor + align - 1) & ~(align - 1);
+    cursor = a + size;
+    return a;
+}
+uint32_t GuestAllocVirtual(uint32_t size, uint32_t align)
+{
+    static uint32_t cursor = 0x60000000;
+    return TestBump(cursor, size, align);
+}
+uint32_t GuestAllocPhysical(uint32_t size, uint32_t align)
+{
+    static uint32_t cursor = 0xB0000000;
+    return TestBump(cursor, size, align);
+}
+
 std::string& CapturedLog()
 {
     static std::string log;
