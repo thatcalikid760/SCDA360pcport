@@ -77,3 +77,35 @@ TEST(large_page_commit_rounds_to_64k)
     Allocate(0, 0x3001, kMemCommit, &st);
     CHECK_EQ(GuestLoad32(0x40300004), 0x4000u); // 4 KB pages otherwise
 }
+
+// Review: MEM_RELEASE must start at the allocation base; an interior address fails, zeroes nothing.
+TEST(release_at_interior_address_fails_without_zeroing)
+{
+    TestGuestBase();
+    uint32_t st;
+    uint32_t a = Allocate(0, 0x20000, kMemReserve | kMemCommit, &st);
+    GuestStore32(a + 0x18000, 5);
+    CHECK_EQ(Free(a + 0x10000, 0, kMemRelease), 0xC000009Fu); // STATUS_FREE_VM_NOT_AT_BASE
+    CHECK_EQ(GuestLoad32(a + 0x18000), 5u);
+    CHECK(GuestAllocations().SizeOf(a) != 0u);
+}
+
+// Review: decommit is clamped to its allocation, honors the page offset, and size 0 = rest of it.
+TEST(decommit_is_clamped_and_size_zero_means_rest)
+{
+    TestGuestBase();
+    uint32_t st;
+    uint32_t a = Allocate(0, 0x10000, kMemReserve | kMemCommit, &st);
+    uint32_t b = Allocate(0, 0x10000, kMemReserve | kMemCommit, &st);
+    GuestStore32(a + 0x2FF0, 1);
+    GuestStore32(a + 0x3000, 2);
+    GuestStore32(a + 0xF000, 3);
+    GuestStore32(b, 4);
+    Free(a + 0x2800, 0x1000, kMemDecommit); // pages 0x2000..0x3FFF
+    CHECK_EQ(GuestLoad32(a + 0x2FF0), 0u);
+    CHECK_EQ(GuestLoad32(a + 0x3000), 0u);
+    Free(a + 0x8000, 0, kMemDecommit);      // rest of a
+    CHECK_EQ(GuestLoad32(a + 0xF000), 0u);
+    Free(a + 0xF000, 0x20000, kMemDecommit); // runs past a: clamped
+    CHECK_EQ(GuestLoad32(b), 4u);
+}

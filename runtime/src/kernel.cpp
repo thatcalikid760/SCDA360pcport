@@ -397,7 +397,7 @@ SCDA_IMPORT(RtlMultiByteToUnicodeN)
 }
 
 // ---- Guest printf family ----
-// Varargs live in 8-byte slots: GPRs r(first)..r10, then the caller's parameter area at r1+0x54.
+// Varargs live in 8-byte slots: GPRs r(first)..r10, then the caller's parameter area at r1+0x50.
 // Doubles are passed in GPR slots too (Xbox 360 vararg ABI). va_list is a pointer to such slots.
 
 struct GuestArgs
@@ -413,7 +413,7 @@ struct GuestArgs
             const PPCRegister* regs[] = { &ctx->r3, &ctx->r4, &ctx->r5, &ctx->r6, &ctx->r7, &ctx->r8, &ctx->r9, &ctx->r10 };
             uint64_t v = regs[reg - 3]->u64;
             if (++reg > 10)
-                vaList = ctx->r1.u32 + 0x54;
+                vaList = ctx->r1.u32 + 0x50; // 8-byte slots after the 8 register args
             return v;
         }
         uint64_t v = GuestLoad64(vaList);

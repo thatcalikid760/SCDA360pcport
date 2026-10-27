@@ -52,6 +52,7 @@ TEST(harness_runs)
 
 int main()
 {
+    setvbuf(stdout, nullptr, _IONBF, 0); // a crashing test must not swallow earlier results
     int failures = 0;
     for (auto& t : TestRegistry())
     {

@@ -39,7 +39,6 @@ add_executable(scda
     src/module.cpp
     src/thread_context.cpp
     src/xam.cpp
-    src/diag_hooks.cpp
     src/imports.cpp
     src/fs.cpp
     src/kernel.cpp

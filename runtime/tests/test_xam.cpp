@@ -1,5 +1,7 @@
 #include "check.h"
 #include "guest_memory.h"
+#include <cstring>
+#include <string>
 #include <runtime.h>
 
 static PPCContext Call5(void (*fn)(PPCContext&, uint8_t*), uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t e)
@@ -71,4 +73,19 @@ TEST(overlapped_completion_signals_event)
     w.r6.u64 = 0x40500220;
     __imp__NtWaitForSingleObjectEx(w, g_base);
     CHECK_EQ(w.r3.u32, 0u);
+}
+
+// Review: varargs past r10 live in 8-byte slots starting at r1+0x50.
+TEST(sprintf_reads_stack_varargs_from_r1_plus_0x50)
+{
+    TestGuestBase();
+    strcpy((char*)GuestPtr(0x40600000), "%d %d %d %d %d %d %d %d");
+    PPCContext ctx{};
+    ctx.r3.u64 = 0x40600100; ctx.r4.u64 = 0x40600000;
+    ctx.r5.u64 = 1; ctx.r6.u64 = 2; ctx.r7.u64 = 3; ctx.r8.u64 = 4; ctx.r9.u64 = 5; ctx.r10.u64 = 6;
+    ctx.r1.u64 = 0x40601000;
+    GuestStore64(0x40601050, 7);
+    GuestStore64(0x40601058, 8);
+    __imp__sprintf(ctx, g_base);
+    CHECK_EQ(std::string((const char*)GuestPtr(0x40600100)), std::string("1 2 3 4 5 6 7 8"));
 }

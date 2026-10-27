@@ -45,19 +45,36 @@ SCDA_IMPORT(NtAllocateVirtualMemory)
 // are zeroed now: the next commit must return zero-filled memory (the game's heap relies on it).
 SCDA_IMPORT(NtFreeVirtualMemory)
 {
-    uint32_t region = GuestLoad32(ctx.r3.u32) & ~0xFFFu, size = GuestLoad32(ctx.r4.u32), type = ctx.r5.u32;
+    uint32_t start = GuestLoad32(ctx.r3.u32), size = GuestLoad32(ctx.r4.u32), type = ctx.r5.u32;
+    uint32_t allocBase = GuestAllocations().BaseOf(start), allocSize = GuestAllocations().SizeOf(start);
+    if (!allocBase)
+    {
+        ctx.r3.u64 = 0xC000009F; // STATUS_FREE_VM_NOT_AT_BASE (not inside any allocation)
+        return;
+    }
+    uint32_t region = start & ~0xFFFu, end;
     if (type & kMemRelease)
     {
-        size = GuestAllocations().SizeOf(region);
-        GuestAllocations().Remove(region);
+        if (start != allocBase)
+        {
+            ctx.r3.u64 = 0xC000009F; // STATUS_FREE_VM_NOT_AT_BASE
+            return;
+        }
+        end = allocBase + allocSize;
+        GuestAllocations().Remove(allocBase);
     }
-    size = (size + 0xFFF) & ~0xFFFu;
+    else
+    {
+        // Size 0 = to the end of the allocation; never past it.
+        uint64_t want = size ? (uint64_t(start) + size + 0xFFF) & ~0xFFFull : uint64_t(allocBase) + allocSize;
+        end = uint32_t(want < uint64_t(allocBase) + allocSize ? want : uint64_t(allocBase) + allocSize);
+    }
     if (getenv("SCDA_TRACE_MEM"))
-        RuntimeLog("[mem] free 0x%08X size 0x%X type 0x%X\n", region, size, type);
+        RuntimeLog("[mem] free 0x%08X-0x%08X type 0x%X\n", region, end, type);
     if (type & (kMemRelease | kMemDecommit))
-        memset(GuestPtr(region), 0, size);
+        memset(GuestPtr(region), 0, end - region);
     GuestStore32(ctx.r3.u32, region);
-    GuestStore32(ctx.r4.u32, size);
+    GuestStore32(ctx.r4.u32, end - region);
     ctx.r3.u64 = 0;
 }
 

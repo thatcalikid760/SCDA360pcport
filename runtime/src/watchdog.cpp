@@ -52,14 +52,27 @@ PPCContext* WatchdogCurrentContext() { return t_self ? t_self->ctx : nullptr; }
 
 static uint32_t Load32(const uint8_t* base, uint32_t addr) { return _byteswap_ulong(*(const uint32_t*)(base + addr)); }
 
+// The walk also runs from the crash handler: never fault on a guard page or unmapped memory.
+static bool Readable(const uint8_t* p)
+{
+    MEMORY_BASIC_INFORMATION mbi;
+    if (!VirtualQuery(p, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT)
+        return false;
+    return !(mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) && (uint8_t*)mbi.BaseAddress + mbi.RegionSize >= p + 4;
+}
+
 std::vector<uint32_t> WalkGuestStack(const uint8_t* guestBase, uint32_t r1, uint32_t lr, int maxFrames)
 {
     std::vector<uint32_t> frames{ lr };
     uint32_t sp = r1;
     while ((int)frames.size() < maxFrames && sp >= 8 && (sp & 3) == 0)
     {
+        if (!Readable(guestBase + sp))
+            break;
         uint32_t back = Load32(guestBase, sp);
         if (back == 0 || back <= sp || back < 8)
+            break;
+        if (!Readable(guestBase + back - 8))
             break;
         frames.push_back(Load32(guestBase, back - 8));
         sp = back;

@@ -109,9 +109,19 @@ static bool PollCondition(uint32_t info, uint32_t poll, uint32_t ref, uint32_t m
 
 static bool WaitSatisfied(const Pm4Payload& p) { return PollCondition(p(0), p(1), p(2), p(3)); }
 
+static bool ExecutePacket(uint32_t h, const Pm4Payload& p, int depth, CpStats& st);
+
+// Counts a packet only once it ran: a stalled wait is not progress.
 static bool Execute(uint32_t h, const Pm4Payload& p, int depth, CpStats& st)
 {
-    st.packets++;
+    bool done = ExecutePacket(h, p, depth, st);
+    if (done)
+        st.packets++;
+    return done;
+}
+
+static bool ExecutePacket(uint32_t h, const Pm4Payload& p, int depth, CpStats& st)
+{
     if (h == 0)
         return true;
     switch (Pm4Type(h))

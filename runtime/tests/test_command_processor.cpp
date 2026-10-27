@@ -155,3 +155,21 @@ TEST(cp_cond_write_writes_only_when_condition_holds)
     CHECK_EQ(GuestLoad32(0xA0681720), 0u);
     CHECK_EQ(GuestLoad32(kRptr), 14u);
 }
+
+// Review: a stalled WAIT_REG_MEM is not counted as progress (the CP thread may sleep).
+TEST(cp_stalled_wait_makes_no_progress)
+{
+    SetupRing();
+    GuestStore32(0xA0681800, 0);
+    g_w = 0;
+    Emit(0xC0043C00); Emit(0x13); Emit(0x00681802); Emit(5); Emit(0xFFFFFFFF); Emit(10);
+    Publish();
+    CpStats st{};
+    CommandProcessorTick(&st);
+    uint64_t before = st.packets;
+    CommandProcessorTick(&st);
+    CHECK_EQ(st.packets, before);
+    CHECK_EQ(before, 0ull);
+    GuestStore32(0xA0681800, 5);
+    CommandProcessorTick(&st);
+}

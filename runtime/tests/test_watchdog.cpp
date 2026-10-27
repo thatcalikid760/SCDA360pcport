@@ -1,5 +1,6 @@
 #include "check.h"
 #include <cstdlib>
+#include <windows.h>
 #include <runtime.h>
 #include <watchdog.h>
 
@@ -76,4 +77,14 @@ TEST(report_marks_the_calling_thread)
     WatchdogRegisterThread(9, &ctx);
     CHECK(WatchdogReport(mem.data()).find("thread 9 [current]") != std::string::npos);
     WatchdogUnregisterThread(9);
+}
+
+// Review: a stack pointer in a no-access page (overflow into a guard page) must not fault the walk.
+TEST(stack_walk_stops_at_unreadable_memory)
+{
+    auto* mem = (uint8_t*)VirtualAlloc(nullptr, 0x20000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    DWORD old;
+    VirtualProtect(mem + 0x10000, 0x10000, PAGE_NOACCESS, &old);
+    CHECK_EQ(WalkGuestStack(mem, 0x18000, 0x82000500, 16).size(), (size_t)1);
+    VirtualFree(mem, 0, MEM_RELEASE);
 }
