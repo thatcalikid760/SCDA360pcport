@@ -20,7 +20,7 @@ struct CacheHeader
 
 static std::mutex g_mutex;
 static std::unordered_map<uint64_t, std::unique_ptr<CompiledShader>> g_compiled;
-static uint32_t g_compileCount, g_failedCount;
+static uint32_t g_compileCount, g_failedCount, g_readyCount;
 
 static uint64_t Fnv1a(const uint8_t* p, size_t n)
 {
@@ -121,6 +121,8 @@ const CompiledShader& GetCompiledShader(const ShaderBlob& blob, const std::files
         if (shader->ok)
             StoreCached(blob, path, shader->bytecode);
     }
+    if (shader->ok)
+        g_readyCount++;
     return *g_compiled.emplace(blob.hash, std::move(shader)).first->second;
 }
 
@@ -143,8 +145,15 @@ uint32_t ShaderCompilerFailedCount()
     return g_failedCount;
 }
 
+uint32_t ShaderCompilerReadyCount()
+{
+    std::lock_guard lock(g_mutex);
+    return g_readyCount;
+}
+
 void ShaderCompilerResetMemory()
 {
     std::lock_guard lock(g_mutex);
     g_compiled.clear();
+    g_readyCount = 0;
 }

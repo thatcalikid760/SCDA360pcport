@@ -25,17 +25,18 @@
 - 2026-10-27: paced 60 fps (frozen KeTimeStampBundle + QPF vs TSC fixed; VdSwap caps 2 swaps in flight; EVENT_WRITE_SHD swap counter).
 - 2026-10-27: installer `tools/installer/` -> `SCDA_Setup.exe` (ISO -> `<dir>\game`, SHA-256 SC4_Offline.xex 86d32713...2a93; headless `--iso --dir --no-shortcut`; tested 585 files, 6.7 GB).
 - Phase 2b-1: window + D3D11 present (settings.ini Scale/Mode/VSync); CP decodes draws/resolves/IM_LOAD. Menu frame 1000: 27 auto-index draws (24x point list, 2x tri strip, 1x rect list), 8 shaders (5 VS/3 PS, 36-108 B), 1 resolve -> phys 0x00682000 1280x720 info 0x01000300 surf 0x14000500 (frontbuffer).
+- Phase 2b-2 (34a9e40, f660c4b): raw Xenos ucode -> SM5 HLSL (`gpu/xenos/translate.cpp`, XenosRecomp fork) + cache `gpu/shader_compiler.cpp` (memory + `%LOCALAPPDATA%\SCDARecomp\shadercache\*.v1.dxbc`). Menu: compiled 7 failed 0 (8 blobs, 1 unused by draws). `SCDA_DUMP_HLSL=<dir>`.
 - Debug aids: `SCDA_WATCHDOG=<s>`, `SCDA_TRACE_MEM=1`, `SCDA_DUMP_SHADERS`, `SCDA_TRACE_FRAME=<n>`; crash log = symbol + generated line + guest regs + all guest stacks (scda.pdb).
 
 ## Current blocker
-- Phase 2b-2 IN PROGRESS: no image until Xenos ucode -> HLSL works. XenosRecomp (MIT) forked into `runtime/src/gpu/xenos/` (commit 35013e0). Uncommitted: `translate.cpp/.h`, `shader_recompiler_raw.cpp`, `tests/test_xenos_raw.cpp`; edits to `shader_recompiler.cpp/.h`, `runtime/CMakeLists.txt`, `tests/test_xenos_container.cpp`. Plan in `docs/superpowers/` (2b-2).
+- No image yet: 2b-3 (bind shaders, vertex fetch, textures, EDRAM RT + resolve) not started.
+- Run new builds from `_install\` (needs `game\` next to the exe): copy `runtimeuild\scda.exe` -> `_install\scda_dev.exe`.
 
 ## Next
-1. Finish 2b-2: translate the 8 dumped menu shaders, tests green, commit.
-2. 2b-3: vertex fetch, textures, EDRAM RT + resolve to frontbuffer, present.
-3. Input: XamInputGetState -> XInput.
-4. Kernel/XAM HLE: XAM content/profile, XNotify, ExGetXConfigSetting, RtlImageXexHeaderField; launch-data intercept (capture in-process, restart title loop, never exit).
-5. Audio (XMA/XAudio). Installer must write `game\SC4_Offline.img` + `.xexhdr` (does not yet).
+1. 2b-3: bind compiled shaders (`GetCompiledShader`, slots in `gpu/xenos/translate.h`), FetchVertex reads `g_Memory` (t96) + `g_Fetch` (b2), EDRAM RT + resolve to frontbuffer, present.
+2. Input: XamInputGetState -> XInput.
+3. Kernel/XAM HLE: XAM content/profile, XNotify, ExGetXConfigSetting, RtlImageXexHeaderField; launch-data intercept (capture in-process, restart title loop, never exit).
+4. Audio (XMA/XAudio). Installer must write `game\SC4_Offline.img` + `.xexhdr` (does not yet).
 
 ## Open questions / risks
 - 4 undecodable words 82C51468-82C51490 (.text tail).

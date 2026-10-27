@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <thread>
 #include <gpu/d3d11_renderer.h>
+#include <gpu/shader_compiler.h>
 #include <host_window.h>
 #include <runtime.h>
 
@@ -103,13 +104,23 @@ static void RenderThread(DisplaySettings s)
                 RuntimeLog("[frame] resolve ctrl 0x%08X dest 0x%08X pitch 0x%08X info 0x%08X surf 0x%08X color 0x%08X depth 0x%08X\n",
                     r.copyControl, r.destBase, r.destPitch, r.destInfo, r.surfaceInfo, r.colorInfo, r.depthInfo);
         }
+        // Phase 2b-2: translate + compile every shader the frame uses (binding comes in 2b-3).
+        static const std::filesystem::path shaderCacheDir = DefaultShaderCacheDir();
+        for (auto& d : frame.draws)
+        {
+            if (d.vs)
+                GetCompiledShader(*d.vs, shaderCacheDir);
+            if (d.ps)
+                GetCompiledShader(*d.ps, shaderCacheDir);
+        }
         renderer.Present(frame);
         if (GetTickCount() - lastTitle > 500)
         {
             lastTitle = GetTickCount();
-            wchar_t title[160];
-            swprintf(title, 160, L"Splinter Cell: Double Agent Recomp - frame %llu draws %u resolves %u shaders %u",
-                (unsigned long long)frame.stats.frame, frame.stats.draws, frame.stats.resolves, frame.stats.shaders);
+            wchar_t title[200];
+            swprintf(title, 200, L"Splinter Cell: Double Agent Recomp - frame %llu draws %u resolves %u shaders %u compiled %u failed %u",
+                (unsigned long long)frame.stats.frame, frame.stats.draws, frame.stats.resolves, frame.stats.shaders,
+                ShaderCompilerReadyCount(), ShaderCompilerFailedCount());
             SetWindowTextW(hwnd, title);
         }
     }

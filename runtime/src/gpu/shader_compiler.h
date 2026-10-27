@@ -21,5 +21,7 @@ std::filesystem::path DefaultShaderCacheDir();
 // Translate+compile attempts so far (disk hits not counted).
 uint32_t ShaderCompilerCompileCount();
 uint32_t ShaderCompilerFailedCount();
+// Shaders ready to bind (compiled or loaded from disk).
+uint32_t ShaderCompilerReadyCount();
 // Drops the memory cache (tests: simulate a new process).
 void ShaderCompilerResetMemory();
