@@ -7,11 +7,11 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <image_loader.h>
 #include <runtime.h>
 
 uint8_t* g_base;
 
-bool LoadXexImage(const char* path, uint8_t* base, uint32_t* entry, uint32_t* imageBase, uint32_t* imageSize);
 void InitDataImports();
 extern std::string g_gameDir;
 
@@ -128,9 +128,9 @@ int main(int argc, char** argv)
     char exeDir[MAX_PATH];
     GetModuleFileNameA(nullptr, exeDir, MAX_PATH);
     *strrchr(exeDir, '\\') = 0;
-    std::string defaultXex = std::string(exeDir) + "\\game\\SC4_Offline.xex";
-    const char* xexPath = argc > 1 ? argv[1] : defaultXex.c_str();
-    g_gameDir = std::string(xexPath).substr(0, std::string(xexPath).find_last_of("\\/"));
+    std::string defaultImage = std::string(exeDir) + "\\game\\SC4_Offline.img";
+    const char* imagePath = argc > 1 ? argv[1] : defaultImage.c_str();
+    g_gameDir = std::string(imagePath).substr(0, std::string(imagePath).find_last_of("\\/"));
     g_log = fopen((std::string(exeDir) + "\\scda.log").c_str(), "w");
     AddVectoredExceptionHandler(1, CrashHandler);
 
@@ -140,10 +140,18 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    uint32_t entry, imageBase, imageSize;
-    if (!LoadXexImage(xexPath, g_base, &entry, &imageBase, &imageSize))
+    std::string sha;
+    ImageLoadResult loaded = LoadFlatImage(imagePath, g_base, &sha);
+    if (loaded != ImageLoadResult::Ok)
+    {
+        char msg[512];
+        snprintf(msg, sizeof(msg), "SC4_Offline.img: %s, expected sha256 %s, got %s",
+            ImageLoadResultName(loaded), SCDA_EXPECTED_IMAGE_SHA256, sha.empty() ? "-" : sha.c_str());
+        RuntimeLog("[fatal] %s (%s)\n", msg, imagePath);
+        MessageBoxA(nullptr, msg, "Splinter Cell: Double Agent Recomp", MB_ICONERROR);
         return 2;
-    RuntimeLog("[loader] %s: base 0x%08X size 0x%X entry 0x%08X\n", xexPath, imageBase, imageSize, entry);
+    }
+    RuntimeLog("[loader] %s: sha256 %s\n", imagePath, sha.c_str());
 
     InitDataImports();
 

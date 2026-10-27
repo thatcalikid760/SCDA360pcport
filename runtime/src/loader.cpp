@@ -1,46 +1,59 @@
-// XEX loader. Kept in its own TU: XenonUtils headers clash with generated/ppc_context.h.
+// Flat image loader. The image is the decrypted, decompressed, TU3-patched SC4_Offline.xex
+// laid out at its virtual addresses; it must be the exact image generated/ was recompiled from.
+#include <windows.h>
+#include <bcrypt.h>
 #include <cstdio>
-#include <cstring>
-#include <file.h>
-#include <image.h>
-#include <xex.h>
+#include <fstream>
+#include <image_loader.h>
 
-bool LoadXexImage(const char* path, uint8_t* base, uint32_t* entry, uint32_t* imageBase, uint32_t* imageSize)
+static std::string Sha256(const uint8_t* data, size_t size)
 {
-    const auto file = LoadFile(path);
-    if (file.empty())
+    BCRYPT_ALG_HANDLE alg;
+    BCRYPT_HASH_HANDLE hash;
+    uint8_t digest[32];
+    BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
+    BCryptCreateHash(alg, &hash, nullptr, 0, nullptr, 0, 0);
+    BCryptHashData(hash, (PUCHAR)data, (ULONG)size, 0);
+    BCryptFinishHash(hash, digest, 32, 0);
+    BCryptDestroyHash(hash);
+    BCryptCloseAlgorithmProvider(alg, 0);
+    std::string hex;
+    char tmp[3];
+    for (uint8_t b : digest)
     {
-        fprintf(stderr, "[loader] cannot read %s\n", path);
-        return false;
+        snprintf(tmp, 3, "%02x", b);
+        hex += tmp;
     }
+    return hex;
+}
 
-    // XenonUtils decrypts and decompresses. Its buffer holds only the basic-compression
-    // blocks (dataSize + zeroSize), which can be shorter than security->imageSize.
-    auto image = Image::ParseImage(file.data(), file.size());
-    if (!image.data)
+ImageLoadResult LoadFlatImage(const std::filesystem::path& img, uint8_t* guestBase, std::string* actualSha256)
+{
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(img, ec))
+        return ImageLoadResult::NotFound;
+    if (std::filesystem::file_size(img, ec) != kImageSize)
+        return ImageLoadResult::WrongSize;
+
+    uint8_t* dst = guestBase + kImageBase;
+    std::ifstream f(img, std::ios::binary);
+    if (!f.read((char*)dst, kImageSize))
+        return ImageLoadResult::NotFound;
+
+    std::string sha = Sha256(dst, kImageSize);
+    if (actualSha256)
+        *actualSha256 = sha;
+    return sha == SCDA_EXPECTED_IMAGE_SHA256 ? ImageLoadResult::Ok : ImageLoadResult::WrongHash;
+}
+
+const char* ImageLoadResultName(ImageLoadResult r)
+{
+    switch (r)
     {
-        fprintf(stderr, "[loader] XenonUtils failed to parse %s\n", path);
-        return false;
+    case ImageLoadResult::Ok: return "ok";
+    case ImageLoadResult::NotFound: return "file not found";
+    case ImageLoadResult::WrongSize: return "wrong size (expected 0x1300000 bytes)";
+    case ImageLoadResult::WrongHash: return "not the supported TU3 image";
     }
-
-    size_t bufferSize = image.size;
-    auto* info = (const Xex2OptFileFormatInfo*)getOptHeaderPtr(file.data(), XEX_HEADER_FILE_FORMAT_INFO);
-    if (info && info->compressionType == XEX_COMPRESSION_BASIC)
-    {
-        auto* blocks = (const Xex2FileBasicCompressionBlock*)(info + 1);
-        size_t count = (info->infoSize / sizeof(Xex2FileBasicCompressionInfo)) - 1;
-        bufferSize = 0;
-        for (size_t i = 0; i < count; i++)
-            bufferSize += blocks[i].dataSize + blocks[i].zeroSize;
-    }
-    if (bufferSize > image.size)
-        bufferSize = image.size;
-
-    memcpy(base + image.base, image.data.get(), bufferSize);
-    memset(base + image.base + bufferSize, 0, image.size - bufferSize);
-
-    *entry = uint32_t(image.entry_point);
-    *imageBase = uint32_t(image.base);
-    *imageSize = image.size;
-    return true;
+    return "unknown";
 }
