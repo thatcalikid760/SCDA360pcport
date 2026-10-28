@@ -90,7 +90,11 @@ TEST(resolve_source_and_edram_keys)
     CHECK(ResolveFromDepth(DecodeResolve(*regs)));
     CHECK_EQ(EdramColorKey(0x00060000, 0x0A000280), 0x02806000u);
     CHECK_EQ(EdramColorKey(0x000001C0, 0x0A000280), 0x028001C0u);
-    CHECK(EdramColorKey(0x00030000, 0x14020500) != EdramColorKey(0x000C0000, 0x14020500));
+    // Format views of one surface share a key (01_Intro scene: fmt 3 and 0xC at base 0).
+    CHECK_EQ(EdramColorKey(0x00030000, 0x14020500), EdramColorKey(0x000C0000, 0x14020500));
+    CHECK_EQ(EdramColorKey(0x00020000, 0x14020500), EdramColorKey(0x000A0000, 0x14020500));
+    CHECK_EQ(EdramColorKey(0x00000000, 0x14020500), EdramColorKey(0x00010000, 0x14020500));
+    CHECK(EdramColorKey(0x00030000, 0x14020500) != EdramColorKey(0x00070000, 0x14020500));
     CHECK_EQ(EdramDepthKey(0x00010278, 0x0A000280), 0x02800278u);
 }
 

@@ -89,10 +89,15 @@ inline bool ResolveFromDepth(const Resolve& r) { return (r.copyControl & 7) == 4
 
 // EDRAM surfaces as host targets: one per (base in tiles, format, pitch) from RB_COLOR_INFO /
 // RB_DEPTH_INFO (bits 0-11 base, 16-19 format) and RB_SURFACE_INFO (bits 0-13 pitch).
+// The key keeps the base format (Xenia GetBaseColorFormat): 8_8_8_8_GAMMA (1), 2_10_10_10_AS_10_10_10_10
+// (0xA) and 2_10_10_10_FLOAT_AS_16_16_16_16 (0xC) are views of the 0, 2 and 3 surface (blending
+// precision), which the scene switches between at one base.
 // shortcut: surfaces with different keys never alias, though their EDRAM ranges may overlap.
 inline uint32_t EdramColorKey(uint32_t colorInfo, uint32_t surfaceInfo)
 {
-    return (colorInfo & 0xFFF) | (((colorInfo >> 16) & 0xF) << 12) | ((surfaceInfo & 0x3FFF) << 16);
+    uint32_t format = (colorInfo >> 16) & 0xF;
+    format = format == 1 ? 0 : format == 0xA ? 2 : format == 0xC ? 3 : format;
+    return (colorInfo & 0xFFF) | (format << 12) | ((surfaceInfo & 0x3FFF) << 16);
 }
 inline uint32_t EdramDepthKey(uint32_t depthInfo, uint32_t surfaceInfo) { return (depthInfo & 0xFFF) | ((surfaceInfo & 0x3FFF) << 16); }
 
