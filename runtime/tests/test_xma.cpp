@@ -44,3 +44,46 @@ TEST(xma_context_create_init_and_buffer_state)
     CHECK_EQ(XmaCall(__imp__XMACreateContext, out + 8), 0u);
     CHECK_EQ(GuestLoad32(out + 8), c);
 }
+
+// Decoder pass (tests link xma_fake_decoder.c: one 512-sample frame per packet, value = byte 1).
+TEST(xma_decoder_fills_output_and_returns_input_buffers)
+{
+    TestGuestBase();
+    const uint32_t out = 0x40700100, init = 0x40700110;
+    const uint32_t in0 = 0xA3000000, in1 = 0xA3001000, pcm = 0xA3002000;
+    g_base[in0 + 1] = 0x11;        // in0 packet 0
+    g_base[in0 + 2048 + 1] = 0x22; // in0 packet 1
+    g_base[in1 + 1] = 0x33;        // in1 packet 0
+    CHECK_EQ(XmaCall(__imp__XMACreateContext, out), 0u);
+    uint32_t c = GuestLoad32(out);
+    // Mono 48 kHz, 15 output blocks: 3 packets = 3 x 1024 bytes = 12 blocks fit.
+    const uint32_t fields[] = {in0, 2, in1, 1, 32, pcm, 15, 0, 2, 0, 3, 0, 0, 0};
+    for (int i = 0; i < 14; i++)
+        GuestStore32(init + i * 4, fields[i]);
+    XmaCall(__imp__XMAInitializeContext, c, init);
+    XmaCall(__imp__XMASetInputBuffer0Valid, c);
+    XmaCall(__imp__XMASetInputBuffer1Valid, c);
+    XmaCall(__imp__XMASetOutputBufferValid, c);
+    XmaCall(__imp__XMAEnableContext, c);
+    for (int i = 0; i < 200 && XmaCall(__imp__XMAGetOutputBufferWriteOffset, c) != 12; i++)
+        Sleep(2);
+    XmaCall(__imp__XMADisableContext, c);
+    CHECK_EQ(XmaCall(__imp__XMAGetOutputBufferWriteOffset, c), 12u);
+    CHECK_EQ(XmaCall(__imp__XMAIsInputBuffer0Valid, c), 0u);
+    CHECK_EQ(XmaCall(__imp__XMAIsInputBuffer1Valid, c), 0u);
+    CHECK_EQ(XmaCall(__imp__XMAIsOutputBufferValid, c), 1u);
+    CHECK_EQ(GuestLoad16(pcm), 0x11u);                // big-endian 16-bit samples
+    CHECK_EQ(GuestLoad16(pcm + 4 * 256 + 2), 0x22u);  // second packet from block 4
+    CHECK_EQ(GuestLoad16(pcm + 8 * 256 + 510), 0x33u); // in1 after in0
+
+    // Refill in0 with 2 more packets: 8 blocks, but only 3 are free: the ring fills
+    // (write offset wraps to the read offset 0) and output buffer valid clears.
+    XmaCall(__imp__XMASetInputBuffer0Valid, c);
+    XmaCall(__imp__XMAEnableContext, c);
+    for (int i = 0; i < 200 && XmaCall(__imp__XMAIsOutputBufferValid, c); i++)
+        Sleep(2);
+    XmaCall(__imp__XMADisableContext, c);
+    CHECK_EQ(XmaCall(__imp__XMAIsOutputBufferValid, c), 0u);
+    CHECK_EQ(XmaCall(__imp__XMAGetOutputBufferWriteOffset, c), 0u);
+    XmaCall(__imp__XMAReleaseContext, c);
+}

@@ -2,12 +2,21 @@
 // audio block reads, kept in physical memory: XAudio also writes its fields directly, so the
 // layout is the hardware one (as in Xenia's xma_context.h). Bit positions count from the LSB of
 // each big-endian dword. Buffer pointers inside are physical addresses.
-// shortcut: no decoder yet: enabled contexts never consume input or produce output.
+// The decoder (a host thread, like the audio block) runs every enabled context whose output
+// buffer is valid: it decodes the current input buffer's packets (2048 bytes each) into the
+// output ring (256-byte blocks of 16-bit big-endian PCM) until the ring is full (output buffer
+// valid cleared) or the input runs out (each consumed buffer's valid bit cleared, then the
+// other buffer). Disable waits for a running pass, so the title can then rewrite the context.
+// shortcut: loop fields (count, start/end) are ignored: a looping stream plays once.
+// shortcut: a read offset set mid-packet restarts at that packet's start.
 // SCDA_TRACE_XMA=1 logs every call with the context's state.
+#include <windows.h>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <vector>
 #include <runtime.h>
+#include "xma_decoder.h"
 
 namespace
 {
@@ -22,12 +31,24 @@ constexpr Field kIn0Count{0, 0, 12}, kLoopCount{0, 12, 8}, kIn0Valid{0, 20, 1}, 
     kOutBlocks{0, 22, 5}, kOutWrite{0, 27, 5};
 constexpr Field kIn1Count{1, 0, 12}, kLoopSubEnd{1, 14, 3}, kLoopSubSkip{1, 17, 3}, kSubframes{1, 20, 4},
     kSampleRate{1, 27, 2}, kStereo{1, 29, 1}, kOutValid{1, 31, 1};
-constexpr Field kReadOffset{2, 0, 26}, kLoopStart{3, 0, 26}, kLoopEnd{4, 0, 26};
+constexpr Field kReadOffset{2, 0, 26}, kLoopStart{3, 0, 26}, kLoopEnd{4, 0, 26}, kCurBuffer{4, 31, 1};
 constexpr Field kIn0Ptr{5, 0, 32}, kIn1Ptr{6, 0, 32}, kOutPtr{7, 0, 32}, kWork{8, 0, 32}, kOutRead{9, 0, 5};
+
+constexpr uint32_t kPacketBits = 2048 * 8, kPacketHeaderBits = 32, kBlockBytes = 256;
 
 std::mutex g_lock;
 uint32_t g_array; // guest address of context 0 (physical view)
 bool g_used[kContexts], g_enabled[kContexts];
+
+// Host side of a context: its stream decoder and decoded PCM (big-endian) not yet written.
+struct Decode
+{
+    ScdaXmaStream* stream;
+    std::vector<uint8_t> pcm;
+    size_t pcmRead;
+};
+Decode g_decode[kContexts];
+HANDLE g_kick; // auto-reset: a context may have work
 
 uint32_t Get(uint32_t c, Field f)
 {
@@ -51,6 +72,115 @@ int Index(uint32_t c)
 }
 
 uint32_t Physical(uint32_t addr) { return addr & 0x1FFFFFFF; }
+uint32_t FromPhysical(uint32_t phys) { return 0xA0000000 | phys; }
+
+void CloseDecode(Decode& d)
+{
+    scda_xma_close(d.stream);
+    d.stream = nullptr;
+    d.pcm.clear();
+    d.pcmRead = 0;
+}
+
+// Decodes the next packet of the current input buffer into d.pcm. False when no input is valid
+// or there is no decoder (the context then keeps its input, as if the hardware stalled).
+bool DecodePacket(uint32_t c, Decode& d)
+{
+    if (!d.stream)
+        return false;
+    for (int attempt = 0; attempt < 2; attempt++)
+    {
+        uint32_t cur = Get(c, kCurBuffer);
+        Field valid = cur ? kIn1Valid : kIn0Valid;
+        if (!Get(c, valid))
+        {
+            Field otherValid = cur ? kIn0Valid : kIn1Valid;
+            if (!Get(c, otherValid))
+                return false;
+            Set(c, kCurBuffer, !cur);
+            Set(c, kReadOffset, kPacketHeaderBits);
+            continue;
+        }
+        uint32_t count = Get(c, cur ? kIn1Count : kIn0Count);
+        uint32_t packet = Get(c, kReadOffset) / kPacketBits;
+        if (packet < count)
+        {
+            static int16_t samples[64 * 512 * 2];
+            const uint8_t* data = static_cast<const uint8_t*>(GuestPtr(FromPhysical(Get(c, cur ? kIn1Ptr : kIn0Ptr)))) + packet * 2048;
+            int n = scda_xma_decode_packet(d.stream, data, samples, 64 * 512);
+            int total = n > 0 ? n * (Get(c, kStereo) ? 2 : 1) : 0;
+            for (int i = 0; i < total; i++)
+            {
+                d.pcm.push_back(uint8_t(uint16_t(samples[i]) >> 8));
+                d.pcm.push_back(uint8_t(samples[i]));
+            }
+            packet++;
+        }
+        if (packet < count)
+            Set(c, kReadOffset, packet * kPacketBits + kPacketHeaderBits);
+        else
+        {
+            // Buffer consumed: hand it back to the title, continue in the other one.
+            Set(c, valid, 0);
+            Set(c, kCurBuffer, !cur);
+            Set(c, kReadOffset, kPacketHeaderBits);
+        }
+        return true;
+    }
+    return false;
+}
+
+// One decoder pass over context i (g_lock held): fill its output ring.
+void RunContext(uint32_t i)
+{
+    uint32_t c = g_array + i * kContextSize;
+    uint32_t blocks = Get(c, kOutBlocks);
+    if (!Get(c, kOutValid) || !blocks)
+        return;
+    Decode& d = g_decode[i];
+    uint8_t* out = static_cast<uint8_t*>(GuestPtr(FromPhysical(Get(c, kOutPtr))));
+    for (;;)
+    {
+        while (d.pcm.size() - d.pcmRead < kBlockBytes && DecodePacket(c, d))
+        {
+        }
+        if (d.pcm.size() - d.pcmRead < kBlockBytes)
+            break;
+        uint32_t w = Get(c, kOutWrite) % blocks;
+        memcpy(out + w * kBlockBytes, d.pcm.data() + d.pcmRead, kBlockBytes);
+        d.pcmRead += kBlockBytes;
+        w = (w + 1) % blocks;
+        Set(c, kOutWrite, w);
+        if (w == Get(c, kOutRead))
+        {
+            Set(c, kOutValid, 0); // full
+            break;
+        }
+    }
+    if (d.pcmRead == d.pcm.size())
+    {
+        d.pcm.clear();
+        d.pcmRead = 0;
+    }
+}
+
+DWORD WINAPI DecoderThread(void*)
+{
+    for (;;)
+    {
+        WaitForSingleObject(g_kick, 2);
+        std::lock_guard lock(g_lock);
+        for (uint32_t i = 0; g_array && i < kContexts; i++)
+            if (g_enabled[i])
+                RunContext(i);
+    }
+}
+
+void Kick()
+{
+    if (g_kick)
+        SetEvent(g_kick);
+}
 
 void Trace(const char* what, uint32_t c, uint32_t lr)
 {
@@ -72,12 +202,19 @@ void XmaReset()
     g_array = 0;
     memset(g_used, 0, sizeof(g_used));
     memset(g_enabled, 0, sizeof(g_enabled));
+    for (Decode& d : g_decode)
+        CloseDecode(d);
 }
 
 // XMACreateContext(u32* Context) -> status
 SCDA_IMPORT(XMACreateContext)
 {
     std::lock_guard lock(g_lock);
+    if (!g_kick)
+    {
+        g_kick = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        CloseHandle(CreateThread(nullptr, 0, DecoderThread, nullptr, 0, nullptr));
+    }
     if (!g_array)
         g_array = GuestAllocPhysical(kContexts * kContextSize, 0x100);
     for (uint32_t i = 0; i < kContexts; i++)
@@ -101,7 +238,10 @@ SCDA_IMPORT(XMAReleaseContext)
     std::lock_guard lock(g_lock);
     Trace("release", ctx.r3.u32, uint32_t(ctx.lr));
     if (int i = Index(ctx.r3.u32); i >= 0)
+    {
         g_used[i] = g_enabled[i] = false;
+        CloseDecode(g_decode[i]);
+    }
     ctx.r3.u64 = 0;
 }
 
@@ -138,6 +278,12 @@ SCDA_IMPORT(XMAInitializeContext)
     Set(c, kLoopCount, g_base[init + 52]);
     Set(c, kLoopSubEnd, g_base[init + 53]);
     Set(c, kLoopSubSkip, g_base[init + 54]);
+    if (int i = Index(c); i >= 0)
+    {
+        static const uint32_t kRates[] = {24000, 32000, 44100, 48000};
+        CloseDecode(g_decode[i]);
+        g_decode[i].stream = scda_xma_open(Get(c, kStereo) ? 2 : 1, kRates[Get(c, kSampleRate)]);
+    }
     Trace("init", c, uint32_t(ctx.lr));
     ctx.r3.u64 = 0;
 }
@@ -148,6 +294,7 @@ SCDA_IMPORT(XMAEnableContext)
     if (int i = Index(ctx.r3.u32); i >= 0)
         g_enabled[i] = true;
     Trace("enable", ctx.r3.u32, uint32_t(ctx.lr));
+    Kick();
     ctx.r3.u64 = 0;
 }
 
@@ -173,6 +320,7 @@ static void SetField(PPCContext& ctx, const char* name, Field f, uint32_t v)
     std::lock_guard lock(g_lock);
     Set(ctx.r3.u32, f, v);
     Trace(name, ctx.r3.u32, uint32_t(ctx.lr));
+    Kick();
     ctx.r3.u64 = 0;
 }
 
