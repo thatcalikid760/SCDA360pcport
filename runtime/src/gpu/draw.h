@@ -38,7 +38,8 @@ private:
 enum : uint32_t
 {
     kRegRbSurfaceInfo = 0x2000, kRegRbColorInfo = 0x2001, kRegRbDepthInfo = 0x2002,
-    kRegRbModeControl = 0x2208,
+    kRegRbColor1Info = 0x2003, kRegRbColor2Info = 0x2004, kRegRbColor3Info = 0x2005,
+    kRegRbColorMask = 0x2104, kRegRbModeControl = 0x2208,
     kRegRbCopyControl = 0x2318, kRegRbCopyDestBase = 0x2319, kRegRbCopyDestPitch = 0x231A, kRegRbCopyDestInfo = 0x231B,
     kRegRbColorClear = 0x231E, kRegRbDepthClear = 0x231D,
 };
@@ -62,6 +63,7 @@ struct DrawCall
 
 struct Resolve
 {
+    // colorInfo: RB_COLOR<n>_INFO of the source render target (copy_src_select, bits 0-2, 0-3).
     uint32_t copyControl, destBase, destPitch, destInfo, surfaceInfo, colorInfo, depthInfo;
     uint32_t colorClear;    // RB_COLOR_CLEAR: red in the low byte
     uint32_t depthClear;    // RB_DEPTH_CLEAR: bits 8-31 depth, 0-7 stencil
@@ -78,6 +80,17 @@ float ResolveDepthClearValue(const Resolve& r);
 // RB_COPY_DEST_PITCH: bits 0-13 pitch, 16-29 height (texels).
 inline uint32_t ResolveWidth(const Resolve& r) { return r.destPitch & 0x3FFF; }
 inline uint32_t ResolveHeight(const Resolve& r) { return (r.destPitch >> 16) & 0x3FFF; }
+// copy_src_select 4: the depth buffer is the source.
+inline bool ResolveFromDepth(const Resolve& r) { return (r.copyControl & 7) == 4; }
+
+// EDRAM surfaces as host targets: one per (base in tiles, format, pitch) from RB_COLOR_INFO /
+// RB_DEPTH_INFO (bits 0-11 base, 16-19 format) and RB_SURFACE_INFO (bits 0-13 pitch).
+// shortcut: surfaces with different keys never alias, though their EDRAM ranges may overlap.
+inline uint32_t EdramColorKey(uint32_t colorInfo, uint32_t surfaceInfo)
+{
+    return (colorInfo & 0xFFF) | (((colorInfo >> 16) & 0xF) << 12) | ((surfaceInfo & 0x3FFF) << 16);
+}
+inline uint32_t EdramDepthKey(uint32_t depthInfo, uint32_t surfaceInfo) { return (depthInfo & 0xFFF) | ((surfaceInfo & 0x3FFF) << 16); }
 
 DrawCall DecodeDrawIndx(const Pm4Payload& p, uint32_t payloadDwords);  // opcode 0x22
 DrawCall DecodeDrawIndx2(const Pm4Payload& p, uint32_t payloadDwords); // opcode 0x36

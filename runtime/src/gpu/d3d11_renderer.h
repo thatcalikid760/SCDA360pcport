@@ -1,5 +1,5 @@
 // Direct3D 11 renderer: executes each frame's draws (translated shaders, guest vertex memory,
-// textures) into a host render target standing in for EDRAM, then blits it to the window.
+// textures) into host render targets standing in for EDRAM surfaces, then blits to the window.
 #pragma once
 #include <windows.h>
 #include <d3d11.h>
@@ -14,8 +14,9 @@ struct DrawResources;
 class D3D11Renderer : public Renderer
 {
 public:
-    // shortcut: one 1280x720 target for every draw; EDRAM surfaces and resolves come later.
-    static constexpr uint32_t kTargetWidth = 1280, kTargetHeight = 720;
+    // Size of every host EDRAM surface (colour and depth targets, one per EdramColorKey /
+    // EdramDepthKey): the widest guest pitch, tall enough for square shadow maps.
+    static constexpr uint32_t kTargetWidth = 1280, kTargetHeight = 1280;
 
     D3D11Renderer();
     ~D3D11Renderer() override;
@@ -33,7 +34,7 @@ public:
     // Writes the presented image (frontbuffer resolve, else the render target) as a 32-bit BMP
     // after the next frame (SCDA_DUMP_FRAME, tests).
     void DumpNextFrame(std::string path) { m_dumpPath = std::move(path); }
-    // Reads one RGBA8 texel of the render target (tests); 0 when unavailable.
+    // Reads one texel (as RGBA8) of the last RT0 drawn or resolved (tests); 0 when unavailable.
     uint32_t ReadTargetTexel(uint32_t x, uint32_t y);
 
 private:

@@ -381,6 +381,17 @@ uint32_t HostTopology(uint32_t primType)
     }
 }
 
+uint32_t HostColorFormat(uint32_t guestFormat)
+{
+    switch (guestFormat)
+    {
+    case 0: case 1: return 28; // DXGI_FORMAT_R8G8B8A8_UNORM
+    case 14: return 41;        // DXGI_FORMAT_R32_FLOAT
+    case 15: return 16;        // DXGI_FORMAT_R32G32_FLOAT
+    default: return 10;        // DXGI_FORMAT_R16G16B16A16_FLOAT
+    }
+}
+
 void SwapIndices(const uint8_t* guest, uint32_t bytes, uint32_t endian, uint8_t* out)
 {
     // Endian modes work on whole dwords (8-in-16 on 16-bit indices swaps each index).

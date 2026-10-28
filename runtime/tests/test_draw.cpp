@@ -77,6 +77,23 @@ TEST(resolve_detected_and_decoded)
     CHECK(!IsResolve(*regs));
 }
 
+// copy_src_select picks the source RT's RB_COLOR<n>_INFO; EDRAM keys from the frame-1505 trace.
+TEST(resolve_source_and_edram_keys)
+{
+    auto regs = std::make_shared<RegisterFile>();
+    regs->Set(0x2000, 0x0A000280); regs->Set(0x2001, 0x00060000); regs->Set(0x2003, 0x000001C0);
+    regs->Set(0x2318, 0x00100001);
+    Resolve r = DecodeResolve(*regs);
+    CHECK_EQ(r.colorInfo, 0x000001C0u);
+    CHECK(!ResolveFromDepth(r));
+    regs->Set(0x2318, 0x00100004);
+    CHECK(ResolveFromDepth(DecodeResolve(*regs)));
+    CHECK_EQ(EdramColorKey(0x00060000, 0x0A000280), 0x02806000u);
+    CHECK_EQ(EdramColorKey(0x000001C0, 0x0A000280), 0x028001C0u);
+    CHECK(EdramColorKey(0x00030000, 0x14020500) != EdramColorKey(0x000C0000, 0x14020500));
+    CHECK_EQ(EdramDepthKey(0x00010278, 0x0A000280), 0x02800278u);
+}
+
 // Snapshots share pages; a write after a snapshot changes only the live file.
 TEST(register_file_copy_on_write)
 {

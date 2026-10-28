@@ -173,6 +173,9 @@ TEST(topology_and_index_swap)
     CHECK_EQ(HostTopology(6), 5u);
     CHECK_EQ(HostTopology(1), 0u); // points: not drawn yet
     CHECK_EQ(HostTopology(8), 4u); // rect list (geometry shader quad)
+    CHECK_EQ(HostColorFormat(0), 28u);  // RGBA8
+    CHECK_EQ(HostColorFormat(3), 10u);  // 2_10_10_10_FLOAT -> RGBA16F
+    CHECK_EQ(HostColorFormat(14), 41u); // 32_FLOAT -> R32
     const uint8_t guest[6] = { 0x00, 0x01, 0x00, 0x02, 0x00, 0x03 };
     uint8_t out[6];
     SwapIndices(guest, 6, 1, out);

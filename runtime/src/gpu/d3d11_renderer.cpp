@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <bitset>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -65,16 +66,24 @@ void main(triangle V v[3], inout TriangleStream<V> s)
 }
 )HLSL";
 
+// Host render target for one EDRAM colour surface (EdramColorKey).
+struct ColorTarget
+{
+    ComPtr<ID3D11Texture2D> texture;
+    ComPtr<ID3D11RenderTargetView> rtv;
+    ComPtr<ID3D11ShaderResourceView> srv;
+};
+
 // Device objects for executing draws; rebuilt with the device.
 struct DrawResources
 {
-    ComPtr<ID3D11Texture2D> target;
-    ComPtr<ID3D11RenderTargetView> targetRtv;
-    ComPtr<ID3D11ShaderResourceView> targetSrv;
-    // Depth/stencil for the target. Float depth holds both guest formats (D24S8, D24FS8).
-    ComPtr<ID3D11Texture2D> depth;
-    ComPtr<ID3D11DepthStencilView> depthDsv;
-    float depthClear = 0.0f; // last guest depth clear, reused by the per-frame clear
+    // EDRAM surfaces, kTargetWidth x kTargetHeight each, kept across frames like EDRAM. Depth is
+    // float with stencil: it holds both guest formats (D24S8, D24FS8).
+    std::unordered_map<uint32_t, ColorTarget> colorTargets;
+    std::unordered_map<uint32_t, ComPtr<ID3D11DepthStencilView>> depthTargets;
+    uint32_t boundKeys[5] = {}; // RT0-3 + depth keys bound now; ~0u = none
+    bool bound = false;         // boundKeys valid (false after the blit or a new frame)
+    ColorTarget* last = nullptr; // RT0 of the last draw or resolve: presented when there is no frontbuffer
     ComPtr<ID3D11VertexShader> blitVs;
     ComPtr<ID3D11PixelShader> blitPs;
     ComPtr<ID3D11GeometryShader> rectListGs;
@@ -104,6 +113,7 @@ struct DrawResources
         ComPtr<ID3D11Texture2D> texture;
         ComPtr<ID3D11ShaderResourceView> srv;
         uint32_t width = 0, height = 0;
+        DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN; // the source target's
     };
     std::unordered_map<uint32_t, Resolved> resolved;
 };
@@ -170,22 +180,9 @@ bool D3D11Renderer::CreateDrawResources()
 {
     auto r = std::make_unique<DrawResources>();
     D3D11_TEXTURE2D_DESC td{};
-    td.Width = kTargetWidth;
-    td.Height = kTargetHeight;
     td.MipLevels = td.ArraySize = 1;
     td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     td.SampleDesc.Count = 1;
-    td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-    if (FAILED(m_device->CreateTexture2D(&td, nullptr, &r->target)) ||
-        FAILED(m_device->CreateRenderTargetView(r->target.Get(), nullptr, &r->targetRtv)) ||
-        FAILED(m_device->CreateShaderResourceView(r->target.Get(), nullptr, &r->targetSrv)))
-        return false;
-    D3D11_TEXTURE2D_DESC dd = td;
-    dd.Format = DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
-    dd.BindFlags = D3D11_BIND_DEPTH_STENCIL;
-    if (FAILED(m_device->CreateTexture2D(&dd, nullptr, &r->depth)) ||
-        FAILED(m_device->CreateDepthStencilView(r->depth.Get(), nullptr, &r->depthDsv)))
-        return false;
 
     std::string error;
     auto vs = CompileHlsl(kBlitVs, false, &error), ps = CompileHlsl(kBlitPs, true, &error);
@@ -276,6 +273,54 @@ static bool WriteBmp(const std::string& path, std::vector<uint32_t> texels, uint
 
 static const uint8_t* PhysicalPtr(uint32_t physical) { return (const uint8_t*)GuestPtr(GuestPhysical(physical)); }
 
+// Garbage registers must not allocate targets without bound (each is several MB).
+constexpr size_t kMaxEdramTargets = 64;
+
+// The host target for an EDRAM colour surface, created (cleared to 0) on first use; null on failure.
+static ColorTarget* ColorTargetFor(ID3D11Device* device, ID3D11DeviceContext* context, DrawResources& r, uint32_t key)
+{
+    if (auto it = r.colorTargets.find(key); it != r.colorTargets.end())
+        return &it->second;
+    if (r.colorTargets.size() >= kMaxEdramTargets)
+        return nullptr;
+    D3D11_TEXTURE2D_DESC td{};
+    td.Width = D3D11Renderer::kTargetWidth;
+    td.Height = D3D11Renderer::kTargetHeight;
+    td.MipLevels = td.ArraySize = 1;
+    td.Format = DXGI_FORMAT(HostColorFormat((key >> 12) & 0xF));
+    td.SampleDesc.Count = 1;
+    td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+    ColorTarget t;
+    if (FAILED(device->CreateTexture2D(&td, nullptr, &t.texture)) ||
+        FAILED(device->CreateRenderTargetView(t.texture.Get(), nullptr, &t.rtv)) ||
+        FAILED(device->CreateShaderResourceView(t.texture.Get(), nullptr, &t.srv)))
+        return nullptr;
+    const float zero[4] = {};
+    context->ClearRenderTargetView(t.rtv.Get(), zero);
+    return &r.colorTargets.emplace(key, std::move(t)).first->second;
+}
+
+static ID3D11DepthStencilView* DepthTargetFor(ID3D11Device* device, ID3D11DeviceContext* context, DrawResources& r, uint32_t key)
+{
+    if (auto it = r.depthTargets.find(key); it != r.depthTargets.end())
+        return it->second.Get();
+    if (r.depthTargets.size() >= kMaxEdramTargets)
+        return nullptr;
+    D3D11_TEXTURE2D_DESC td{};
+    td.Width = D3D11Renderer::kTargetWidth;
+    td.Height = D3D11Renderer::kTargetHeight;
+    td.MipLevels = td.ArraySize = 1;
+    td.Format = DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
+    td.SampleDesc.Count = 1;
+    td.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+    ComPtr<ID3D11Texture2D> tex;
+    ComPtr<ID3D11DepthStencilView> dsv;
+    if (FAILED(device->CreateTexture2D(&td, nullptr, &tex)) || FAILED(device->CreateDepthStencilView(tex.Get(), nullptr, &dsv)))
+        return nullptr;
+    context->ClearDepthStencilView(dsv.Get(), D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 0.0f, 0);
+    return (r.depthTargets[key] = dsv).Get();
+}
+
 // Guest vertex memory: uploads the snapshots the draw reads unless that version of the range is
 // already in the buffer (a range the CPU rewrote between draws is uploaded again).
 void D3D11Renderer::UploadVertexMemory(const DrawCall& d, const Frame& frame)
@@ -339,6 +384,33 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs)
     m_context->UpdateSubresource(r.constants[1].Get(), 0, nullptr, alu, 0, 0);
     SharedConstants shared = BuildSharedConstants(regs, kTargetWidth, kTargetHeight);
     m_context->UpdateSubresource(r.constants[2].Get(), 0, nullptr, &shared, 0, 0);
+
+    // Render targets: RT0, RT1-3 with a colour mask (MRT), and the depth surface.
+    static constexpr uint32_t kInfo[4] = { kRegRbColorInfo, kRegRbColor1Info, kRegRbColor2Info, kRegRbColor3Info };
+    const uint32_t surface = regs[kRegRbSurfaceInfo];
+    uint32_t keys[5] = { ~0u, ~0u, ~0u, ~0u, EdramDepthKey(regs[kRegRbDepthInfo], surface) };
+    ID3D11RenderTargetView* rtvs[4] = {};
+    UINT count = 0;
+    for (uint32_t n = 0; n < 4; n++)
+    {
+        const uint32_t key = EdramColorKey(regs[kInfo[n]], surface);
+        if (n && (!((regs[kRegRbColorMask] >> (4 * n)) & 0xF) || std::count(keys, keys + n, key)))
+            continue; // RT n unused, or the same surface as an earlier RT
+        if (ColorTarget* t = ColorTargetFor(m_device, m_context, r, key))
+        {
+            keys[n] = key;
+            rtvs[n] = t->rtv.Get();
+            count = n + 1;
+            if (!n)
+                r.last = t;
+        }
+    }
+    if (!r.bound || !std::equal(keys, keys + 5, r.boundKeys))
+    {
+        m_context->OMSetRenderTargets(count, rtvs, DepthTargetFor(m_device, m_context, r, keys[4]));
+        std::copy(keys, keys + 5, r.boundKeys);
+        r.bound = true;
+    }
 
     HostBlend b = DecodeBlend(regs);
     if ((regs[kRegRbModeControl] & 7) == 5) // depth-only pass (Z prepass, occlusion queries)
@@ -543,23 +615,27 @@ void D3D11Renderer::ExecuteDraw(const DrawCall& d, const Frame& frame)
     m_lastDrawn++;
 }
 
-// EDRAM resolve: copy the target to the host texture for the destination, then clear it.
+// EDRAM resolve: copy the source surface to the host texture for the destination, then clear it.
 void D3D11Renderer::ExecuteResolve(const Resolve& res)
 {
     DrawResources& r = *m_draw;
-    if (ResolveCopies(res))
+    ColorTarget* source = ColorTargetFor(m_device, m_context, r, EdramColorKey(res.colorInfo, res.surfaceInfo));
+    // shortcut: depth-source resolves copy nothing (the destination keeps its last copy, if any).
+    if (ResolveCopies(res) && source && !ResolveFromDepth(res))
     {
-        // shortcut: the whole destination from the target origin; the resolve draw's rect and the
-        // window offset are not applied, and every format is kept as RGBA8.
+        // shortcut: the whole destination from the surface origin; the resolve draw's rect and the
+        // window offset are not applied, and the destination keeps the surface's host format.
+        D3D11_TEXTURE2D_DESC sd;
+        source->texture->GetDesc(&sd);
         uint32_t w = std::min(ResolveWidth(res), kTargetWidth), h = std::min(ResolveHeight(res), kTargetHeight);
         auto& dst = r.resolved[res.destBase & 0x1FFFF000];
-        if (w && h && (dst.width != w || dst.height != h))
+        if (w && h && (dst.width != w || dst.height != h || dst.format != sd.Format))
         {
             D3D11_TEXTURE2D_DESC td{};
             td.Width = w;
             td.Height = h;
             td.MipLevels = td.ArraySize = 1;
-            td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            td.Format = sd.Format;
             td.SampleDesc.Count = 1;
             td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
             dst = {};
@@ -568,6 +644,7 @@ void D3D11Renderer::ExecuteResolve(const Resolve& res)
             {
                 dst.width = w;
                 dst.height = h;
+                dst.format = sd.Format;
             }
         }
         if (!dst.srv)
@@ -575,21 +652,21 @@ void D3D11Renderer::ExecuteResolve(const Resolve& res)
         else
         {
             D3D11_BOX box{ 0, 0, 0, w, h, 1 };
-            m_context->CopySubresourceRegion(dst.texture.Get(), 0, 0, 0, 0, r.target.Get(), 0, &box);
+            m_context->CopySubresourceRegion(dst.texture.Get(), 0, 0, 0, 0, source->texture.Get(), 0, &box);
             m_lastResolved++;
         }
     }
-    if (ResolveClearsColor(res))
+    if (source)
+        r.last = source;
+    if (ResolveClearsColor(res) && source)
     {
         const uint32_t c = res.colorClear;
         const float color[4] = { (c & 0xFF) / 255.0f, ((c >> 8) & 0xFF) / 255.0f, ((c >> 16) & 0xFF) / 255.0f, (c >> 24) / 255.0f };
-        m_context->ClearRenderTargetView(r.targetRtv.Get(), color);
+        m_context->ClearRenderTargetView(source->rtv.Get(), color);
     }
     if (ResolveClearsDepth(res))
-    {
-        r.depthClear = ResolveDepthClearValue(res);
-        m_context->ClearDepthStencilView(r.depthDsv.Get(), D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, r.depthClear, UINT8(res.depthClear & 0xFF));
-    }
+        if (ID3D11DepthStencilView* dsv = DepthTargetFor(m_device, m_context, r, EdramDepthKey(res.depthInfo, res.surfaceInfo)))
+            m_context->ClearDepthStencilView(dsv, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, ResolveDepthClearValue(res), UINT8(res.depthClear & 0xFF));
     r.lastRegs = nullptr; // texture bindings may now point at a new resolve
 }
 
@@ -599,6 +676,7 @@ void D3D11Renderer::Blit(ID3D11ShaderResourceView* source)
     ID3D11ShaderResourceView* none = nullptr;
     m_context->PSSetShaderResources(0, 1, &none);
     m_context->OMSetRenderTargets(1, &m_backBuffer, nullptr);
+    r.bound = false;
     D3D11_VIEWPORT vp{ 0, 0, float(m_width), float(m_height), 0, 1 };
     m_context->RSSetViewports(1, &vp);
     m_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -628,7 +706,7 @@ void D3D11Renderer::Present(const Frame& frame)
     // No draws: a dark colour that pulses with the frame number, so a running game is visibly
     // distinct from a hung one.
     float pulse = float(frame.stats.frame % 120) / 120.0f;
-    const float idle[4] = { 0.02f, 0.05f + 0.10f * pulse, 0.02f, 1.0f }, black[4] = { 0, 0, 0, 1 };
+    const float idle[4] = { 0.02f, 0.05f + 0.10f * pulse, 0.02f, 1.0f };
     if (!m_draw)
     {
         m_context->OMSetRenderTargets(1, &m_backBuffer, nullptr);
@@ -637,11 +715,8 @@ void D3D11Renderer::Present(const Frame& frame)
     else
     {
         DrawResources& r = *m_draw;
-        // shortcut: cleared every frame; guest clears (resolve with clear) are not emulated yet.
-        m_context->ClearRenderTargetView(r.targetRtv.Get(), frame.draws.empty() ? idle : black);
-        m_context->ClearDepthStencilView(r.depthDsv.Get(), D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, r.depthClear, 0);
-        ID3D11RenderTargetView* rtv = r.targetRtv.Get();
-        m_context->OMSetRenderTargets(1, &rtv, r.depthDsv.Get());
+        // EDRAM surfaces persist across frames; only guest clears (resolves) clear them.
+        r.bound = false;
         D3D11_VIEWPORT vp{ 0, 0, float(kTargetWidth), float(kTargetHeight), 0, 1 };
         m_context->RSSetViewports(1, &vp);
         m_context->RSSetState(r.rasterizer.Get());
@@ -671,12 +746,21 @@ void D3D11Renderer::Present(const Frame& frame)
         m_context->PSSetShaderResources(0, 32, none);
         auto front = frame.frontbuffer ? r.resolved.find(frame.frontbuffer & 0x1FFFF000) : r.resolved.end();
         m_lastFrontbuffer = front != r.resolved.end();
-        if (!m_dumpPath.empty())
+        // No frontbuffer resolve: the last RT0 (or the idle colour when nothing was drawn yet).
+        ID3D11Texture2D* shown = m_lastFrontbuffer ? front->second.texture.Get() : r.last ? r.last->texture.Get() : nullptr;
+        ID3D11ShaderResourceView* shownSrv = m_lastFrontbuffer ? front->second.srv.Get() : r.last ? r.last->srv.Get() : nullptr;
+        if (!m_dumpPath.empty() && shown)
         {
-            Dump(m_dumpPath, m_lastFrontbuffer ? front->second.texture.Get() : r.target.Get());
+            Dump(m_dumpPath, shown);
             m_dumpPath.clear();
         }
-        Blit(m_lastFrontbuffer ? front->second.srv.Get() : r.targetSrv.Get());
+        if (shownSrv)
+            Blit(shownSrv);
+        else
+        {
+            m_context->OMSetRenderTargets(1, &m_backBuffer, nullptr);
+            m_context->ClearRenderTargetView(m_backBuffer, idle);
+        }
     }
     HRESULT hr = m_swapChain->Present(m_vsync ? 1 : 0, 0);
     if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)
@@ -702,6 +786,46 @@ void D3D11Renderer::Present(const Frame& frame)
     }
 }
 
+static uint32_t ToUnorm8(float v) { return uint32_t(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); }
+
+static float HalfToFloat(uint16_t h)
+{
+    const uint32_t e = (h >> 10) & 0x1F, m = h & 0x3FF;
+    const float v = e == 0 ? std::ldexp(float(m), -24) : e == 31 ? (m ? NAN : INFINITY) : std::ldexp(1.0f + float(m) / 1024.0f, int(e) - 15);
+    return (h & 0x8000) ? -v : v;
+}
+
+// One host texel as RGBA8 (float formats clamped to [0, 1]; R32 / R32G32 as grey / red-green).
+static uint32_t TexelToRgba8(DXGI_FORMAT format, const uint8_t* p)
+{
+    float c[4] = { 0, 0, 0, 1 };
+    switch (format)
+    {
+    case DXGI_FORMAT_R16G16B16A16_FLOAT:
+        for (int i = 0; i < 4; i++)
+        {
+            uint16_t h;
+            memcpy(&h, p + 2 * i, 2);
+            c[i] = HalfToFloat(h);
+        }
+        break;
+    case DXGI_FORMAT_R32_FLOAT:
+        memcpy(c, p, 4);
+        c[1] = c[2] = c[0];
+        break;
+    case DXGI_FORMAT_R32G32_FLOAT:
+        memcpy(c, p, 8);
+        break;
+    default: // RGBA8
+    {
+        uint32_t t;
+        memcpy(&t, p, 4);
+        return t;
+    }
+    }
+    return ToUnorm8(c[0]) | (ToUnorm8(c[1]) << 8) | (ToUnorm8(c[2]) << 16) | (ToUnorm8(c[3]) << 24);
+}
+
 // Copies the render target to a CPU-readable texture; texels row by row (RGBA8).
 static std::vector<uint32_t> ReadTarget(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Texture2D* target)
 {
@@ -718,18 +842,20 @@ static std::vector<uint32_t> ReadTarget(ID3D11Device* device, ID3D11DeviceContex
     D3D11_MAPPED_SUBRESOURCE m;
     if (FAILED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &m)))
         return out;
+    const uint32_t bpp = td.Format == DXGI_FORMAT_R16G16B16A16_FLOAT || td.Format == DXGI_FORMAT_R32G32_FLOAT ? 8 : 4;
     out.resize(size_t(td.Width) * td.Height);
     for (uint32_t y = 0; y < td.Height; y++)
-        memcpy(&out[size_t(y) * td.Width], (uint8_t*)m.pData + size_t(y) * m.RowPitch, td.Width * 4);
+        for (uint32_t x = 0; x < td.Width; x++)
+            out[size_t(y) * td.Width + x] = TexelToRgba8(td.Format, (uint8_t*)m.pData + size_t(y) * m.RowPitch + size_t(x) * bpp);
     context->Unmap(staging.Get(), 0);
     return out;
 }
 
 uint32_t D3D11Renderer::ReadTargetTexel(uint32_t x, uint32_t y)
 {
-    if (!m_draw || x >= kTargetWidth || y >= kTargetHeight)
+    if (!m_draw || !m_draw->last || x >= kTargetWidth || y >= kTargetHeight)
         return 0;
-    std::vector<uint32_t> texels = ReadTarget(m_device, m_context, m_draw->target.Get());
+    std::vector<uint32_t> texels = ReadTarget(m_device, m_context, m_draw->last->texture.Get());
     return texels.empty() ? 0 : texels[size_t(y) * kTargetWidth + x];
 }
 
