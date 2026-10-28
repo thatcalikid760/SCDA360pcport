@@ -32,6 +32,45 @@ struct DirScan
 static std::unordered_map<uint32_t, DirScan> g_scans;
 static uint32_t g_nextHandle = 0x1000;
 
+// SCDA_TRACE_FS: large reads, re-checked against the file by FsVerifyReads (crash handler).
+struct BigRead
+{
+    std::string path;
+    long long offset;
+    uint32_t buffer, size;
+};
+static std::vector<BigRead> g_bigReads;
+
+void FsVerifyReads()
+{
+    for (const BigRead& r : g_bigReads)
+    {
+        std::vector<uint8_t> data(r.size);
+        FILE* f = fopen(r.path.c_str(), "rb");
+        if (!f)
+            continue;
+        _fseeki64(f, r.offset, SEEK_SET);
+        size_t n = fread(data.data(), 1, r.size, f);
+        fclose(f);
+        const uint8_t* mem = (const uint8_t*)GuestPtr(r.buffer);
+        uint32_t first = 0xFFFFFFFF, last = 0, diff = 0;
+        // Bink swaps its file image to native dwords in place: compare swapped when the magic is.
+        bool swapped = n >= 4 && mem[0] == data[3] && mem[3] == data[0] && mem[0] != mem[3];
+        for (uint32_t i = 0; i < (n & ~3u); i++)
+            if (mem[i] != data[swapped ? (i ^ 3) : i])
+            {
+                if (first == 0xFFFFFFFF) first = i;
+                last = i;
+                diff++;
+            }
+        RuntimeLog("[fs] verify %s @%lld buf 0x%08X size 0x%X: %u bytes differ (first 0x%X last 0x%X)\n",
+            r.path.c_str(), r.offset, r.buffer, r.size, diff, first, last);
+        if (diff)
+            RuntimeLog("[fs]   mem %02X%02X%02X%02X %02X%02X%02X%02X file %02X%02X%02X%02X %02X%02X%02X%02X\n", mem[0], mem[1], mem[2], mem[3],
+                mem[4], mem[5], mem[6], mem[7], data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7]);
+    }
+}
+
 static uint32_t StackArg(PPCContext& ctx, int index) { return GuestLoad32(ctx.r1.u32 + 0x54 + (index - 8) * 8); }
 
 static std::string GuestPath(uint32_t objectAttributes)
@@ -153,6 +192,19 @@ SCDA_IMPORT(NtReadFile)
     DWORD got = 0;
     ReadFile(h, GuestPtr(buffer), length, &got, nullptr);
     uint32_t status = (got == 0 && length != 0) ? X_STATUS_END_OF_FILE : X_STATUS_SUCCESS;
+    static const bool trace = getenv("SCDA_TRACE_FS") != nullptr;
+    if (trace)
+    {
+        LARGE_INTEGER zero{}, pos{};
+        SetFilePointerEx(h, zero, &pos, FILE_CURRENT);
+        RuntimeLog("[fs] read 0x%X off %lld len 0x%X got 0x%X buf 0x%08X ev 0x%X lr 0x%08X\n", ctx.r3.u32,
+            pOffset ? (long long)GuestLoad64(pOffset) : -1LL, length, got, buffer, ctx.r4.u32, (uint32_t)ctx.lr);
+        if (got >= 0x40000)
+        {
+            std::lock_guard lock(g_fileMutex);
+            g_bigReads.push_back({ g_paths[ctx.r3.u32], pos.QuadPart - got, buffer, got });
+        }
+    }
     SetIoStatus(iosb, status, got);
     // I/O completes synchronously; async callers (Bink) wait on the Event, so signal it.
     // shortcut: an APC completion routine (r5) is not queued.

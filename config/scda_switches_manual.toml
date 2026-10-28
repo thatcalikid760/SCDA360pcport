@@ -36,3 +36,74 @@ labels = [
     0x821A6CE8,
     0x821A6E20,
 ]
+
+# 824B31B0: absolute table at 0x824B31B4, index r19, no bound check; table runs up to the code at 0x824B3208.
+[[switch]]
+base = 0x824B31B0
+r = 19
+default = 0x824B3208
+labels = [
+    0x824B3208,
+    0x824B3208,
+    0x824B2E00,
+    0x824B3208,
+    0x824B3208,
+    0x824B32F0,
+    0x824B3208,
+    0x824B327C,
+    0x824B3208,
+    0x824B3208,
+    0x824B2E00,
+    0x824B2E00,
+    0x824B3208,
+    0x824B3208,
+    0x824B2E00,
+    0x824B2E00,
+    0x824B2E00,
+    0x824B2E00,
+    0x824B3208,
+    0x824B3208,
+    0x824B3208,
+]
+# 82866060: absolute table at 0x82866064, index r10, bound cmplwi cr6,r10,16 / bgt 0x82866550.
+[[switch]]
+base = 0x82866060
+r = 10
+default = 0x82866550
+labels = [
+    0x828660A8,
+    0x828662A4,
+    0x828660F4,
+    0x82866250,
+    0x82866550,
+    0x828662B0,
+    0x82866550,
+    0x82866550,
+    0x82866550,
+    0x8286631C,
+    0x82866550,
+    0x82866550,
+    0x82866550,
+    0x8286645C,
+    0x82866424,
+    0x828663F8,
+    0x828664C4,
+]
+# 82951054: absolute table at 0x82951058, index r30, reached only with r30 == 10 (cmpwi 9/10 above).
+[[switch]]
+base = 0x82951054
+r = 30
+default = 0x82951274
+labels = [
+    0x82951274,
+    0x82951084,
+    0x82951098,
+    0x829510AC,
+    0x829510BC,
+    0x829510CC,
+    0x829510DC,
+    0x829510EC,
+    0x82951100,
+    0x82951218,
+    0x82951254,
+]

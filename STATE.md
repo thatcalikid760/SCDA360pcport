@@ -22,6 +22,7 @@
 - 2026-10-26: bootstrap, Gemini bridge, triage (`docs/triage_*.txt`).
 - 2026-10-27: XenonRecomp patch: 38 missing ops (vslh, vsrah, vsubshs, vspltish, vmaxsh, vandc, vpk*, vctuxs, vslo, bso/bns/bsolr, cror/crorc, mulhd/mulhdu, eqv, frsqrte, dcbst, ...) + `vcmpgtuh.` RC.
 - 2026-10-27: acceptance `python -I tools/check_recomp_acceptance.py docs/recomp_SC4_Offline.log` -> unrecognized=0 switch_errors=0 error_sites=0. Loop: `sh tools/recomp.sh` -> `fix_switch_bounds.py` / `fix_missing_functions.py` -> repeat.
+- 2026-10-27: Bink 01_Intro crash fixed: XenonAnalyse ended functions at bdzlr/bdnzlr (BO 0x10 taken as unconditional), cutting CRT memset 82B7FC90 tail -> fill bundles 1 byte short. Fixed in patch; +3 manual jump tables (824B31B0, 82866060, 82951054). Acceptance now also fails on cut_functions / table_calls.
 - 2026-10-27: `runtime/` builds `scda_ppc.lib` (flags = Unleashed) + `scda.exe` + `scda_tests`. HLE: crit sections, spinlocks, TLS, virtual/physical bump alloc, Nt file I/O, threads, Nt/Ke events/semaphores/mutants/waits, sprintf/_vsnprintf/vswprintf, Rtl string conv, XAM enumerators/XMsg/XOVERLAPPED.
 - 2026-10-27: KeResumeThread was a no-op (suspended threads never ran); ExCreateThread affinity (flags>>24) -> PCR+0x10C cpu (audio workers barrier per cpu). Now reaches real MAIN MENU: PROFILE "not signed in" dialog, Sign in / Quit, ~14 fps, 200 draws (151 drawn). Before: stuck on loading screen.
 - 2026-10-27: paced 60 fps (frozen KeTimeStampBundle + QPF vs TSC fixed; VdSwap caps 2 swaps in flight; EVENT_WRITE_SHD swap counter).
@@ -40,11 +41,10 @@
 ## Next
 1. Done (aa09e97): input (XInput + keyboard + `SCDA_AUTOPRESS="40:A"`), local profile, XNotify, XamShowSigninUI, profile settings (not persisted). A on "Sign in" reaches LOAD GAME menu.
 2. NOW: in-process relaunch (XamLoaderLaunchTitle still a stub -> crash after menu). Menu path: `SCDA_AUTOPRESS=320:A,460:DOWN,480:A,580:A,700:A` -> launch data `_run\iceland.launch` ("SCDA MAPNAME=01_Intro?...MISSIONDIFF=2 ... -ll -nolog", 0x3FC B; target path = SC4_Offline.xex). Plan (advisor): title on its own host thread; ExCreateThread threads exit at import entry + one "title exit" event in every HLE wait; services (irq 256, audio 257, time thread) pause, not die; suspend+terminate stragglers only outside imports; one reset (memory: unprotect stack guards, zero bump heaps, reload image, XEX hdr, InitDataImports; CP reset incl. g_shadow; GpuState; XAM listeners + g_startupNotified; fs/TLS/handles; renderer flush + resolve map); keep nextId, device, shaders, frame counter.
-3. BLOCKER for missions: `SCDA_LAUNCH_DATA=_run\iceland.launch` boots straight into 01_Intro (opens .lin/.tex/01_Intro.bik, Maps\01_intro.unr missing = normal?), then Bink (0x82C78900, thread 3) reads a byte stream past its end (lbz loop, r1+480 ptr) through decommitted heap into a stack guard at 0x40B80000. Data problem upstream (file read / decommit / decode). Investigate before relaunch is useful.
+3. BLOCKER for missions: `SCDA_LAUNCH_DATA=_run\iceland.launch` boots 01_Intro without crashing (Bink fixed, Maps\01_intro.unr missing is normal), but the main thread spins in a D3D fence wait: sub_821F4088 -> sub_821FA428 waits for the GPU read ptr (dev+10768) to pass the fence (dev+10780); 5 s timeout -> sub_822003E8, loops. No frame presented. CP stall: check PM4 (WAIT_REG_MEM, unhandled packet, read-ptr writeback).
 4. Audio (XMA/XAudio). Installer must write `game\SC4_Offline.img` + `.xexhdr` (does not yet).
 
 ## Open questions / risks
 - 4 undecodable words 82C51468-82C51490 (.text tail); setjmp/longjmp not located.
 - Resolve map (`DrawResources::resolved`) never invalidated: clear it on title restart.
-- Gemini cross-check of VMX patch pending (bridge timed out 2x on 2026-10-27).
 - 134 logging-stub imports may hide wrong behavior past the menu.

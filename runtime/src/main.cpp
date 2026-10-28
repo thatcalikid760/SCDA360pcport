@@ -150,6 +150,8 @@ static bool InitMemory()
     return true;
 }
 
+void FsVerifyReads();
+
 // Layout follows UnleashedRecomp's GuestThreadContext.
 static LONG WINAPI CrashHandler(EXCEPTION_POINTERS* e)
 {
@@ -196,6 +198,7 @@ static LONG WINAPI CrashHandler(EXCEPTION_POINTERS* e)
     // Guest stacks of every thread: the faulting one shows the guest call chain.
     if (r->ExceptionCode == EXCEPTION_ACCESS_VIOLATION)
         RuntimeLog("%s", WatchdogReport(g_base).c_str());
+    FsVerifyReads();
     return EXCEPTION_CONTINUE_SEARCH;
 }
 

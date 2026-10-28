@@ -1,3 +1,19 @@
+diff --git a/XenonAnalyse/function.cpp b/XenonAnalyse/function.cpp
+index 34add40..df946cc 100644
+--- a/XenonAnalyse/function.cpp
++++ b/XenonAnalyse/function.cpp
+@@ -180,8 +180,9 @@ Function Function::Analyze(const void* code, size_t size, size_t base)
+                 }
+                 else if (op == PPC_OP_CTR)
+                 {
+-                    // 5th bit of BO tells cpu to ignore the counter, which is a blr/bctr otherwise it's conditional
+-                    const bool conditional = !(PPC_BO(instruction) & 0x10);
++                    // BO 0x10 = ignore the condition, 0x04 = don't decrement CTR: only both make a plain blr/bctr.
++                    // bdzlr/bdnzlr (BO 0x12/0x10) still test CTR, so code after them is reachable.
++                    const bool conditional = (PPC_BO(instruction) & 0x14) != 0x14;
+                     if (conditional)
+                     {
+                         // right block's just going to return
 diff --git a/XenonRecomp/recompiler.cpp b/XenonRecomp/recompiler.cpp
 index fa91527..e1f3ac7 100644
 --- a/XenonRecomp/recompiler.cpp
