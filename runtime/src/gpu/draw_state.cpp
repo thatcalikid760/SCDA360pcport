@@ -270,6 +270,64 @@ std::vector<uint32_t> ConvertTexture(const TextureFetch& t, const uint8_t* guest
     return out;
 }
 
+// Xenos blend factor -> D3D11_BLEND; alpha: colour factors take their alpha form (D3D11 forbids
+// colour factors in the alpha equation). CONSTANT_ALPHA uses the full blend factor (shortcut).
+static uint32_t BlendFactor(uint32_t f, bool alpha)
+{
+    switch (f)
+    {
+    case 0: return 1;                // ZERO
+    case 4: return alpha ? 5 : 3;    // SRC_COLOR
+    case 5: return alpha ? 6 : 4;    // ONE_MINUS_SRC_COLOR
+    case 6: return 5;                // SRC_ALPHA
+    case 7: return 6;                // ONE_MINUS_SRC_ALPHA
+    case 8: return alpha ? 7 : 9;    // DST_COLOR
+    case 9: return alpha ? 8 : 10;   // ONE_MINUS_DST_COLOR
+    case 10: return 7;               // DST_ALPHA
+    case 11: return 8;               // ONE_MINUS_DST_ALPHA
+    case 12: case 14: return 14;     // CONSTANT_COLOR / CONSTANT_ALPHA
+    case 13: case 15: return 15;     // ONE_MINUS_CONSTANT_*
+    case 16: return alpha ? 2 : 11;  // SRC_ALPHA_SATURATE (ONE on alpha)
+    default: return 2;               // ONE
+    }
+}
+
+// Xenos combine function: 0 add, 1 subtract, 2 min, 3 max, 4 reverse subtract.
+static uint32_t BlendOp(uint32_t f)
+{
+    static const uint32_t ops[5] = { 1, 2, 4, 5, 3 };
+    return f < 5 ? ops[f] : 1;
+}
+
+HostBlend DecodeBlend(const RegisterFile& r)
+{
+    HostBlend b;
+    uint32_t c = r[0x2201];
+    b.src = BlendFactor(c & 0x1F, false);
+    b.op = BlendOp((c >> 5) & 7);
+    b.dst = BlendFactor((c >> 8) & 0x1F, false);
+    b.srcAlpha = BlendFactor((c >> 16) & 0x1F, true);
+    b.opAlpha = BlendOp((c >> 21) & 7);
+    b.dstAlpha = BlendFactor((c >> 24) & 0x1F, true);
+    b.enable = !(b.src == 2 && b.dst == 1 && b.op == 1 && b.srcAlpha == 2 && b.dstAlpha == 1 && b.opAlpha == 1);
+    b.writeMask = r[0x2104] & 0xF;
+    for (uint32_t i = 0; i < 4; i++)
+        b.factor[i] = AsFloat(r[0x2105 + i]);
+    return b;
+}
+
+uint32_t HostCullMode(const RegisterFile& r)
+{
+    switch (r[0x2205] & 3)
+    {
+    case 1: return 2;
+    case 2: return 3;
+    default: return 1; // none, or both (shortcut: culling everything is not emulated)
+    }
+}
+
+bool HostFrontCounterClockwise(const RegisterFile& r) { return !(r[0x2205] & 4); }
+
 uint32_t HostTopology(uint32_t primType)
 {
     switch (primType)

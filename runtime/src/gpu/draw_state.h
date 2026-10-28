@@ -68,6 +68,19 @@ uint32_t TiledTexelIndex(uint32_t x, uint32_t y, uint32_t pitch, uint32_t log2Bp
 // Guest texture bytes (big-endian, as in memory) -> width*height RGBA8 with endian + swizzle applied.
 std::vector<uint32_t> ConvertTexture(const TextureFetch& t, const uint8_t* guest);
 
+// RB_BLENDCONTROL0 (0x2201), RB_COLOR_MASK (0x2104, RT0) and RB_BLEND_RED..ALPHA (0x2105-0x2108)
+// as D3D11_BLEND / D3D11_BLEND_OP values. enable is false for a plain overwrite (ONE, ZERO, ADD).
+struct HostBlend
+{
+    bool enable = false;
+    uint32_t src = 2, dst = 1, op = 1, srcAlpha = 2, dstAlpha = 1, opAlpha = 1, writeMask = 15;
+    float factor[4] = {};
+};
+HostBlend DecodeBlend(const RegisterFile& regs);
+// PA_SU_SC_MODE_CNTL (0x2205): D3D11_CULL_MODE (1 none, 2 front, 3 back); front face winding.
+uint32_t HostCullMode(const RegisterFile& regs);
+bool HostFrontCounterClockwise(const RegisterFile& regs);
+
 // Xenos primitive type -> D3D11_PRIMITIVE_TOPOLOGY value; 0 = not drawn yet (points, rects, fans, quads).
 uint32_t HostTopology(uint32_t primType);
 

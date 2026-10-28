@@ -188,3 +188,42 @@ TEST(vertex_fetch_slots_from_hlsl)
     CHECK_EQ(slots.count(), size_t(2));
     CHECK(slots[95] && slots[3]);
 }
+
+// RB_BLENDCONTROL0 / RB_COLOR_MASK / RB_BLEND_* -> D3D11 blend enums; PA_SU_SC_MODE_CNTL -> cull.
+TEST(blend_and_cull_from_registers)
+{
+    RegisterFile r;
+    r.Set(0x2201, 0x00010001); // ONE, ZERO, ADD: plain overwrite
+    r.Set(0x2104, 0xF);
+    HostBlend b = DecodeBlend(r);
+    CHECK(!b.enable);
+    CHECK_EQ(b.writeMask, 15u);
+
+    r.Set(0x2201, 0x07060706); // SRC_ALPHA, INV_SRC_ALPHA, ADD (colour and alpha)
+    b = DecodeBlend(r);
+    CHECK(b.enable);
+    CHECK_EQ(b.src, 5u);
+    CHECK_EQ(b.dst, 6u);
+    CHECK_EQ(b.op, 1u);
+    CHECK_EQ(b.srcAlpha, 5u);
+    CHECK_EQ(b.dstAlpha, 6u);
+
+    // colour: CONSTANT_COLOR src, REV_SUBTRACT; alpha: SRC_COLOR src, REV_SUBTRACT; dst ZERO
+    r.Set(0x2201, 12 | (4u << 5) | (4u << 16) | (4u << 21));
+    r.Set(0x2105, FloatBits(0.5f));
+    b = DecodeBlend(r);
+    CHECK_EQ(b.src, 14u);
+    CHECK_EQ(b.op, 3u);
+    CHECK_EQ(b.srcAlpha, 5u); // colour factors map to their alpha form on the alpha channel
+    CHECK_EQ(b.opAlpha, 3u);
+    CHECK(b.factor[0] == 0.5f);
+
+    r.Set(0x2205, 2);          // cull back, front = CCW
+    CHECK_EQ(HostCullMode(r), 3u);
+    CHECK(HostFrontCounterClockwise(r));
+    r.Set(0x2205, 1 | 4);      // cull front, front = CW
+    CHECK_EQ(HostCullMode(r), 2u);
+    CHECK(!HostFrontCounterClockwise(r));
+    r.Set(0x2205, 0);
+    CHECK_EQ(HostCullMode(r), 1u);
+}

@@ -55,6 +55,9 @@ struct DrawResources
     uint32_t memoryBytes = 0;
     std::unordered_map<uint64_t, ComPtr<ID3D11VertexShader>> vs;
     std::unordered_map<uint64_t, ComPtr<ID3D11PixelShader>> ps;
+    // Fixed-function state by the registers it is built from.
+    std::unordered_map<uint64_t, ComPtr<ID3D11BlendState>> blend;
+    std::unordered_map<uint32_t, ComPtr<ID3D11RasterizerState>> raster;
     // Per frame: guest ranges already uploaded, textures by fetch constant.
     std::unordered_set<uint64_t> uploaded;
     std::unordered_map<uint64_t, ComPtr<ID3D11ShaderResourceView>> textures;
@@ -154,7 +157,7 @@ bool D3D11Renderer::CreateDrawResources()
 
     D3D11_RASTERIZER_DESC rd{};
     rd.FillMode = D3D11_FILL_SOLID;
-    rd.CullMode = D3D11_CULL_NONE; // shortcut: PA_SU_SC_MODE_CNTL culling not applied yet
+    rd.CullMode = D3D11_CULL_NONE; // blit; draws use state from PA_SU_SC_MODE_CNTL
     rd.DepthClipEnable = TRUE;
     D3D11_SAMPLER_DESC sd{};
     sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR; // shortcut: fetch constant filter/clamp not applied yet
@@ -263,6 +266,37 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs)
     m_context->UpdateSubresource(r.constants[1].Get(), 0, nullptr, alu, 0, 0);
     SharedConstants shared = BuildSharedConstants(regs, kTargetWidth, kTargetHeight);
     m_context->UpdateSubresource(r.constants[2].Get(), 0, nullptr, &shared, 0, 0);
+
+    HostBlend b = DecodeBlend(regs);
+    auto& blend = r.blend[(uint64_t(regs[0x2201]) << 4) | b.writeMask];
+    if (!blend)
+    {
+        D3D11_BLEND_DESC bd{};
+        auto& t = bd.RenderTarget[0];
+        t.BlendEnable = b.enable;
+        t.SrcBlend = D3D11_BLEND(b.src);
+        t.DestBlend = D3D11_BLEND(b.dst);
+        t.BlendOp = D3D11_BLEND_OP(b.op);
+        t.SrcBlendAlpha = D3D11_BLEND(b.srcAlpha);
+        t.DestBlendAlpha = D3D11_BLEND(b.dstAlpha);
+        t.BlendOpAlpha = D3D11_BLEND_OP(b.opAlpha);
+        t.RenderTargetWriteMask = UINT8(b.writeMask);
+        m_device->CreateBlendState(&bd, &blend);
+    }
+    m_context->OMSetBlendState(blend.Get(), b.factor, 0xFFFFFFFF);
+
+    uint32_t cull = HostCullMode(regs), ccw = HostFrontCounterClockwise(regs);
+    auto& raster = r.raster[cull | (ccw << 4)];
+    if (!raster)
+    {
+        D3D11_RASTERIZER_DESC rd{};
+        rd.FillMode = D3D11_FILL_SOLID;
+        rd.CullMode = D3D11_CULL_MODE(cull);
+        rd.FrontCounterClockwise = ccw;
+        rd.DepthClipEnable = TRUE;
+        m_device->CreateRasterizerState(&rd, &raster);
+    }
+    m_context->RSSetState(raster.Get());
 
     // Textures: every texture fetch constant the stages might sample (the shader's slots are not
     // known here), converted on the CPU once per frame.
@@ -437,6 +471,8 @@ void D3D11Renderer::Blit(ID3D11ShaderResourceView* source)
     D3D11_VIEWPORT vp{ 0, 0, float(m_width), float(m_height), 0, 1 };
     m_context->RSSetViewports(1, &vp);
     m_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    m_context->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);
+    m_context->RSSetState(r.rasterizer.Get());
     m_context->VSSetShader(r.blitVs.Get(), nullptr, 0);
     m_context->PSSetShader(r.blitPs.Get(), nullptr, 0);
     m_context->PSSetShaderResources(0, 1, &source);
