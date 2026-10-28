@@ -434,6 +434,12 @@ PPC_FUNC(sub_82A67A00)
                 LogObject(base, tag, PPC_LOAD_U32(mix + r));
             }
         }
+        if (const uint32_t music = mix ? PPC_LOAD_U32(mix + 1540) : 0)
+        {
+            fprintf(stderr, " | music+1400:");
+            for (uint32_t r = 1400; r < 1464; r += 4)
+                fprintf(stderr, " %08X", PPC_LOAD_U32(music + r));
+        }
         if (mix)
             fprintf(stderr, " | 1468 %g 1516 %g 1528 %g flags %08X\n", f(mix + 1468), f(mix + 1516), f(mix + 1528),
                     PPC_LOAD_U32(mix + 1424));
@@ -905,6 +911,27 @@ PPC_FUNC(sub_82A68F48)
             "1444 %08X 1304 %08X score %g\n",
             o, f(o + 564), l, f(l + 932), f(l + 936), f(l + 940), z, f(z + 932), f(z + 936), f(z + 940), f(z + 340),
             f(z + 356), PPC_LOAD_U32(z + 228), PPC_LOAD_U32(z + 1444), PPC_LOAD_U32(z + 1304), f(out));
+}
+
+// sub_82A62E48(this, stack): script native ramp. Steps this+1424 {from, to, duration, elapsed} by
+// a float parameter and sets this+1404 bit 31 once the value reaches 1.
+extern "C" PPC_FUNC(__imp__sub_82A62E48);
+PPC_FUNC(sub_82A62E48)
+{
+    const uint32_t self = ctx.r3.u32;
+    __imp__sub_82A62E48(ctx, base);
+    static uint32_t s_calls;
+    if (Enabled() && s_calls++ % 120 == 0)
+    {
+        auto f = [&](uint32_t a) {
+            union { uint32_t u; float f; } v{PPC_LOAD_U32(a)};
+            return v.f;
+        };
+        char name[64];
+        fprintf(stderr, "[dare] ramp-native %s %08X 1404 %08X ramp %g->%g dur %g t %g calls %u\n",
+                NameOf(base, self, name, sizeof(name)), self, PPC_LOAD_U32(self + 1404), f(self + 1424),
+                f(self + 1428), f(self + 1432), f(self + 1436), s_calls);
+    }
 }
 
 // sub_82A66FC0(obj): music zone selection. Zones = mix+1604 list (mix = obj+560), candidates =
