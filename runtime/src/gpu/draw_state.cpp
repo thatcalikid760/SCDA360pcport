@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <bit>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <gpu/draw_state.h>
@@ -136,8 +137,21 @@ uint32_t TextureElementBytes(uint32_t format)
     case 18: return 8; // k_DXT1
     case 19:           // k_DXT2_3
     case 20: return 16; // k_DXT4_5
+    case 30: return 2;  // k_16_FLOAT
+    case 25:            // k_16_16
+    case 31:            // k_16_16_FLOAT
+    case 36: return 4;  // k_32_FLOAT
+    case 26:            // k_16_16_16_16
+    case 32:            // k_16_16_16_16_FLOAT
+    case 37: return 8;  // k_32_32_FLOAT
+    case 38: return 16; // k_32_32_32_32_FLOAT
     default: return 0;
     }
+}
+
+bool IsFloatTextureFormat(uint32_t format)
+{
+    return format == 25 || format == 26 || (format >= 30 && format <= 32) || (format >= 36 && format <= 38);
 }
 
 static bool IsBlockCompressed(uint32_t format) { return format >= 18 && format <= 20; }
@@ -240,7 +254,7 @@ std::vector<uint32_t> ConvertTexture(const TextureFetch& t, const uint8_t* guest
 {
     std::vector<uint32_t> out(size_t(t.width) * t.height);
     uint32_t bytes = TextureElementBytes(t.format), log2 = Log2(bytes), pitch, height;
-    if (!bytes)
+    if (!bytes || IsFloatTextureFormat(t.format))
         return out;
     ElementGrid(t, pitch, height);
     if (IsBlockCompressed(t.format))
@@ -275,6 +289,57 @@ std::vector<uint32_t> ConvertTexture(const TextureFetch& t, const uint8_t* guest
             else
                 ch[0] = (d >> ((byteOffset & 3) * 8)) & 0xFF, ch[1] = ch[2] = 0, ch[3] = 0xFF;
             out[size_t(y) * t.width + x] = Swizzle(ch, t.swizzle);
+        }
+    return out;
+}
+
+float HalfToFloat(uint32_t h)
+{
+    const uint32_t e = (h >> 10) & 0x1F, m = h & 0x3FF;
+    const float v = e == 0 ? std::ldexp(float(m), -24) : e == 31 ? (m ? NAN : INFINITY) : std::ldexp(1.0f + float(m) / 1024.0f, int(e) - 15);
+    return (h & 0x8000) ? -v : v;
+}
+
+std::vector<float> ConvertTextureFloat(const TextureFetch& t, const uint8_t* guest)
+{
+    std::vector<float> out(size_t(t.width) * t.height * 4);
+    const uint32_t bytes = TextureElementBytes(t.format), log2 = Log2(bytes);
+    if (!IsFloatTextureFormat(t.format))
+        return out;
+    // Channels per element and their width: 16-bit (unorm or half) or 32-bit float.
+    const bool wide = t.format >= 36;
+    const uint32_t channels = wide ? bytes / 4 : bytes / 2;
+    uint32_t pitch, height;
+    ElementGrid(t, pitch, height);
+    for (uint32_t y = 0; y < t.height; y++)
+        for (uint32_t x = 0; x < t.width; x++)
+        {
+            const uint32_t index = t.tiled ? TiledTexelIndex(x, y, pitch, log2) : y * pitch + x;
+            const uint32_t byteOffset = index * bytes;
+            // Endian swap per dword (a 2-byte element shares its dword with a neighbour).
+            uint32_t d[4] = {};
+            memcpy(d, guest + (byteOffset & ~3u), std::max(bytes, 4u));
+            for (uint32_t i = 0; i < std::max(bytes, 4u) / 4; i++)
+                d[i] = SwapDword(d[i], t.endian);
+            float ch[4] = { 0, 0, 0, 1 };
+            for (uint32_t c = 0; c < channels; c++)
+            {
+                if (wide)
+                    memcpy(&ch[c], &d[c], 4);
+                else
+                {
+                    const uint32_t bit = (bytes == 2 ? (byteOffset & 2) * 8 : 0) + c * 16;
+                    const uint32_t v = (d[bit / 32] >> (bit % 32)) & 0xFFFF;
+                    // shortcut: 16_16 / 16_16_16_16 as unorm; fetch sign / exp-adjust fields ignored.
+                    ch[c] = t.format == 25 || t.format == 26 ? float(v) / 65535.0f : HalfToFloat(v);
+                }
+            }
+            float* o = &out[(size_t(y) * t.width + x) * 4];
+            for (uint32_t i = 0; i < 4; i++)
+            {
+                const uint32_t s = (t.swizzle >> (i * 3)) & 7;
+                o[i] = s < 4 ? ch[s] : s == 5 ? 1.0f : 0.0f;
+            }
         }
     return out;
 }

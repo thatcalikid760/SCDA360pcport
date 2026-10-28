@@ -167,6 +167,31 @@ TEST(tiled_index_is_a_permutation)
     CHECK_EQ(TiledTexelIndex(1, 0, 32, 2), 1u);
 }
 
+TEST(float_texture_formats)
+{
+    TextureFetch t;
+    t.valid = true;
+    t.width = t.height = t.pitch = 1;
+    t.swizzle = 0 | (1 << 3) | (2 << 6) | (3 << 9); // identity
+    // k_16_16_16_16_FLOAT, 8-in-16: halves 1.0 0.5 -2.0 0 big-endian.
+    t.format = 32;
+    t.endian = 1;
+    const uint8_t halves[8] = { 0x3C, 0x00, 0x38, 0x00, 0xC0, 0x00, 0x00, 0x00 };
+    std::vector<float> f = ConvertTextureFloat(t, halves);
+    CHECK(f[0] == 1.0f && f[1] == 0.5f && f[2] == -2.0f && f[3] == 0.0f);
+    // k_32_FLOAT, 8-in-32: 0.25; missing channels 0 0 1, swizzle .xxx1 broadcast.
+    t.format = 36;
+    t.endian = 2;
+    const uint8_t one[4] = { 0x3E, 0x80, 0x00, 0x00 };
+    f = ConvertTextureFloat(t, one);
+    CHECK(f[0] == 0.25f && f[1] == 0.0f && f[3] == 1.0f);
+    t.swizzle = 0 | (0 << 3) | (0 << 6) | (5 << 9);
+    f = ConvertTextureFloat(t, one);
+    CHECK(f[1] == 0.25f && f[2] == 0.25f && f[3] == 1.0f);
+    CHECK(IsFloatTextureFormat(38) && !IsFloatTextureFormat(6));
+    CHECK_EQ(TextureElementBytes(38), 16u);
+}
+
 TEST(topology_and_index_swap)
 {
     CHECK_EQ(HostTopology(4), 4u);

@@ -62,7 +62,7 @@ struct TextureFetch
 TextureFetch DecodeTextureFetch(const RegisterFile& regs, uint32_t slot);
 
 // Bytes per element (texel, or 4x4 block for DXT) for the formats ConvertTexture supports
-// (k_8, k_8_8_8_8, DXT1, DXT2_3, DXT4_5); 0 = unsupported.
+// (k_8, k_8_8_8_8, DXT1, DXT2_3, DXT4_5) and IsFloatTextureFormat ones; 0 = unsupported.
 uint32_t TextureElementBytes(uint32_t format);
 // Guest bytes the texture occupies (tiled: 32x32 elements aligned).
 uint32_t TextureGuestBytes(const TextureFetch& t);
@@ -70,6 +70,12 @@ uint32_t TextureGuestBytes(const TextureFetch& t);
 uint32_t TiledTexelIndex(uint32_t x, uint32_t y, uint32_t pitch, uint32_t log2Bpp);
 // Guest texture bytes (big-endian, as in memory) -> width*height RGBA8 with endian + swizzle applied.
 std::vector<uint32_t> ConvertTexture(const TextureFetch& t, const uint8_t* guest);
+// 16-bit (16, 16_16, 16_16_16_16 unorm; 16_FLOAT x1/2/4) and 32-bit float (x1/2/4) formats:
+// converted by ConvertTextureFloat to width*height RGBA32F instead.
+bool IsFloatTextureFormat(uint32_t format);
+// IEEE half (low 16 bits) -> float.
+float HalfToFloat(uint32_t h);
+std::vector<float> ConvertTextureFloat(const TextureFetch& t, const uint8_t* guest);
 
 // RB_BLENDCONTROL0 (0x2201), RB_COLOR_MASK (0x2104, RT0) and RB_BLEND_RED..ALPHA (0x2105-0x2108)
 // as D3D11_BLEND / D3D11_BLEND_OP values. enable is false for a plain overwrite (ONE, ZERO, ADD).

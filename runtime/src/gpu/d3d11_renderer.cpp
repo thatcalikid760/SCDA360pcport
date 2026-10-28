@@ -273,6 +273,8 @@ static bool WriteBmp(const std::string& path, std::vector<uint32_t> texels, uint
 
 static const uint8_t* PhysicalPtr(uint32_t physical) { return (const uint8_t*)GuestPtr(GuestPhysical(physical)); }
 
+static uint32_t ToUnorm8(float v) { return uint32_t(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); }
+
 // Garbage registers must not allocate targets without bound (each is several MB).
 constexpr size_t kMaxEdramTargets = 64;
 
@@ -499,7 +501,12 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs)
             const uint8_t* guest = PhysicalPtr(t.physical);
             if (GuestRangeReadable(guest, TextureGuestBytes(t)))
             {
-                std::vector<uint32_t> texels = ConvertTexture(t, guest);
+                const bool isFloat = IsFloatTextureFormat(t.format);
+                std::vector<float> floats = isFloat ? ConvertTextureFloat(t, guest) : std::vector<float>();
+                std::vector<uint32_t> texels = isFloat ? std::vector<uint32_t>() : ConvertTexture(t, guest);
+                if (isFloat && getenv("SCDA_DUMP_TEXTURES")) // RGBA8 copy for the dump only
+                    for (size_t i = 0; i < floats.size(); i += 4)
+                        texels.push_back(ToUnorm8(floats[i]) | (ToUnorm8(floats[i + 1]) << 8) | (ToUnorm8(floats[i + 2]) << 16) | (ToUnorm8(floats[i + 3]) << 24));
                 // SCDA_DUMP_TEXTURES=<dir>: each converted texture once, as <physical>_<format>_<w>x<h>.bmp.
                 static const char* dumpDir = getenv("SCDA_DUMP_TEXTURES");
                 static std::unordered_set<uint64_t> dumped;
@@ -519,11 +526,11 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs)
                 td.Width = t.width;
                 td.Height = t.height;
                 td.MipLevels = td.ArraySize = 1;
-                td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+                td.Format = isFloat ? DXGI_FORMAT_R32G32B32A32_FLOAT : DXGI_FORMAT_R8G8B8A8_UNORM;
                 td.SampleDesc.Count = 1;
                 td.Usage = D3D11_USAGE_IMMUTABLE;
                 td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-                D3D11_SUBRESOURCE_DATA init{ texels.data(), t.width * 4, 0 };
+                D3D11_SUBRESOURCE_DATA init{ isFloat ? (const void*)floats.data() : texels.data(), t.width * (isFloat ? 16 : 4), 0 };
                 ComPtr<ID3D11Texture2D> tex;
                 if (SUCCEEDED(m_device->CreateTexture2D(&td, &init, &tex)))
                     m_device->CreateShaderResourceView(tex.Get(), nullptr, &srv);
@@ -825,15 +832,6 @@ void D3D11Renderer::Present(const Frame& frame)
         }
         queue->ClearStoredMessages();
     }
-}
-
-static uint32_t ToUnorm8(float v) { return uint32_t(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); }
-
-static float HalfToFloat(uint16_t h)
-{
-    const uint32_t e = (h >> 10) & 0x1F, m = h & 0x3FF;
-    const float v = e == 0 ? std::ldexp(float(m), -24) : e == 31 ? (m ? NAN : INFINITY) : std::ldexp(1.0f + float(m) / 1024.0f, int(e) - 15);
-    return (h & 0x8000) ? -v : v;
 }
 
 // One host texel as RGBA8 (float formats clamped to [0, 1]; R32 / R32G32 as grey / red-green).
