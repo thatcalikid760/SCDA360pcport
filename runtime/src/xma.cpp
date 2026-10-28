@@ -258,12 +258,13 @@ SCDA_IMPORT(XMAReleaseContext)
 SCDA_IMPORT(XMAInitializeContext)
 {
     uint32_t c = ctx.r3.u32, init = ctx.r4.u32;
+    // The first inits, and every one that asks for a loop (shortcut: loops are not played).
     static int dumps;
-    if (dumps++ < 8)
+    if (dumps++ < 8 || GuestLoad32(init + 48) || g_base[init + 52])
     {
-        char line[200];
+        char line[256];
         int n = snprintf(line, sizeof(line), "[xma] init 0x%08X:", init);
-        for (uint32_t i = 0; i < 0x30; i += 4)
+        for (uint32_t i = 0; i < 0x38; i += 4)
             n += snprintf(line + n, sizeof(line) - n, " %08X", GuestLoad32(init + i));
         RuntimeLog("%s\n", line);
     }
