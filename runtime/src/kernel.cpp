@@ -40,6 +40,9 @@ static uint32_t AddHandle(HANDLE host)
     return h;
 }
 
+// A guest handle for a host waitable object created outside this file (XAM notify listeners).
+uint32_t KernelAddHandle(HANDLE host) { return AddHandle(host); }
+
 static HANDLE HostHandle(uint32_t guest)
 {
     std::lock_guard lock(g_objMutex);

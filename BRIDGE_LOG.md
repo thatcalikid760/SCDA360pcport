@@ -38,3 +38,8 @@
 - **Q:** Bridge test. Max 2 lines: XEX2 optional header keys for import libraries and execution info, hex.
 - **Files:** -
 - **A:** `XEX_HEADER_IMPORTS`: `0x000103FF` (var-sized import library descriptor list) `XEX_HEADER_EXECUTION_INFO`: `0x00020100` (fixed-size struct: media ID, title ID, base/entry versions)
+
+## 2026-10-27 21:54:05 via error
+- **Q:** Xbox 360 XAM: give exact big-endian layout of X_USER_READ_PROFILE_SETTINGS header and X_USER_PROFILE_SETTING (size 40?) as used by XamUserReadProfileSettings in Xenia: field offsets for source/from, user_index/xuid union, setting_id, X_USER_DATA (type byte offset, value offset). Also: is the 9th arg
+- **Files:** -
+- **A:** Gemini API gemini-3.8-flash HTTP 503: { "error": { "code": 503, "message": "This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.", "status": "UNAVAILABLE" } }

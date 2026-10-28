@@ -166,3 +166,63 @@ TEST(ex_create_thread_applies_affinity_to_pcr_processor)
     __imp__NtWaitForSingleObjectEx(w, g_base);
     CHECK_EQ(g_threadCpu.load(), 3);
 }
+
+// The first system listener gets the startup notifications (XN_SYS_UI on/off, XN_SYS_SIGNINCHANGED
+// x2 with user mask 1); XNotifyGetNext drains them in order, honouring a match id.
+TEST(notify_listener_gets_startup_signin)
+{
+    TestGuestBase();
+    PPCContext c{};
+    c.r3.u64 = 3; // XNOTIFY_SYSTEM | XNOTIFY_LIVE
+    __imp__XamNotifyCreateListener(c, g_base);
+    uint32_t h = c.r3.u32;
+    CHECK(h != 0);
+    auto next = [&](uint32_t match) {
+        PPCContext n{};
+        n.r3.u64 = h; n.r4.u64 = match; n.r5.u64 = 0x40700200; n.r6.u64 = 0x40700204;
+        __imp__XNotifyGetNext(n, g_base);
+        return n.r3.u32;
+    };
+    CHECK_EQ(next(0xA), 1u); // match skips the two XN_SYS_UI entries
+    CHECK_EQ(GuestLoad32(0x40700200), 0xAu);
+    CHECK_EQ(GuestLoad32(0x40700204), 1u);
+    CHECK_EQ(next(0), 1u);
+    CHECK_EQ(GuestLoad32(0x40700200), 9u);
+    CHECK_EQ(GuestLoad32(0x40700204), 1u);
+    CHECK_EQ(next(0), 1u);
+    CHECK_EQ(GuestLoad32(0x40700204), 0u);
+    CHECK_EQ(next(0), 1u);
+    CHECK_EQ(GuestLoad32(0x40700200), 0xAu);
+    CHECK_EQ(next(0), 0u);
+    // Startup notifications go to the first system listener only.
+    c.r3.u64 = 3;
+    __imp__XamNotifyCreateListener(c, g_base);
+    h = c.r3.u32;
+    CHECK_EQ(next(0), 0u);
+}
+
+// XamShowSigninUI broadcasts UI on, sign-in changed, UI off to system listeners.
+TEST(signin_ui_broadcasts_signin_changed)
+{
+    TestGuestBase();
+    PPCContext c{};
+    c.r3.u64 = 1; // XNOTIFY_SYSTEM
+    __imp__XamNotifyCreateListener(c, g_base);
+    uint32_t h = c.r3.u32;
+    PPCContext drain{};
+    do
+    {
+        drain = PPCContext{};
+        drain.r3.u64 = h; drain.r5.u64 = 0x40700300; drain.r6.u64 = 0x40700304;
+        __imp__XNotifyGetNext(drain, g_base);
+    } while (drain.r3.u32);
+    PPCContext ui{};
+    ui.r3.u64 = 1;
+    __imp__XamShowSigninUI(ui, g_base);
+    CHECK_EQ(ui.r3.u32, 0u);
+    PPCContext n{};
+    n.r3.u64 = h; n.r4.u64 = 0xA; n.r5.u64 = 0x40700300; n.r6.u64 = 0x40700304;
+    __imp__XNotifyGetNext(n, g_base);
+    CHECK_EQ(n.r3.u32, 1u);
+    CHECK_EQ(GuestLoad32(0x40700304), 1u);
+}
