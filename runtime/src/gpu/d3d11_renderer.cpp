@@ -101,7 +101,7 @@ struct DrawResources
     // Fixed-function state by the registers it is built from.
     std::unordered_map<uint64_t, ComPtr<ID3D11BlendState>> blend;
     std::unordered_map<uint32_t, ComPtr<ID3D11RasterizerState>> raster;
-    std::unordered_map<uint32_t, ComPtr<ID3D11DepthStencilState>> depthStates;
+    std::unordered_map<uint64_t, ComPtr<ID3D11DepthStencilState>> depthStates;
     std::unordered_map<uint64_t, ComPtr<ID3D11SamplerState>> samplers;
     // Per frame: guest ranges already uploaded, textures by fetch constant.
     std::unordered_map<uint64_t, uint32_t> uploaded; // range key -> Frame::memory snapshot in the buffer
@@ -453,18 +453,24 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs)
     m_context->RSSetState(raster.Get());
 
     HostDepthStencil z = DecodeDepthStencil(regs);
-    auto& depth = r.depthStates[uint32_t(z.depthEnable) | (uint32_t(z.depthWrite) << 1) | (z.depthFunc << 2)];
+    auto& depth = r.depthStates[(uint64_t(regs[0x2200]) << 16) | (z.stencilEnable ? (regs[0x210D] >> 8) & 0xFFFF : 0)];
     if (!depth)
     {
         D3D11_DEPTH_STENCIL_DESC dd{};
         dd.DepthEnable = z.depthEnable;
         dd.DepthWriteMask = z.depthWrite ? D3D11_DEPTH_WRITE_MASK_ALL : D3D11_DEPTH_WRITE_MASK_ZERO;
         dd.DepthFunc = D3D11_COMPARISON_FUNC(z.depthFunc);
-        // shortcut: stencil off; RB_DEPTHCONTROL stencil func/ops and RB_STENCILREFMASK are not decoded.
-        dd.StencilEnable = FALSE;
+        dd.StencilEnable = z.stencilEnable;
+        dd.StencilReadMask = z.readMask;
+        dd.StencilWriteMask = z.writeMask;
+        auto face = [](const HostStencilFace& f) {
+            return D3D11_DEPTH_STENCILOP_DESC{D3D11_STENCIL_OP(f.fail), D3D11_STENCIL_OP(f.depthFail), D3D11_STENCIL_OP(f.pass), D3D11_COMPARISON_FUNC(f.func)};
+        };
+        dd.FrontFace = face(z.front);
+        dd.BackFace = face(z.back);
         m_device->CreateDepthStencilState(&dd, &depth);
     }
-    m_context->OMSetDepthStencilState(depth.Get(), 0);
+    m_context->OMSetDepthStencilState(depth.Get(), z.ref);
 
     // Textures: every texture fetch constant the stages might sample (the shader's slots are not
     // known here), converted on the CPU once per frame.

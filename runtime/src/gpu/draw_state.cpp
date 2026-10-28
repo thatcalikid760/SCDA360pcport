@@ -418,6 +418,17 @@ HostDepthStencil DecodeDepthStencil(const RegisterFile& r)
         d.depthWrite = (c >> 2) & 1;
         d.depthFunc = ((c >> 4) & 7) + 1;
     }
+    if (d.stencilEnable)
+    {
+        auto face = [](uint32_t f) { return HostStencilFace{(f & 7) + 1, ((f >> 3) & 7) + 1, ((f >> 6) & 7) + 1, ((f >> 9) & 7) + 1}; };
+        d.front = face(c >> 8);
+        d.back = (c & 0x80) ? face(c >> 20) : d.front;
+        // shortcut: D3D11 has one ref/mask for both faces; RB_STENCILREFMASK_BF (0x210C) is ignored.
+        const uint32_t m = r[0x210D];
+        d.ref = uint8_t(m);
+        d.readMask = uint8_t(m >> 8);
+        d.writeMask = uint8_t(m >> 16);
+    }
     return d;
 }
 

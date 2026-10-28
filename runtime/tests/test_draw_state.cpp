@@ -285,6 +285,30 @@ TEST(depth_stencil_from_registers)
     CHECK_EQ(DecodeDepthStencil(r).depthFunc, 1u);
 }
 
+// Stencil: func bits 8-10, fail 11-13, zpass 14-16, zfail 17-19; bit 7 + bits 20-31 back face.
+TEST(stencil_from_registers)
+{
+    RegisterFile r;
+    r.Set(0x210D, 0x00FF0F80); // ref 0x80, mask 0x0F, write mask 0xFF
+    r.Set(0x2200, 0x1 | (7u << 8) | (6u << 14) | (2u << 17)); // ALWAYS, zpass INCR_WRAP, zfail REPLACE
+    HostDepthStencil d = DecodeDepthStencil(r);
+    CHECK(d.stencilEnable);
+    CHECK_EQ(d.front.func, 8u);
+    CHECK_EQ(d.front.fail, 1u);      // KEEP
+    CHECK_EQ(d.front.pass, 7u);      // D3D11_STENCIL_OP_INCR
+    CHECK_EQ(d.front.depthFail, 3u); // REPLACE
+    CHECK_EQ(d.back.pass, 7u);       // no bit 7: back = front
+    CHECK_EQ(d.ref, 0x80u);
+    CHECK_EQ(d.readMask, 0x0Fu);
+    CHECK_EQ(d.writeMask, 0xFFu);
+
+    r.Set(0x2200, 0x1 | 0x80 | (7u << 8) | (2u << 20) | (7u << 26)); // back: EQUAL, zpass DECR_WRAP
+    d = DecodeDepthStencil(r);
+    CHECK_EQ(d.back.func, 3u);
+    CHECK_EQ(d.back.pass, 8u);
+    CHECK_EQ(d.front.pass, 1u);
+}
+
 // Texture fetch constant clamp_x/y/z (dword 0 bits 10-18) and filters (dword 3) -> D3D11 sampler.
 TEST(sampler_from_fetch_constant)
 {

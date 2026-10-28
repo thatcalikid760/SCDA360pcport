@@ -88,10 +88,18 @@ struct HostBlend
 HostBlend DecodeBlend(const RegisterFile& regs);
 // RB_DEPTHCONTROL (0x2200) as D3D11 depth state: bit 1 z test, bit 2 z write, bits 4-6 zfunc
 // (Xenos 0 never..7 always = D3D11_COMPARISON_FUNC - 1), bit 0 stencil. z test off: no test, no write.
+// Stencil: bits 8-19 front func/fail/zpass/zfail, bit 7 separate back face, bits 20-31 back face.
+// Xenos ops 0 keep..7 decr wrap = D3D11_STENCIL_OP - 1. RB_STENCILREFMASK (0x210D): ref, mask, write mask.
+struct HostStencilFace
+{
+    uint32_t func = 8, fail = 1, pass = 1, depthFail = 1;
+};
 struct HostDepthStencil
 {
     bool depthEnable = false, depthWrite = false, stencilEnable = false;
     uint32_t depthFunc = 8;
+    HostStencilFace front, back;
+    uint8_t ref = 0, readMask = 0xFF, writeMask = 0xFF;
 };
 HostDepthStencil DecodeDepthStencil(const RegisterFile& regs);
 // PA_SU_SC_MODE_CNTL (0x2205): D3D11_CULL_MODE (1 none, 2 front, 3 back); front face winding.
