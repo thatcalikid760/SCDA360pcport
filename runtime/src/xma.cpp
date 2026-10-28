@@ -91,6 +91,8 @@ void CloseDecode(Decode& d)
     d.pcmRead = 0;
 }
 
+void Trace(const char* what, uint32_t c, uint32_t lr);
+
 // Decodes the next packet of the current input buffer into d.pcm. False when no input is valid
 // or there is no decoder (the context then keeps its input, as if the hardware stalled).
 bool DecodePacket(uint32_t c, Decode& d)
@@ -136,6 +138,7 @@ bool DecodePacket(uint32_t c, Decode& d)
                     Set(c, kLoopCount, loops - 1);
                 Set(c, kReadOffset, loopStart * kPacketBits + kPacketHeaderBits);
                 scda_xma_reset(d.stream);
+                Trace("loop", c, 0);
                 return true;
             }
         }
@@ -210,7 +213,7 @@ void Trace(const char* what, uint32_t c, uint32_t lr)
 {
     static const bool on = getenv("SCDA_TRACE_XMA") != nullptr;
     static int lines;
-    if (!on || lines++ > 20000)
+    if (!on || (lines++ > 20000 && strcmp(what, "loop"))) // loop events are rare: always logged
         return;
     RuntimeLog("[xma] %-22s #%d en=%d in0 %d/%u in1 %d/%u rd=%u out %d blk=%u w=%u r=%u loop %u [%u,%u) "
                "sub %u/%u lr=0x%08X\n",
