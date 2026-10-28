@@ -1086,3 +1086,20 @@ PPC_FUNC(sub_823FD1F0)
     if (Enabled() && int32_t(ctx.r3.u32) < 0)
         fprintf(stderr, "[dare] freq FAILED %08X\n", ctx.r3.u32);
 }
+
+// sub_825632A0(fmt, ...): game error log after failed XAudio calls; printed with its guest string.
+namespace
+{
+const char* GuestString(uint8_t* base, uint32_t a)
+{
+    return a >= 0x82000000 && a < 0x83300000 ? reinterpret_cast<const char*>(base + a) : "?";
+}
+} // namespace
+extern "C" PPC_FUNC(__imp__sub_825632A0);
+PPC_FUNC(sub_825632A0)
+{
+    if (Enabled())
+        fprintf(stderr, "[dare] error \"%s\" r4 %08X lr %08X\n", GuestString(base, ctx.r3.u32), ctx.r4.u32,
+                uint32_t(ctx.lr));
+    __imp__sub_825632A0(ctx, base);
+}
