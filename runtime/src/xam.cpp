@@ -1,12 +1,14 @@
 // XAM enumerators, XMsg requests and XOVERLAPPED completion. Semantics follow Xenia (BSD).
-// shortcut: no content/devices exist yet, so enumerations return no items and XMsg requests
-// succeed without doing anything.
+// shortcut: XMsg requests succeed without doing anything. Content enumerators (content.cpp) return
+// their items; any other enumeration returns none.
 #include <windows.h>
+#include <algorithm>
 #include <cstring>
 #include <deque>
 #include <mutex>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 #include <runtime.h>
 
 bool KernelSetEvent(uint32_t handle);
@@ -15,11 +17,17 @@ uint32_t KernelAddHandle(HANDLE host);
 constexpr uint32_t kErrorSuccess = 0, kErrorNoMoreFiles = 18, kErrorIoPending = 997, kErrorInvalidHandle = 6;
 
 static std::mutex g_enumMutex;
-static std::unordered_map<uint32_t, uint32_t> g_enumerators; // handle -> private structure
+struct Enumerator
+{
+    uint32_t priv = 0;           // XamCreateEnumeratorHandle private structure
+    std::vector<uint8_t> items;  // guest-layout records handed out by XamEnumerate
+    uint32_t itemSize = 0, perCall = 0, next = 0;
+};
+static std::unordered_map<uint32_t, Enumerator> g_enumerators;
 static uint32_t g_nextEnum = 0xE0000000;
 
 // XOVERLAPPED: InternalLow (result) @0, InternalHigh (length) @4, InternalContext @8, hEvent @0xC.
-static void CompleteOverlapped(uint32_t ov, uint32_t result, uint32_t length)
+void CompleteOverlapped(uint32_t ov, uint32_t result, uint32_t length)
 {
     GuestStore32(ov + 0, result);
     GuestStore32(ov + 4, length);
@@ -36,7 +44,7 @@ SCDA_IMPORT(XamCreateEnumeratorHandle)
     {
         std::lock_guard lock(g_enumMutex);
         handle = g_nextEnum += 4;
-        g_enumerators[handle] = priv;
+        g_enumerators[handle].priv = priv;
     }
     GuestStore32(out, handle);
     ctx.r3.u64 = kErrorSuccess;
@@ -52,23 +60,52 @@ SCDA_IMPORT(XamGetPrivateEnumStructureFromHandle)
         ctx.r3.u64 = kErrorInvalidHandle;
         return;
     }
-    GuestStore32(ctx.r4.u32, it->second);
+    GuestStore32(ctx.r4.u32, it->second.priv);
     ctx.r3.u64 = kErrorSuccess;
 }
 
-// XamEnumerate(Handle, Flags, Buffer, BufferSize, u32* ItemsReturned, XOVERLAPPED*)
+// Enumerator over itemSize-byte records, perCall of them per XamEnumerate.
+uint32_t XamCreateItemEnumerator(std::vector<uint8_t> items, uint32_t itemSize, uint32_t perCall)
+{
+    std::lock_guard lock(g_enumMutex);
+    uint32_t handle = g_nextEnum += 4;
+    Enumerator& e = g_enumerators[handle];
+    e.items = std::move(items);
+    e.itemSize = itemSize;
+    e.perCall = perCall ? perCall : 1;
+    return handle;
+}
+
+// XamEnumerate(Handle, Flags, Buffer, BufferSize, u32* ItemsReturned, XOVERLAPPED*): copies the
+// next records that fit; ERROR_NO_MORE_FILES once none are left.
 SCDA_IMPORT(XamEnumerate)
 {
-    uint32_t items = ctx.r7.u32, ov = ctx.r8.u32;
+    uint32_t buffer = ctx.r5.u32, size = ctx.r6.u32, items = ctx.r7.u32, ov = ctx.r8.u32, count = 0;
+    {
+        std::lock_guard lock(g_enumMutex);
+        auto it = g_enumerators.find(ctx.r3.u32);
+        if (it != g_enumerators.end() && it->second.itemSize)
+        {
+            Enumerator& e = it->second;
+            uint32_t left = uint32_t(e.items.size() / e.itemSize) - e.next;
+            count = std::min({ left, e.perCall, size / e.itemSize });
+            if (buffer && count)
+                memcpy(g_base + buffer, e.items.data() + size_t(e.next) * e.itemSize, size_t(count) * e.itemSize);
+            else
+                count = 0;
+            e.next += count;
+        }
+    }
+    uint32_t result = count ? kErrorSuccess : kErrorNoMoreFiles;
     if (items)
-        GuestStore32(items, 0);
+        GuestStore32(items, count);
     if (ov)
     {
-        CompleteOverlapped(ov, kErrorNoMoreFiles, 0);
+        CompleteOverlapped(ov, result, count);
         ctx.r3.u64 = kErrorIoPending;
         return;
     }
-    ctx.r3.u64 = kErrorNoMoreFiles;
+    ctx.r3.u64 = result;
 }
 
 // XMsgStartIORequest(App, Message, XOVERLAPPED*, Buffer, BufferSize)
@@ -228,7 +265,7 @@ SCDA_IMPORT(XamNotifyCreateListener)
 }
 
 // Queues a notification on every listener whose mask covers its area (id bits 16-24).
-static void BroadcastNotification(uint32_t id, uint32_t param)
+void BroadcastNotification(uint32_t id, uint32_t param)
 {
     std::lock_guard lock(g_notifyMutex);
     for (auto& [handle, l] : g_listeners)

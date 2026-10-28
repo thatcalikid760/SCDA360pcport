@@ -31,6 +31,7 @@ uint8_t* g_base;
 
 void InitDataImports();
 extern std::string g_gameDir;
+extern std::string g_contentDir;
 
 static FILE* g_log;
 
@@ -319,6 +320,9 @@ int main(int argc, char** argv)
     std::string defaultImage = std::string(exeDir) + "\\game\\SC4_Offline.img";
     const char* imagePath = argc > 1 ? argv[1] : defaultImage.c_str();
     g_gameDir = std::string(imagePath).substr(0, std::string(imagePath).find_last_of("\\/"));
+    // Saves: %LOCALAPPDATA%\SCDARecomp\content (falls back to <exe dir>\content).
+    const char* localAppData = getenv("LOCALAPPDATA");
+    g_contentDir = (localAppData ? std::string(localAppData) + "\\SCDARecomp" : std::string(exeDir)) + "\\content";
     g_log = fopen((std::string(exeDir) + "\\scda.log").c_str(), "w");
     AddVectoredExceptionHandler(1, CrashHandler);
 

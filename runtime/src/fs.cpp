@@ -1,4 +1,5 @@
-// File system HLE: maps guest paths (game:\, d:\, \Device\Cdrom0\) onto <exe dir>\game.
+// File system HLE: maps guest paths (game:\, d:\, \Device\Cdrom0\) onto <exe dir>\game, and
+// mounted roots (XamContentCreateEx, "save:\") onto their host folders.
 // Struct layouts: OBJECT_ATTRIBUTES {RootDirectory, ObjectName*, Attributes},
 // ANSI_STRING {u16 Length, u16 MaximumLength, u32 Buffer}, IO_STATUS_BLOCK {Status, Information}.
 #include <windows.h>
@@ -31,6 +32,28 @@ struct DirScan
 };
 static std::unordered_map<uint32_t, DirScan> g_scans;
 static uint32_t g_nextHandle = 0x1000;
+static std::unordered_map<std::string, std::string> g_roots; // lower-case root name -> host dir
+
+static std::string RootKey(std::string name)
+{
+    while (!name.empty() && name.back() == ':')
+        name.pop_back();
+    for (char& c : name)
+        c = char(tolower((unsigned char)c));
+    return name;
+}
+
+void FsMountRoot(const std::string& name, const std::string& hostDir)
+{
+    std::lock_guard lock(g_fileMutex);
+    g_roots[RootKey(name)] = hostDir;
+}
+
+bool FsUnmountRoot(const std::string& name)
+{
+    std::lock_guard lock(g_fileMutex);
+    return g_roots.erase(RootKey(name)) != 0;
+}
 
 // SCDA_TRACE_FS: large reads, re-checked against the file by FsVerifyReads (crash handler).
 struct BigRead
@@ -51,6 +74,7 @@ void FsReset()
     g_paths.clear();
     g_scans.clear();
     g_bigReads.clear();
+    g_roots.clear();
 }
 
 void FsVerifyReads()
@@ -95,15 +119,23 @@ static std::string GuestPath(uint32_t objectAttributes)
 
 static std::string HostPath(const std::string& guest)
 {
-    std::string rel = guest;
-    size_t colon = rel.find(":\\");
-    if (colon != std::string::npos)
-        rel = rel.substr(colon + 2);
+    std::string rel = guest, dir = g_gameDir;
+    size_t colon = rel.find(':');
+    if (colon != std::string::npos && (colon + 1 == rel.size() || rel[colon + 1] == '\\'))
+    {
+        {
+            std::lock_guard lock(g_fileMutex);
+            auto it = g_roots.find(RootKey(rel.substr(0, colon)));
+            if (it != g_roots.end())
+                dir = it->second;
+        }
+        rel = rel.substr(colon + 1);
+    }
     else if (!_strnicmp(rel.c_str(), "\\Device\\Cdrom0\\", 15))
         rel = rel.substr(15);
     while (!rel.empty() && rel[0] == '\\')
         rel.erase(0, 1);
-    return g_gameDir + "\\" + rel;
+    return dir + "\\" + rel;
 }
 
 static void SetIoStatus(uint32_t iosb, uint32_t status, uint32_t info)

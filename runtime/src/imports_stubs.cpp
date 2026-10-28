@@ -19,15 +19,7 @@ SCDA_IMPORT(NetDll_sendto) { ImportStub("NetDll_sendto", ctx); }
 SCDA_IMPORT(NetDll_inet_addr) { ImportStub("NetDll_inet_addr", ctx); }
 SCDA_IMPORT(NetDll_WSAGetLastError) { ImportStub("NetDll_WSAGetLastError", ctx); }
 SCDA_IMPORT(XamUserCreateAchievementEnumerator) { ImportStub("XamUserCreateAchievementEnumerator", ctx); }
-SCDA_IMPORT(XamShowDeviceSelectorUI) { ImportStub("XamShowDeviceSelectorUI", ctx); }
 SCDA_IMPORT(XamShowDirtyDiscErrorUI) { ImportStub("XamShowDirtyDiscErrorUI", ctx); }
-SCDA_IMPORT(XamContentCreateEx) { ImportStub("XamContentCreateEx", ctx); }
-SCDA_IMPORT(XamContentDelete) { ImportStub("XamContentDelete", ctx); }
-SCDA_IMPORT(XamContentClose) { ImportStub("XamContentClose", ctx); }
-SCDA_IMPORT(XamContentGetCreator) { ImportStub("XamContentGetCreator", ctx); }
-SCDA_IMPORT(XamContentCreateEnumerator) { ImportStub("XamContentCreateEnumerator", ctx); }
-SCDA_IMPORT(XamContentGetDeviceState) { ImportStub("XamContentGetDeviceState", ctx); }
-SCDA_IMPORT(XamContentGetDeviceData) { ImportStub("XamContentGetDeviceData", ctx); }
 SCDA_IMPORT(XamShowMessageBoxUIEx) { ImportStub("XamShowMessageBoxUIEx", ctx); }
 SCDA_IMPORT(XGetLanguage) { ImportStub("XGetLanguage", ctx); }
 SCDA_IMPORT(XGetAVPack) { ImportStub("XGetAVPack", ctx); }
