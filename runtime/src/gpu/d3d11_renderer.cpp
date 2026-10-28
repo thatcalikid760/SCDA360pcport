@@ -687,6 +687,7 @@ void D3D11Renderer::ExecuteResolve(const Resolve& res)
         // earlier resolve's texture (predicated tiling: one 32-row-aligned base per screen tile)
         // is written into that texture at the row the base advanced to.
         // shortcut: the destination keeps the surface's host format; rows only, no x offset in the base.
+        // shortcut: resolved entries are never invalidated, so a stale texture can capture a later base.
         D3D11_TEXTURE2D_DESC sd;
         source->texture->GetDesc(&sd);
         const uint32_t base = res.destBase & 0x1FFFF000;
