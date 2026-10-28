@@ -441,6 +441,12 @@ PPC_FUNC(sub_82A67A00)
                 fprintf(stderr, " %08X", PPC_LOAD_U32(music + r));
         }
         if (mix)
+        {
+            fprintf(stderr, " | 1472:");
+            for (uint32_t r = 1472; r < 1516; r += 4)
+                fprintf(stderr, " %g", f(mix + r));
+        }
+        if (mix)
             fprintf(stderr, " | 1468 %g 1516 %g 1528 %g flags %08X\n", f(mix + 1468), f(mix + 1516), f(mix + 1528),
                     PPC_LOAD_U32(mix + 1424));
         else
@@ -988,3 +994,95 @@ PPC_FUNC(sub_82A66FC0)
     __imp__sub_82A66FC0(ctx, base);
 }
 
+
+// sub_8255F690(voice, emitter): 3D voice update. X3DAudioCalculate (82BCABF8, instance 0x82D420CC,
+// flags 0x21) fills the matrix at *(voice+132), then the matrix is zeroed and either voice+304 (fixed
+// speaker 0-5) gets 1.0 or, at -1, the game's own pan writes FL/FR/SL/SR.
+extern "C" PPC_FUNC(__imp__sub_8255F690);
+PPC_FUNC(sub_8255F690)
+{
+    const uint32_t v = ctx.r3.u32, e = ctx.r4.u32;
+    __imp__sub_8255F690(ctx, base);
+    // emitter+44: send list for 8255E598 (u32 count <= 2, 48-byte entries: +8 dest count, +12 dest ids).
+    static uint32_t s_sends;
+    if (Enabled() && PPC_LOAD_U32(v + 304) == 0xFFFFFFFF && s_sends++ % 200 == 0)
+    {
+        fprintf(stderr, "[dare] 3d sends voice %08X xa %08X:", v, PPC_LOAD_U32(v + 4));
+        for (uint32_t i = 0; i < 28; i++)
+            fprintf(stderr, " %08X", PPC_LOAD_U32(e + 44 + 4 * i));
+        fprintf(stderr, "\n");
+    }
+    static uint32_t s_calls;
+    if (Enabled() && s_calls++ % 200 == 0)
+    {
+        auto f = [&](uint32_t a) {
+            union { uint32_t u; float f; } x{PPC_LOAD_U32(a)};
+            return x.f;
+        };
+        const uint32_t m = PPC_LOAD_U32(v + 132);
+        fprintf(stderr, "[dare] 3d voice %08X spk %d inst %08X %08X matrix", v, int32_t(PPC_LOAD_U32(v + 304)),
+                PPC_LOAD_U32(0x82D420CC), PPC_LOAD_U32(0x82D420D0));
+        for (uint32_t i = 0; m && i < 6; i++)
+            fprintf(stderr, " %.3f", f(m + 4 * i));
+        // voice+128 = dB from 8255D738 (distance of voice+208.. to listener 0x82D42250+24..).
+        constexpr uint32_t l = 0x82D42250;
+        fprintf(stderr, " doppler %g emitter+36 %08X", f(v + 160), PPC_LOAD_U32(e + 36));
+        fprintf(stderr, " dB %g pos (%g %g %g) listener (%g %g %g)\n", f(v + 128), f(v + 208), f(v + 212),
+                f(v + 216), f(l + 24), f(l + 28), f(l + 32));
+    }
+}
+
+// SCDA_SKIP_3DFX=1: skip the 3D voices' environment sends (8255E598) and FX params (8255F558).
+namespace
+{
+bool Skip3dFx()
+{
+    static const bool on = getenv("SCDA_SKIP_3DFX") != nullptr;
+    return on;
+}
+} // namespace
+extern "C" PPC_FUNC(__imp__sub_8255E598);
+PPC_FUNC(sub_8255E598)
+{
+    if (Skip3dFx())
+    {
+        ctx.r3.u64 = 1;
+        return;
+    }
+    __imp__sub_8255E598(ctx, base);
+}
+extern "C" PPC_FUNC(__imp__sub_8255F558);
+PPC_FUNC(sub_8255F558)
+{
+    if (Skip3dFx())
+    {
+        ctx.r3.u64 = 1;
+        return;
+    }
+    __imp__sub_8255F558(ctx, base);
+}
+
+// sub_8255E310(voice, dB, 0, 1): pushes gain * *(voice+132) matrix to the XAudio voice (823FCD50).
+// SCDA_MUTE_FIXED=1 zeroes fixed-speaker voices (voice+304 != -1), =2 zeroes the panned ones.
+extern "C" PPC_FUNC(__imp__sub_8255E310);
+PPC_FUNC(sub_8255E310)
+{
+    static const int mode = getenv("SCDA_MUTE_FIXED") ? atoi(getenv("SCDA_MUTE_FIXED")) : 0;
+    const bool fixed = PPC_LOAD_U32(ctx.r3.u32 + 304) != 0xFFFFFFFF;
+    if (const uint32_t m = PPC_LOAD_U32(ctx.r3.u32 + 132); m && ((mode == 1 && fixed) || (mode == 2 && !fixed)))
+        for (uint32_t i = 0; i < 6; i++)
+            PPC_STORE_U32(m + 4 * i, 0);
+    __imp__sub_8255E310(ctx, base);
+}
+
+// sub_823FD1F0(xa, ratio): IXAudioSourceVoice frequency ratio (vtable +96 on *(xa+76)).
+extern "C" PPC_FUNC(__imp__sub_823FD1F0);
+PPC_FUNC(sub_823FD1F0)
+{
+    static uint32_t s_calls;
+    if (Enabled() && s_calls++ % 100 == 0)
+        fprintf(stderr, "[dare] freq xa %08X ratio %g lr %08X\n", ctx.r3.u32, ctx.f1.f64, uint32_t(ctx.lr));
+    __imp__sub_823FD1F0(ctx, base);
+    if (Enabled() && int32_t(ctx.r3.u32) < 0)
+        fprintf(stderr, "[dare] freq FAILED %08X\n", ctx.r3.u32);
+}
