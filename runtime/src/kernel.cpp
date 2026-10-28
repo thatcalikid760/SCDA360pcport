@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -114,7 +115,7 @@ static void TraceSync(const char* what, PPCContext& ctx, uint32_t handle)
 
 struct ThreadStart
 {
-    uint32_t startup, entry, context, id, stackSize;
+    uint32_t startup, entry, context, id, stackSize, cpu;
 };
 
 static DWORD WINAPI GuestThreadMain(void* p)
@@ -122,7 +123,7 @@ static DWORD WINAPI GuestThreadMain(void* p)
     ThreadStart s = *(ThreadStart*)p;
     delete (ThreadStart*)p;
     auto* ctx = new PPCContext{};
-    InitThreadContext(*ctx, 0, s.id, s.stackSize);
+    InitThreadContext(*ctx, s.cpu, s.id, s.stackSize);
     WatchdogRegisterThread(s.id, ctx);
     // XAPI threads start in the startup thunk: startup(entry, context).
     uint32_t target = s.startup ? s.startup : s.entry;
@@ -140,7 +141,11 @@ SCDA_IMPORT(ExCreateThread)
 {
     static std::atomic<uint32_t> nextId{ 2 };
     uint32_t pHandle = ctx.r3.u32, pId = ctx.r5.u32, flags = ctx.r9.u32;
-    auto* s = new ThreadStart{ ctx.r6.u32, ctx.r7.u32, ctx.r8.u32, nextId++, ctx.r4.u32 };
+    // CreationFlags bits 24-31: processor affinity mask; the PCR reports its lowest processor.
+    // shortcut: host threads are not pinned, and KeSetAffinityThread does not move a thread.
+    uint32_t affinity = flags >> 24;
+    auto* s = new ThreadStart{ ctx.r6.u32, ctx.r7.u32, ctx.r8.u32, nextId++, ctx.r4.u32,
+                               affinity ? uint32_t(std::countr_zero(affinity)) : 0 };
     DWORD hostId;
     HANDLE t = CreateThread(nullptr, 16 * 1024 * 1024, GuestThreadMain, s, (flags & 1) ? CREATE_SUSPENDED : 0, &hostId);
     uint32_t h = AddHandle(t);
@@ -195,7 +200,20 @@ SCDA_IMPORT(ObReferenceObjectByHandle)
 SCDA_IMPORT(ObDereferenceObject) {}
 SCDA_IMPORT(KeSetAffinityThread) { ctx.r3.u64 = 0; }
 SCDA_IMPORT(KeSetBasePriorityThread) { ctx.r3.u64 = 0; }
-SCDA_IMPORT(KeResumeThread) { ctx.r3.u64 = 0; }
+// KeResumeThread(KTHREAD*) -> previous suspend count. The object is the body ObReferenceObjectByHandle
+// handed out, mapped to the host thread.
+SCDA_IMPORT(KeResumeThread)
+{
+    HANDLE h = nullptr;
+    {
+        std::lock_guard lock(g_objMutex);
+        auto it = g_dispatchers.find(ctx.r3.u32);
+        if (it != g_dispatchers.end())
+            h = it->second;
+    }
+    DWORD prev = h ? ResumeThread(h) : 0;
+    ctx.r3.u64 = prev == DWORD(-1) ? 0 : prev;
+}
 
 // KeDelayExecutionThread(Mode, Alertable, Interval*)
 SCDA_IMPORT(KeDelayExecutionThread)
@@ -369,7 +387,12 @@ SCDA_IMPORT(KeWaitForMultipleObjects)
     uint32_t count = ctx.r3.u32;
     HANDLE hs[64];
     for (uint32_t i = 0; i < count && i < 64; i++)
-        hs[i] = DispatcherObject(GuestLoad32(ctx.r4.u32 + i * 4));
+    {
+        uint32_t object = GuestLoad32(ctx.r4.u32 + i * 4);
+        TraceSync(ctx.r5.u32 == 0 ? "kewait-all" : "kewait-any", ctx, object);
+        TraceSync("  type", ctx, g_base[object]);
+        hs[i] = DispatcherObject(object);
+    }
     ctx.r3.u64 = WaitResult(WaitForMultipleObjectsEx(count, hs, ctx.r5.u32 == 0, TimeoutMs(ctx.r9.u32), ctx.r8.u32 != 0));
 }
 

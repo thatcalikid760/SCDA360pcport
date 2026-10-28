@@ -1,5 +1,6 @@
 #include "check.h"
 #include "guest_memory.h"
+#include <atomic>
 #include <cstring>
 #include <string>
 #include <runtime.h>
@@ -111,4 +112,57 @@ TEST(referenced_object_shares_the_handle_event)
     w.r3.u64 = handle; w.r6.u64 = 0x40600210;
     __imp__NtWaitForSingleObjectEx(w, g_base);
     CHECK_EQ(w.r3.u32, 0u); // signalled through the object
+}
+
+// A thread created suspended starts when KeResumeThread is called on its referenced object (the
+// game's ExCreateThread -> ObReferenceObjectByHandle -> KeResumeThread sequence).
+static std::atomic<int> g_resumedRuns;
+static void ResumedEntry(PPCContext&, uint8_t*) { g_resumedRuns++; }
+
+TEST(ke_resume_thread_starts_a_suspended_thread)
+{
+    TestGuestBase();
+    const uint32_t entry = 0x821A0000;
+    PPC_LOOKUP_FUNC(g_base, entry) = ResumedEntry;
+    PPCContext create{};
+    create.r3.u64 = 0x40600300; create.r4.u64 = 0x10000; create.r5.u64 = 0;
+    create.r6.u64 = 0; create.r7.u64 = entry; create.r8.u64 = 0; create.r9.u64 = 1; // CREATE_SUSPENDED
+    __imp__ExCreateThread(create, g_base);
+    uint32_t handle = GuestLoad32(0x40600300);
+    Sleep(20);
+    CHECK_EQ(g_resumedRuns.load(), 0);
+    PPCContext ref{};
+    ref.r3.u64 = handle; ref.r5.u64 = 0x40600304;
+    __imp__ObReferenceObjectByHandle(ref, g_base);
+    PPCContext resume{};
+    resume.r3.u64 = GuestLoad32(0x40600304);
+    __imp__KeResumeThread(resume, g_base);
+    CHECK_EQ(resume.r3.u32, 1u); // previous suspend count
+    PPCContext w{};
+    GuestStore64(0x40600310, uint64_t(-10000000ll)); // 1 s relative
+    w.r3.u64 = handle; w.r6.u64 = 0x40600310;
+    __imp__NtWaitForSingleObjectEx(w, g_base);
+    CHECK_EQ(w.r3.u32, 0u); // thread exited
+    CHECK_EQ(g_resumedRuns.load(), 1);
+}
+
+// ExCreateThread's CreationFlags bits 24-31 are the processor affinity mask; the thread's PCR
+// processor number (PCR+0x10C) is its lowest set bit (the audio workers' barrier depends on it).
+static std::atomic<int> g_threadCpu{ -1 };
+static void CpuEntry(PPCContext& ctx, uint8_t* base) { g_threadCpu = base[ctx.r13.u32 + 0x10C]; }
+
+TEST(ex_create_thread_applies_affinity_to_pcr_processor)
+{
+    TestGuestBase();
+    const uint32_t entry = 0x821A0004;
+    PPC_LOOKUP_FUNC(g_base, entry) = CpuEntry;
+    PPCContext create{};
+    create.r3.u64 = 0x40600320; create.r4.u64 = 0x10000;
+    create.r7.u64 = entry; create.r9.u64 = (1u << 3) << 24; // affinity: processor 3
+    __imp__ExCreateThread(create, g_base);
+    PPCContext w{};
+    GuestStore64(0x40600330, uint64_t(-10000000ll));
+    w.r3.u64 = GuestLoad32(0x40600320); w.r6.u64 = 0x40600330;
+    __imp__NtWaitForSingleObjectEx(w, g_base);
+    CHECK_EQ(g_threadCpu.load(), 3);
 }
