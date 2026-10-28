@@ -46,6 +46,7 @@ add_executable(scda
     src/interrupts.cpp
     src/audio.cpp
     src/xma.cpp
+    src/audio_trace.cpp
     src/memory.cpp
     src/module.cpp
     src/thread_context.cpp
