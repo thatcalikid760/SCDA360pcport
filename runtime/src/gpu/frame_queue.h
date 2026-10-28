@@ -16,8 +16,9 @@ struct Frame
 {
     std::vector<DrawCall> draws;
     std::vector<Resolve> resolves;
-    // Guest vertex ranges the draws fetch, copied when the draw was submitted (MemoryRangeKey ->
-    // bytes as in guest memory): the CPU reuses vertex rings long before the renderer gets here.
+    // Guest vertex and DMA index ranges the draws read, copied when the draw was submitted
+    // (MemoryRangeKey -> bytes as in guest memory): the CPU reuses its rings long before the
+    // renderer gets here. shortcut: first copy of a (range, size) wins within a frame.
     std::unordered_map<uint64_t, std::vector<uint8_t>> vertexData;
     FrameStats stats;
 };

@@ -92,7 +92,7 @@ static void SubmitDraw(DrawCall d)
         Frames().AddResolve(DecodeResolve(*d.regs));
         return;
     }
-    // Snapshot the vertex data now, in stream order (see Frame::vertexData).
+    // Snapshot vertex and index data now, in stream order (see Frame::vertexData).
     if (d.vs)
     {
         std::bitset<96> slots = ShaderVertexFetchSlots(*d.vs);
@@ -105,6 +105,12 @@ static void SubmitDraw(DrawCall d)
             if (GuestRangeReadable(p, range.bytes))
                 Frames().AddVertexData(MemoryRangeKey(range), p, range.bytes);
         }
+    }
+    if (d.source == IndexSource::Dma && d.indexBytes && d.indexBytes <= (16u << 20))
+    {
+        const uint8_t* p = (const uint8_t*)GuestPtr(GuestPhysical(d.indexBase));
+        if (GuestRangeReadable(p, d.indexBytes))
+            Frames().AddVertexData(MemoryRangeKey({ d.indexBase & 0x1FFFFFFF, d.indexBytes }), p, d.indexBytes);
     }
     Frames().AddDraw(std::move(d));
 }

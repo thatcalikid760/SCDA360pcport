@@ -337,15 +337,15 @@ void D3D11Renderer::ExecuteDraw(const DrawCall& d, const Frame& frame)
     m_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY(topology));
     if (d.source == IndexSource::Dma)
     {
-        const uint8_t* guest = PhysicalPtr(d.indexBase);
-        if (!d.indexBytes || !GuestRangeReadable(guest, d.indexBytes))
+        auto data = frame.vertexData.find(MemoryRangeKey({ d.indexBase & 0x1FFFFFFF, d.indexBytes }));
+        if (data == frame.vertexData.end())
         {
             m_lastSkipped++;
             return;
         }
         // shortcut: one immutable index buffer per draw.
         std::vector<uint8_t> indices(d.indexBytes);
-        SwapIndices(guest, d.indexBytes, d.indexEndian, indices.data());
+        SwapIndices(data->second.data(), d.indexBytes, d.indexEndian, indices.data());
         D3D11_BUFFER_DESC bd{};
         bd.ByteWidth = d.indexBytes;
         bd.Usage = D3D11_USAGE_IMMUTABLE;

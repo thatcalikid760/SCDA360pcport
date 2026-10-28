@@ -30,12 +30,13 @@ cbuffer SharedConstants : register(b2)
 uint g_SpecConstants() { return g_SpecConstantsValue; }
 
 // Xenos viewport transform (PA_CL_VTE_CNTL: bits 0-5 scale/offset enables, 8 xy not divided
-// by w, 9 z not divided, 10 w holds 1/w), then window pixels -> host clip space (y down).
+// by w, 9 z not divided, 10 exported w is W itself; clear = it already holds 1/W), then window
+// pixels -> host clip space (y down).
 float4 XenosViewport(float4 p)
 {
     uint vte = g_Vte;
-    float w = (vte & 0x400) ? (p.w != 0.0 ? 1.0 / p.w : 1.0) : p.w;
-    float invW = w != 0.0 ? 1.0 / w : 1.0;
+    float invW = (vte & 0x400) ? (p.w != 0.0 ? 1.0 / p.w : 1.0) : p.w;
+    float w = invW != 0.0 ? 1.0 / invW : 1.0;
     float3 s = p.xyz;
     if (!(vte & 0x100)) s.xy *= invW;
     if (!(vte & 0x200)) s.z *= invW;
