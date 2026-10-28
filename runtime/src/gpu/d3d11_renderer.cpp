@@ -58,8 +58,9 @@ struct DrawResources
     // Fixed-function state by the registers it is built from.
     std::unordered_map<uint64_t, ComPtr<ID3D11BlendState>> blend;
     std::unordered_map<uint32_t, ComPtr<ID3D11RasterizerState>> raster;
+    std::unordered_map<uint64_t, ComPtr<ID3D11SamplerState>> samplers;
     // Per frame: guest ranges already uploaded, textures by fetch constant.
-    std::unordered_set<uint64_t> uploaded;
+    std::unordered_map<uint64_t, uint32_t> uploaded; // range key -> Frame::memory snapshot in the buffer
     std::unordered_map<uint64_t, ComPtr<ID3D11ShaderResourceView>> textures;
     const RegisterFile* lastRegs = nullptr;
     // Resolve copies of the target by guest physical destination; kept across frames (the
@@ -160,7 +161,7 @@ bool D3D11Renderer::CreateDrawResources()
     rd.CullMode = D3D11_CULL_NONE; // blit; draws use state from PA_SU_SC_MODE_CNTL
     rd.DepthClipEnable = TRUE;
     D3D11_SAMPLER_DESC sd{};
-    sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR; // shortcut: fetch constant filter/clamp not applied yet
+    sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR; // blit; draws use samplers from fetch constants
     sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
     sd.MaxLOD = D3D11_FLOAT32_MAX;
     if (FAILED(m_device->CreateRasterizerState(&rd, &r->rasterizer)) || FAILED(m_device->CreateSamplerState(&sd, &r->sampler)))
@@ -205,21 +206,50 @@ void D3D11Renderer::Resize(uint32_t width, uint32_t height)
     CreateBackBufferView();
 }
 
+// Writes RGBA8 texels (row by row) as a top-down 32-bit BMP.
+static bool WriteBmp(const std::string& path, std::vector<uint32_t> texels, uint32_t width, uint32_t height)
+{
+    FILE* f = texels.empty() ? nullptr : fopen(path.c_str(), "wb");
+    if (!f)
+        return false;
+    BITMAPFILEHEADER fh{};
+    BITMAPINFOHEADER ih{};
+    ih.biSize = sizeof(ih);
+    ih.biWidth = width;
+    ih.biHeight = -int32_t(height); // top-down
+    ih.biPlanes = 1;
+    ih.biBitCount = 32;
+    fh.bfType = 0x4D42;
+    fh.bfOffBits = sizeof(fh) + sizeof(ih);
+    fh.bfSize = fh.bfOffBits + uint32_t(texels.size() * 4);
+    for (auto& t : texels) // RGBA -> BGRA
+        t = (t & 0xFF00FF00) | ((t & 0xFF) << 16) | ((t >> 16) & 0xFF);
+    fwrite(&fh, sizeof(fh), 1, f);
+    fwrite(&ih, sizeof(ih), 1, f);
+    fwrite(texels.data(), 4, texels.size(), f);
+    fclose(f);
+    return true;
+}
+
 static const uint8_t* PhysicalPtr(uint32_t physical) { return (const uint8_t*)GuestPtr(GuestPhysical(physical)); }
 
-// Guest vertex memory: uploads the frame's snapshots of the ranges the vertex shader reads, once per frame.
-void D3D11Renderer::UploadVertexMemory(const RegisterFile& regs, const std::bitset<96>& slots, const Frame& frame)
+// Guest vertex memory: uploads the snapshots the draw reads unless that version of the range is
+// already in the buffer (a range the CPU rewrote between draws is uploaded again).
+void D3D11Renderer::UploadVertexMemory(const DrawCall& d, const Frame& frame)
 {
     DrawResources& r = *m_draw;
     constexpr uint32_t kMaxMemory = 512u << 20;
-    for (uint32_t slot = 0; slot < 96; slot++)
+    for (uint32_t index : d.memory)
     {
-        MemoryRange range;
-        if (!slots[slot] || !VertexFetchRange(regs, slot, range) || range.physical + uint64_t(range.bytes) > kMaxMemory)
+        if (index >= frame.memory.size())
             continue;
-        uint64_t key = MemoryRangeKey(range);
-        auto data = frame.vertexData.find(key);
-        if (r.uploaded.count(key) || data == frame.vertexData.end())
+        const Frame::Snapshot& snap = frame.memory[index];
+        MemoryRange range{ uint32_t(snap.key >> 32), uint32_t(snap.key) };
+        if (range.physical + uint64_t(range.bytes) > kMaxMemory)
+            continue;
+        // shortcut: overlapping ranges with different keys do not invalidate each other.
+        auto up = r.uploaded.find(snap.key);
+        if (up != r.uploaded.end() && up->second == index)
             continue;
         uint32_t end = range.physical + range.bytes;
         if (end > r.memoryBytes)
@@ -249,8 +279,8 @@ void D3D11Renderer::UploadVertexMemory(const RegisterFile& regs, const std::bits
             r.memoryBytes = size;
         }
         D3D11_BOX box{ range.physical, 0, 0, end, 1, 1 };
-        m_context->UpdateSubresource(r.memory.Get(), 0, &box, data->second.data(), 0, 0);
-        r.uploaded.insert(key);
+        m_context->UpdateSubresource(r.memory.Get(), 0, &box, snap.bytes.data(), 0, 0);
+        r.uploaded[snap.key] = index;
     }
     ID3D11ShaderResourceView* mem = r.memorySrv.Get();
     m_context->VSSetShaderResources(kHlslMemorySlot, 1, &mem);
@@ -327,6 +357,21 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs)
             if (GuestRangeReadable(guest, TextureGuestBytes(t)))
             {
                 std::vector<uint32_t> texels = ConvertTexture(t, guest);
+                // SCDA_DUMP_TEXTURES=<dir>: each converted texture once, as <physical>_<format>_<w>x<h>.bmp.
+                static const char* dumpDir = getenv("SCDA_DUMP_TEXTURES");
+                static std::unordered_set<uint64_t> dumped;
+                if (dumpDir && dumped.insert(key).second && dumped.size() < 2000)
+                {
+                    char name[96];
+                    snprintf(name, sizeof(name), "\\%08X_%u_%ux%u.bmp", t.physical, t.format, t.width, t.height);
+                    WriteBmp(dumpDir + std::string(name), texels, t.width, t.height);
+                    uint32_t bytes = TextureGuestBytes(t), nonFF = 0;
+                    for (uint32_t i = 0; i < bytes; i++)
+                        nonFF += guest[i] != 0xFF;
+                    RuntimeLog("[tex] %s fetch %08X %08X %08X %08X: %u of %u guest bytes not FF, first %02X%02X%02X%02X\n", name + 1,
+                        regs[kRegFetchConstants + slot * 6], regs[kRegFetchConstants + slot * 6 + 1], regs[kRegFetchConstants + slot * 6 + 2],
+                        regs[kRegFetchConstants + slot * 6 + 3], nonFF, bytes, guest[0], guest[1], guest[2], guest[3]);
+                }
                 D3D11_TEXTURE2D_DESC td{};
                 td.Width = t.width;
                 td.Height = t.height;
@@ -347,6 +392,27 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs)
     }
     for (auto set : { &ID3D11DeviceContext::VSSetShaderResources, &ID3D11DeviceContext::PSSetShaderResources })
         (m_context->*set)(kHlslTex2DSlot, 32, srvs);
+
+    // Samplers s0-s15 from fetch constants 0-15 (the translator indexes samplers by fetch slot & 15).
+    ID3D11SamplerState* samplers[16];
+    for (uint32_t slot = 0; slot < 16; slot++)
+    {
+        HostSampler hs = DecodeSampler(regs, slot);
+        auto& state = r.samplers[(uint64_t(hs.filter) << 24) | (hs.addressU << 16) | (hs.addressV << 8) | hs.addressW];
+        if (!state)
+        {
+            D3D11_SAMPLER_DESC sd{};
+            sd.Filter = D3D11_FILTER(hs.filter);
+            sd.AddressU = D3D11_TEXTURE_ADDRESS_MODE(hs.addressU);
+            sd.AddressV = D3D11_TEXTURE_ADDRESS_MODE(hs.addressV);
+            sd.AddressW = D3D11_TEXTURE_ADDRESS_MODE(hs.addressW);
+            sd.MaxLOD = D3D11_FLOAT32_MAX;
+            m_device->CreateSamplerState(&sd, &state);
+        }
+        samplers[slot] = state ? state.Get() : r.sampler.Get();
+    }
+    m_context->VSSetSamplers(0, 16, samplers);
+    m_context->PSSetSamplers(0, 16, samplers);
 }
 
 void D3D11Renderer::ExecuteDraw(const DrawCall& d, const Frame& frame)
@@ -383,21 +449,20 @@ void D3D11Renderer::ExecuteDraw(const DrawCall& d, const Frame& frame)
         BindRegisterState(*d.regs);
         r.lastRegs = d.regs.get();
     }
-    UploadVertexMemory(*d.regs, ShaderVertexFetchSlots(*d.vs), frame);
+    UploadVertexMemory(d, frame);
     m_context->VSSetShader(vs.Get(), nullptr, 0);
     m_context->PSSetShader(ps.Get(), nullptr, 0);
     m_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY(topology));
     if (d.source == IndexSource::Dma)
     {
-        auto data = frame.vertexData.find(MemoryRangeKey({ d.indexBase & 0x1FFFFFFF, d.indexBytes }));
-        if (data == frame.vertexData.end())
+        if (d.indexSnapshot < 0 || size_t(d.indexSnapshot) >= frame.memory.size())
         {
             m_lastSkipped++;
             return;
         }
         // shortcut: one immutable index buffer per draw.
         std::vector<uint8_t> indices(d.indexBytes);
-        SwapIndices(data->second.data(), d.indexBytes, d.indexEndian, indices.data());
+        SwapIndices(frame.memory[d.indexSnapshot].bytes.data(), d.indexBytes, d.indexEndian, indices.data());
         D3D11_BUFFER_DESC bd{};
         bd.ByteWidth = d.indexBytes;
         bd.Usage = D3D11_USAGE_IMMUTABLE;
@@ -604,25 +669,6 @@ void D3D11Renderer::Dump(const std::string& path, ID3D11Texture2D* source)
 {
     D3D11_TEXTURE2D_DESC td;
     source->GetDesc(&td);
-    std::vector<uint32_t> texels = ReadTarget(m_device, m_context, source);
-    FILE* f = texels.empty() ? nullptr : fopen(path.c_str(), "wb");
-    if (!f)
-        return;
-    BITMAPFILEHEADER fh{};
-    BITMAPINFOHEADER ih{};
-    ih.biSize = sizeof(ih);
-    ih.biWidth = td.Width;
-    ih.biHeight = -int32_t(td.Height); // top-down
-    ih.biPlanes = 1;
-    ih.biBitCount = 32;
-    fh.bfType = 0x4D42;
-    fh.bfOffBits = sizeof(fh) + sizeof(ih);
-    fh.bfSize = fh.bfOffBits + uint32_t(texels.size() * 4);
-    for (auto& t : texels) // RGBA -> BGRA
-        t = (t & 0xFF00FF00) | ((t & 0xFF) << 16) | ((t >> 16) & 0xFF);
-    fwrite(&fh, sizeof(fh), 1, f);
-    fwrite(&ih, sizeof(ih), 1, f);
-    fwrite(texels.data(), 4, texels.size(), f);
-    fclose(f);
-    printf("[d3d11] frame dumped to %s\n", path.c_str());
+    if (WriteBmp(path, ReadTarget(m_device, m_context, source), td.Width, td.Height))
+        printf("[d3d11] frame dumped to %s\n", path.c_str());
 }

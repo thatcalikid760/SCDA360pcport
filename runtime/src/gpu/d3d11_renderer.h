@@ -43,7 +43,7 @@ private:
     void ExecuteDraw(const DrawCall& d, const Frame& frame);
     void ExecuteResolve(const Resolve& r);
     void BindRegisterState(const RegisterFile& regs);
-    void UploadVertexMemory(const RegisterFile& regs, const std::bitset<96>& slots, const Frame& frame);
+    void UploadVertexMemory(const DrawCall& d, const Frame& frame);
     void Blit(ID3D11ShaderResourceView* source);
     void Dump(const std::string& path, ID3D11Texture2D* source);
     HWND m_hwnd = nullptr;

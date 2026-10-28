@@ -48,7 +48,7 @@ bool VertexFetchRange(const RegisterFile& regs, uint32_t slot, MemoryRange& out)
 std::bitset<96> VertexFetchSlots(const std::string& hlsl);
 // True when [p, p + n) is committed, readable host memory (fetch constants can hold garbage).
 bool GuestRangeReadable(const uint8_t* p, size_t n);
-// Key of a guest range in Frame::vertexData.
+// Key of a guest range in Frame::memory snapshots.
 inline uint64_t MemoryRangeKey(const MemoryRange& m) { return (uint64_t(m.physical) << 32) | m.bytes; }
 
 struct TextureFetch
@@ -80,6 +80,14 @@ HostBlend DecodeBlend(const RegisterFile& regs);
 // PA_SU_SC_MODE_CNTL (0x2205): D3D11_CULL_MODE (1 none, 2 front, 3 back); front face winding.
 uint32_t HostCullMode(const RegisterFile& regs);
 bool HostFrontCounterClockwise(const RegisterFile& regs);
+
+// Texture fetch constant addressing (dword 0 clamp_x/y/z) and filtering (dword 3 mag/min/mip)
+// as D3D11_TEXTURE_ADDRESS_MODE / D3D11_FILTER values.
+struct HostSampler
+{
+    uint32_t filter = 0x15, addressU = 1, addressV = 1, addressW = 1;
+};
+HostSampler DecodeSampler(const RegisterFile& regs, uint32_t slot);
 
 // Xenos primitive type -> D3D11_PRIMITIVE_TOPOLOGY value; 0 = not drawn yet (points, rects, fans, quads).
 uint32_t HostTopology(uint32_t primType);

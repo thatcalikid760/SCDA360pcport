@@ -227,3 +227,25 @@ TEST(blend_and_cull_from_registers)
     r.Set(0x2205, 0);
     CHECK_EQ(HostCullMode(r), 1u);
 }
+
+// Texture fetch constant clamp_x/y/z (dword 0 bits 10-18) and filters (dword 3) -> D3D11 sampler.
+TEST(sampler_from_fetch_constant)
+{
+    RegisterFile r;
+    r.Set(kRegFetchConstants + 0, 0x81020002); // clamp x/y = 0: wrap, z = 2 (the menu's glyph pages)
+    r.Set(kRegFetchConstants + 3, 0x00A80C14); // mag/min/mip linear
+    HostSampler s = DecodeSampler(r, 0);
+    CHECK_EQ(s.addressU, 1u);
+    CHECK_EQ(s.addressV, 1u);
+    CHECK_EQ(s.addressW, 3u);
+    CHECK_EQ(s.filter, 0x15u); // MIN_MAG_MIP_LINEAR
+
+    // slot 1: clamp_x 2 (clamp to last texel), clamp_y 1 (mirror), clamp_z 6 (border); all point
+    r.Set(kRegFetchConstants + 6, 2 | (2u << 10) | (1u << 13) | (6u << 16));
+    r.Set(kRegFetchConstants + 9, 0);
+    s = DecodeSampler(r, 1);
+    CHECK_EQ(s.addressU, 3u);
+    CHECK_EQ(s.addressV, 2u);
+    CHECK_EQ(s.addressW, 4u);
+    CHECK_EQ(s.filter, 0u);
+}

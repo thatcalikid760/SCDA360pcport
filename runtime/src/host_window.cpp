@@ -1,11 +1,13 @@
 #include <windows.h>
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
 #include <thread>
 #include <gpu/d3d11_renderer.h>
+#include <gpu/draw_state.h>
 #include <gpu/shader_compiler.h>
 #include <host_window.h>
 #include <runtime.h>
@@ -109,6 +111,23 @@ static void RenderThread(DisplaySettings s)
                 for (uint32_t i = 0; i < 18; i += 6) // fetch dwords 0-17: texture slots 0-2 / vertex slots 0-8
                     RuntimeLog("[frame]  fetch %2u: %08X %08X %08X %08X %08X %08X\n", i, r[0x4800 + i], r[0x4801 + i], r[0x4802 + i],
                         r[0x4803 + i], r[0x4804 + i], r[0x4805 + i]);
+                if (d.vs)
+                {
+                    std::bitset<96> slots = ShaderVertexFetchSlots(*d.vs);
+                    for (uint32_t slot = 0; slot < 96; slot++)
+                    {
+                        MemoryRange m;
+                        if (slots[slot] && VertexFetchRange(r, slot, m))
+                            RuntimeLog("[frame]  vertex slot %u: 0x%08X + %u\n", slot, m.physical, m.bytes);
+                    }
+                    for (uint32_t s : d.memory)
+                        RuntimeLog("[frame]  snapshot %u\n", s);
+                }
+                for (uint32_t c = 20; c < 30; c++) // VS constants of the UI shaders (glyph rects)
+                {
+                    auto f = [&](uint32_t i) { return std::bit_cast<float>(r[0x4000 + c * 4 + i]); };
+                    RuntimeLog("[frame]  c%u: %g %g %g %g\n", c, f(0), f(1), f(2), f(3));
+                }
             }
             for (auto& r : frame.resolves)
                 RuntimeLog("[frame] resolve @draw %u ctrl 0x%08X dest 0x%08X pitch 0x%08X info 0x%08X surf 0x%08X color 0x%08X depth 0x%08X clear 0x%08X\n",

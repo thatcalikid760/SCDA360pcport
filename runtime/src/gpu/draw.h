@@ -53,6 +53,8 @@ struct DrawCall
     uint32_t indexBase = 0, indexBytes = 0;     // DMA: guest physical base, bytes
     uint32_t indexEndian = 0;                   // DMA: VGT_DMA_SIZE bits 30-31
     std::vector<uint32_t> immediateIndices;     // Immediate: host-order dwords
+    std::vector<uint32_t> memory;               // Frame::memory snapshots of the vertex ranges it reads
+    int32_t indexSnapshot = -1;                 // DMA: Frame::memory snapshot of the indices
     const ShaderBlob* vs = nullptr;
     const ShaderBlob* ps = nullptr;
     std::shared_ptr<const RegisterFile> regs;   // shared between draws until registers change

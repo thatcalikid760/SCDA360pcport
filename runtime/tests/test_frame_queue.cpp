@@ -112,3 +112,24 @@ TEST(resolve_records_draw_index_and_frontbuffer)
     CHECK_EQ(f.resolves[1].drawIndex, 1u);
     CHECK_EQ(f.frontbuffer, 0x00682000u);
 }
+
+// Guest ranges are versioned within a frame: unchanged bytes share a snapshot, changed bytes
+// (a vertex buffer the CPU rewrites between draws) get a new one.
+TEST(vertex_snapshots_are_versioned)
+{
+    FrameQueue q(3);
+    uint8_t a[4] = { 1, 2, 3, 4 }, b[4] = { 5, 6, 7, 8 };
+    uint32_t s0 = q.AddVertexData(42, a, 4);
+    CHECK_EQ(q.AddVertexData(42, a, 4), s0);
+    uint32_t s1 = q.AddVertexData(42, b, 4);
+    CHECK(s1 != s0);
+    CHECK_EQ(q.AddVertexData(43, a, 4), s1 + 1);
+    q.EndFrame();
+    Frame f;
+    CHECK(q.PopFrame(f));
+    CHECK_EQ(f.memory.size(), size_t(3));
+    CHECK_EQ(f.memory[s1].key, 42ull);
+    CHECK_EQ(f.memory[s1].bytes[0], 5);
+    // A new frame starts with no versions.
+    CHECK_EQ(q.AddVertexData(42, b, 4), 0u);
+}
