@@ -109,3 +109,21 @@ TEST(decommit_is_clamped_and_size_zero_means_rest)
     Free(a + 0xF000, 0x20000, kMemDecommit); // runs past a: clamped
     CHECK_EQ(GuestLoad32(b), 4u);
 }
+
+// MmQueryStatistics(MM_STATISTICS*): Length must be 104; title use counts against 512 MB.
+TEST(query_statistics_reports_pages)
+{
+    const uint32_t s = 0x40300100;
+    PPCContext ctx{};
+    GuestStore32(s, 32);
+    ctx.r3.u64 = s;
+    __imp__MmQueryStatistics(ctx, g_base);
+    CHECK_EQ(ctx.r3.u32, 0xC000000Du);
+    GuestStore32(s, 104);
+    ctx.r3.u64 = s;
+    __imp__MmQueryStatistics(ctx, g_base);
+    CHECK_EQ(ctx.r3.u32, 0u);
+    CHECK_EQ(GuestLoad32(s + 4), 0x20000u);
+    CHECK_EQ(GuestLoad32(s + 12), 0x20000u - 0x2000u - 0x1300u - 0x100u); // test allocator: 1 MB
+    CHECK_EQ(GuestLoad32(s + 20), 0x100000u);
+}

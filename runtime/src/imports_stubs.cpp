@@ -28,7 +28,6 @@ SCDA_IMPORT(XamContentGetCreator) { ImportStub("XamContentGetCreator", ctx); }
 SCDA_IMPORT(XamContentCreateEnumerator) { ImportStub("XamContentCreateEnumerator", ctx); }
 SCDA_IMPORT(XamContentGetDeviceState) { ImportStub("XamContentGetDeviceState", ctx); }
 SCDA_IMPORT(XamContentGetDeviceData) { ImportStub("XamContentGetDeviceData", ctx); }
-SCDA_IMPORT(XGetGameRegion) { ImportStub("XGetGameRegion", ctx); }
 SCDA_IMPORT(XamShowMessageBoxUIEx) { ImportStub("XamShowMessageBoxUIEx", ctx); }
 SCDA_IMPORT(XGetLanguage) { ImportStub("XGetLanguage", ctx); }
 SCDA_IMPORT(XGetAVPack) { ImportStub("XGetAVPack", ctx); }
@@ -39,11 +38,7 @@ SCDA_IMPORT(XexGetModuleHandle) { ImportStub("XexGetModuleHandle", ctx); }
 SCDA_IMPORT(ObOpenObjectByPointer) { ImportStub("ObOpenObjectByPointer", ctx); }
 SCDA_IMPORT(ObLookupThreadByThreadId) { ImportStub("ObLookupThreadByThreadId", ctx); }
 SCDA_IMPORT(DbgBreakPoint) { ImportStub("DbgBreakPoint", ctx); }
-SCDA_IMPORT(RtlTimeToTimeFields) { ImportStub("RtlTimeToTimeFields", ctx); }
-SCDA_IMPORT(RtlTimeFieldsToTime) { ImportStub("RtlTimeFieldsToTime", ctx); }
 SCDA_IMPORT(NtQueryVirtualMemory) { ImportStub("NtQueryVirtualMemory", ctx); }
-SCDA_IMPORT(MmQueryStatistics) { ImportStub("MmQueryStatistics", ctx); }
-SCDA_IMPORT(ExGetXConfigSetting) { ImportStub("ExGetXConfigSetting", ctx); }
 SCDA_IMPORT(RtlFreeAnsiString) { ImportStub("RtlFreeAnsiString", ctx); }
 SCDA_IMPORT(RtlUnicodeStringToAnsiString) { ImportStub("RtlUnicodeStringToAnsiString", ctx); }
 SCDA_IMPORT(RtlInitUnicodeString) { ImportStub("RtlInitUnicodeString", ctx); }

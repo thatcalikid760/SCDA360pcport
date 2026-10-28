@@ -76,6 +76,7 @@ uint32_t GuestAllocVirtual(uint32_t size, uint32_t align) { return BumpAlloc(g_v
 uint32_t GuestAllocPhysical(uint32_t size, uint32_t align) { return BumpAlloc(g_physicalCursor, 0xC0000000, size, align); }
 // Stops below the GPU register block at 0x7FC80000 (kGpuRegBase).
 uint32_t GuestAllocService(uint32_t size, uint32_t align) { return BumpAlloc(g_serviceCursor, 0x7FC00000, size, align); }
+uint32_t GuestTitleAllocatedBytes() { return (g_virtualCursor - 0x40000000u) + (g_physicalCursor - 0xA0000000u); }
 
 // Every function-table slot without a recompiled function lands here.
 static PPC_FUNC(UnmappedCall)

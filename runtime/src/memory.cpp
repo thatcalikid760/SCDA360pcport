@@ -92,3 +92,30 @@ SCDA_IMPORT(MmQueryAllocationSize) { ctx.r3.u64 = GuestAllocations().SizeOf(ctx.
 SCDA_IMPORT(MmGetPhysicalAddress) { ctx.r3.u64 = ctx.r3.u32 & 0x1FFFFFFF; }
 SCDA_IMPORT(MmQueryAddressProtect) { ctx.r3.u64 = PAGE_READWRITE; }
 
+// MmQueryStatistics(MM_STATISTICS*): 26 big-endian u32, Length (104) first. The title's
+// GlobalMemoryStatus (821E2DA8) reads total/available physical pages and title virtual bytes.
+SCDA_IMPORT(MmQueryStatistics)
+{
+    uint32_t s = ctx.r3.u32;
+    if (!s || GuestLoad32(s) != 104)
+    {
+        ctx.r3.u64 = 0xC000000D; // STATUS_INVALID_PARAMETER
+        return;
+    }
+    // 512 MB console, 32 MB kept by the kernel; the image and every title allocation count as used.
+    constexpr uint32_t kTotalPages = 0x20000, kKernelPages = 0x2000, kImagePages = 0x1300;
+    uint32_t used = kKernelPages + kImagePages + GuestTitleAllocatedBytes() / 0x1000;
+    uint32_t avail = used < kTotalPages ? kTotalPages - used : 0;
+    for (uint32_t i = 1; i < 26; i++)
+        GuestStore32(s + i * 4, 0);
+    GuestStore32(s + 4, kTotalPages);
+    GuestStore32(s + 8, kKernelPages);
+    GuestStore32(s + 12, avail);
+    GuestStore32(s + 16, 0x2FFE0000);                 // title total virtual bytes (Xenia)
+    GuestStore32(s + 20, GuestTitleAllocatedBytes()); // title reserved virtual bytes
+    GuestStore32(s + 24, kTotalPages - kKernelPages - avail);
+    GuestStore32(s + 36, kImagePages);
+    GuestStore32(s + 100, kTotalPages - 1);           // highest physical page
+    ctx.r3.u64 = 0;
+}
+

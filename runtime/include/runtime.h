@@ -21,6 +21,8 @@ inline void* GuestPtr(uint32_t addr) { return g_base + addr; }
 uint32_t GuestAllocVirtual(uint32_t size, uint32_t align = 0x1000);
 uint32_t GuestAllocPhysical(uint32_t size, uint32_t align = 0x1000);
 uint32_t GuestAllocService(uint32_t size, uint32_t align = 0x1000);
+// Bytes the title's virtual + physical allocators handed out since the last reset.
+uint32_t GuestTitleAllocatedBytes();
 
 void RuntimeLog(const char* fmt, ...);
 

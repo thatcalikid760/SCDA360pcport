@@ -203,6 +203,79 @@ SCDA_IMPORT(KeQuerySystemTime)
     GuestStore64(ctx.r3.u32, (uint64_t(ft.dwHighDateTime) << 32) | ft.dwLowDateTime);
 }
 
+// TIME_FIELDS: big-endian u16 Year, Month, Day, Hour, Minute, Second, Milliseconds, Weekday.
+// RtlTimeToTimeFields(const LARGE_INTEGER* Time, TIME_FIELDS* Fields)
+SCDA_IMPORT(RtlTimeToTimeFields)
+{
+    uint64_t t = GuestLoad64(ctx.r3.u32);
+    FILETIME ft{ uint32_t(t), uint32_t(t >> 32) };
+    SYSTEMTIME st{};
+    FileTimeToSystemTime(&ft, &st);
+    const uint16_t fields[8] = { st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond,
+        st.wMilliseconds, st.wDayOfWeek };
+    for (uint32_t i = 0; i < 8; i++)
+        GuestStore16(ctx.r4.u32 + i * 2, fields[i]);
+}
+
+// RtlTimeFieldsToTime(const TIME_FIELDS* Fields, LARGE_INTEGER* Time) -> BOOLEAN (Weekday ignored)
+SCDA_IMPORT(RtlTimeFieldsToTime)
+{
+    uint32_t f = ctx.r3.u32;
+    SYSTEMTIME st{ GuestLoad16(f), GuestLoad16(f + 2), 0, GuestLoad16(f + 4), GuestLoad16(f + 6),
+        GuestLoad16(f + 8), GuestLoad16(f + 10), GuestLoad16(f + 12) };
+    FILETIME ft;
+    if (!SystemTimeToFileTime(&st, &ft))
+    {
+        ctx.r3.u64 = 0;
+        return;
+    }
+    GuestStore64(ctx.r4.u32, (uint64_t(ft.dwHighDateTime) << 32) | ft.dwLowDateTime);
+    ctx.r3.u64 = 1;
+}
+
+// ---- Console config ----
+
+// ExGetXConfigSetting(u16 Category, u16 Setting, void* Buffer, u16 BufferSize, u16* RequiredSize).
+// Values as Unleashed/Xenia: English, US/Canada AV region, time zone UTC.
+SCDA_IMPORT(ExGetXConfigSetting)
+{
+    uint32_t category = ctx.r3.u32 & 0xFFFF, setting = ctx.r4.u32 & 0xFFFF;
+    uint32_t buffer = ctx.r5.u32, size = ctx.r6.u32 & 0xFFFF, required = ctx.r7.u32;
+    uint32_t value;
+    if (category == 2 && setting == 2)
+        value = 0x00001000; // XCONFIG_SECURED_AV_REGION: USA/Canada
+    else if (category == 3 && ((setting >= 1 && setting <= 7) || setting == 9 || setting == 0xA ||
+        setting == 0xC || setting == 0xE))
+    {
+        switch (setting)
+        {
+        case 9: value = 1; break;            // XCONFIG_USER_LANGUAGE: English
+        case 0xA: value = 0x00040000; break; // XCONFIG_USER_VIDEO_FLAGS
+        case 0xC: value = 1; break;          // XCONFIG_USER_RETAIL_FLAGS
+        case 0xE: value = 103; break;        // XCONFIG_USER_COUNTRY: US
+        default: value = 0; break;           // time zone bias / names / dates: UTC
+        }
+    }
+    else
+    {
+        RuntimeLog("[xconfig] unknown setting %u/%u\n", category, setting);
+        ctx.r3.u64 = 0xC00000F0; // STATUS_INVALID_PARAMETER_2
+        return;
+    }
+    if (required)
+        GuestStore16(required, 4);
+    if (buffer && size < 4)
+    {
+        ctx.r3.u64 = 0xC0000023; // STATUS_BUFFER_TOO_SMALL
+        return;
+    }
+    if (buffer)
+        GuestStore32(buffer, value);
+    ctx.r3.u64 = 0;
+}
+
+SCDA_IMPORT(XGetGameRegion) { ctx.r3.u64 = 0x03FF; } // region-free (Unleashed)
+
 // ---- Strings ----
 
 // RtlInitAnsiString(ANSI_STRING* Dest, const char* Src). ANSI_STRING: u16 Length, u16 MaximumLength, u32 Buffer.

@@ -33,6 +33,7 @@ uint32_t GuestAllocService(uint32_t size, uint32_t align)
     static uint32_t cursor = 0x7F000000;
     return TestBump(cursor, size, align);
 }
+uint32_t GuestTitleAllocatedBytes() { return 0x100000; }
 
 std::string& CapturedLog()
 {
