@@ -37,6 +37,34 @@ SamplerState s : register(s0);
 float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target { return t.Sample(s, uv); }
 )HLSL";
 
+// Rect lists: 3 corners per rectangle. The corner opposite the longest edge is the right angle;
+// the 4th corner (and its interpolators) is the other two minus it. Layout = translated VS output.
+static const char kRectListGs[] = R"HLSL(
+struct V
+{
+    float4 pos : SV_Position;
+    float4 t[16] : TEXCOORD0;
+    float4 c[2] : COLOR0;
+};
+[maxvertexcount(4)]
+void main(triangle V v[3], inout TriangleStream<V> s)
+{
+    float2 p0 = v[0].pos.xy / v[0].pos.w, p1 = v[1].pos.xy / v[1].pos.w, p2 = v[2].pos.xy / v[2].pos.w;
+    float d01 = dot(p1 - p0, p1 - p0), d12 = dot(p2 - p1, p2 - p1), d20 = dot(p0 - p2, p0 - p2);
+    uint c = d12 >= d01 && d12 >= d20 ? 0 : (d20 >= d01 ? 1 : 2);
+    V vc = v[c], va = v[(c + 1) % 3], vb = v[(c + 2) % 3], vd;
+    vd.pos = va.pos + vb.pos - vc.pos;
+    [unroll] for (int i = 0; i < 16; i++)
+        vd.t[i] = va.t[i] + vb.t[i] - vc.t[i];
+    [unroll] for (int j = 0; j < 2; j++)
+        vd.c[j] = va.c[j] + vb.c[j] - vc.c[j];
+    s.Append(vc);
+    s.Append(va);
+    s.Append(vb);
+    s.Append(vd);
+}
+)HLSL";
+
 // Device objects for executing draws; rebuilt with the device.
 struct DrawResources
 {
@@ -49,6 +77,7 @@ struct DrawResources
     float depthClear = 0.0f; // last guest depth clear, reused by the per-frame clear
     ComPtr<ID3D11VertexShader> blitVs;
     ComPtr<ID3D11PixelShader> blitPs;
+    ComPtr<ID3D11GeometryShader> rectListGs;
     ComPtr<ID3D11RasterizerState> rasterizer;
     ComPtr<ID3D11SamplerState> sampler;
     ComPtr<ID3D11Buffer> constants[3]; // b0 VS, b1 PS, b2 shared
@@ -166,6 +195,9 @@ bool D3D11Renderer::CreateDrawResources()
         printf("[d3d11] blit shader: %s\n", error.c_str());
         return false;
     }
+    auto gs = CompileHlsl(kRectListGs, "gs_5_0", &error);
+    if (gs.empty() || FAILED(m_device->CreateGeometryShader(gs.data(), gs.size(), nullptr, &r->rectListGs)))
+        printf("[d3d11] rect list shader: %s\n", error.c_str()); // rect lists are then skipped
 
     D3D11_RASTERIZER_DESC rd{};
     rd.FillMode = D3D11_FILL_SOLID;
@@ -446,7 +478,8 @@ void D3D11Renderer::ExecuteDraw(const DrawCall& d, const Frame& frame)
 {
     DrawResources& r = *m_draw;
     uint32_t topology = HostTopology(d.primType);
-    if (!topology || !d.vs || !d.ps || !d.regs || d.source == IndexSource::Immediate)
+    const bool rectList = d.primType == 8;
+    if (!topology || !d.vs || !d.ps || !d.regs || d.source == IndexSource::Immediate || (rectList && !r.rectListGs))
     {
         m_lastSkipped++;
         return;
@@ -479,6 +512,7 @@ void D3D11Renderer::ExecuteDraw(const DrawCall& d, const Frame& frame)
     UploadVertexMemory(d, frame);
     m_context->VSSetShader(vs.Get(), nullptr, 0);
     m_context->PSSetShader(ps.Get(), nullptr, 0);
+    m_context->GSSetShader(rectList ? r.rectListGs.Get() : nullptr, nullptr, 0);
     m_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY(topology));
     if (d.source == IndexSource::Dma)
     {
@@ -571,6 +605,7 @@ void D3D11Renderer::Blit(ID3D11ShaderResourceView* source)
     m_context->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);
     m_context->RSSetState(r.rasterizer.Get());
     m_context->VSSetShader(r.blitVs.Get(), nullptr, 0);
+    m_context->GSSetShader(nullptr, nullptr, 0);
     m_context->PSSetShader(r.blitPs.Get(), nullptr, 0);
     m_context->PSSetShaderResources(0, 1, &source);
     ID3D11SamplerState* s = r.sampler.Get();

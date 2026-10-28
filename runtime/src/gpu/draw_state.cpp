@@ -376,6 +376,7 @@ uint32_t HostTopology(uint32_t primType)
     case 3: return 3; // line strip
     case 4: return 4; // triangle list
     case 6: return 5; // triangle strip
+    case 8: return 4; // rect list: triangle list, the renderer's geometry shader adds the 4th corner
     default: return 0;
     }
 }

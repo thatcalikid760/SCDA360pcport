@@ -238,11 +238,17 @@ TranslateResult TranslateShader(const ShaderBlob& blob)
 
 std::vector<uint8_t> CompileHlsl(const std::string& hlsl, bool pixel, std::string* error)
 {
+    return CompileHlsl(hlsl, pixel ? "ps_5_0" : "vs_5_0", error);
+}
+
+std::vector<uint8_t> CompileHlsl(const std::string& hlsl, const char* profile, std::string* error)
+{
     ID3DBlob* code = nullptr;
     ID3DBlob* errors = nullptr;
     static const D3D_SHADER_MACRO kVertexDefines[] = { { "SCDA_VERTEX", "1" }, { nullptr, nullptr } };
-    HRESULT hr = D3DCompile(hlsl.data(), hlsl.size(), pixel ? "ps.hlsl" : "vs.hlsl", pixel ? nullptr : kVertexDefines, nullptr, "main",
-        pixel ? "ps_5_0" : "vs_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL1, 0, &code, &errors);
+    const bool vertex = profile[0] == 'v';
+    HRESULT hr = D3DCompile(hlsl.data(), hlsl.size(), "shader.hlsl", vertex ? kVertexDefines : nullptr, nullptr, "main",
+        profile, D3DCOMPILE_OPTIMIZATION_LEVEL1, 0, &code, &errors);
     std::vector<uint8_t> out;
     if (SUCCEEDED(hr) && code)
         out.assign((uint8_t*)code->GetBufferPointer(), (uint8_t*)code->GetBufferPointer() + code->GetBufferSize());

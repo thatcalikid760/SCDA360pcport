@@ -100,7 +100,7 @@ struct HostSampler
 };
 HostSampler DecodeSampler(const RegisterFile& regs, uint32_t slot);
 
-// Xenos primitive type -> D3D11_PRIMITIVE_TOPOLOGY value; 0 = not drawn yet (points, rects, fans, quads).
+// Xenos primitive type -> D3D11_PRIMITIVE_TOPOLOGY value; 0 = not drawn yet (points, fans, quads).
 uint32_t HostTopology(uint32_t primType);
 
 // Guest index buffer bytes -> host-order indices (GPU endian mode 0-3 per element).

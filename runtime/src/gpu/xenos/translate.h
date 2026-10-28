@@ -20,3 +20,5 @@ TranslateResult TranslateShader(const ShaderBlob& blob);
 
 // D3DCompile for vs_5_0 / ps_5_0; empty on failure with the compiler message in *error.
 std::vector<uint8_t> CompileHlsl(const std::string& hlsl, bool pixel, std::string* error);
+// Any profile ("gs_5_0", ...); SCDA_VERTEX is defined for vs_* only.
+std::vector<uint8_t> CompileHlsl(const std::string& hlsl, const char* profile, std::string* error);
