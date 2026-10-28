@@ -51,3 +51,24 @@ TEST(audio_speaker_config_and_volume)
     __imp__XAudioGetVoiceCategoryVolume(ctx, g_base);
     CHECK_EQ(GuestLoad32(0x40200024), 0x3F800000u); // 1.0f
 }
+
+void AudioConvertFrame(const uint8_t* guest, float* six, float* stereo);
+
+TEST(audio_frame_planar_be_to_interleaved_and_stereo)
+{
+    // Planar: channel c sample i at (c * 256 + i), big-endian floats; FL=1, FR=2, C=4, BL=8.
+    static uint32_t in[256 * 6];
+    const float values[6] = {1, 2, 4, 0.5f, 8, 0};
+    for (int c = 0; c < 6; c++)
+        for (int i = 0; i < 256; i++)
+        {
+            uint32_t v;
+            memcpy(&v, &values[c], 4);
+            in[c * 256 + i] = __builtin_bswap32(v);
+        }
+    static float six[256 * 6], stereo[512];
+    AudioConvertFrame(reinterpret_cast<const uint8_t*>(in), six, stereo);
+    CHECK(six[0] == 1.0f && six[1] == 2.0f && six[3] == 0.5f && six[6 * 255 + 4] == 8.0f);
+    CHECK(stereo[0] > 1 + 0.7071f * 12 - 0.01f && stereo[0] < 1 + 0.7071f * 12 + 0.01f);
+    CHECK(stereo[511] > 2 + 0.7071f * 4 - 0.01f && stereo[511] < 2 + 0.7071f * 4 + 0.01f);
+}

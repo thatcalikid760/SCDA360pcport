@@ -214,6 +214,7 @@ void FsReset();
 void TlsReset();
 void XamReset();
 void AudioReset();
+void XmaReset();
 void VideoReset();
 
 // Between title instances (no title thread running): guest memory and every HLE module back to
@@ -224,6 +225,7 @@ static bool ResetTitle(const char* imagePath)
     CommandProcessorResetForRelaunch();
     D3D11Renderer::RequestReset();
     AudioReset();
+    XmaReset();
     KernelReset();
     FsReset();
     TlsReset();

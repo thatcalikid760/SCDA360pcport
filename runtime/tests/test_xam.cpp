@@ -226,3 +226,26 @@ TEST(signin_ui_broadcasts_signin_changed)
     CHECK_EQ(n.r3.u32, 1u);
     CHECK_EQ(GuestLoad32(0x40700304), 1u);
 }
+
+// XAudio re-initialises its KEVENTs inline (header writes only, no import) when it restarts: a
+// host event left signalled by the old instance must not wake the new instance's waiter.
+TEST(ke_event_inline_reinit_drops_stale_signal)
+{
+    TestGuestBase();
+    const uint32_t ev = 0x40600300;
+    memset(GuestPtr(ev), 0, 16);
+    g_base[ev] = 1; // synchronization event, not signalled
+    PPCContext set{};
+    set.r3.u64 = ev;
+    __imp__KeSetEvent(set, g_base);
+    // Inline KeInitializeEvent: SignalState back to 0.
+    g_base[ev] = 1;
+    GuestStore32(ev + 4, 0);
+    GuestStore64(0x40600310, uint64_t(-10000)); // 1 ms relative
+    PPCContext w = Call5(__imp__KeWaitForSingleObject, ev, 0, 0, 0, 0x40600310);
+    CHECK_EQ(w.r3.u32, 0x102u); // timeout: the stale signal is gone
+    set.r3.u64 = ev;
+    __imp__KeSetEvent(set, g_base);
+    w = Call5(__imp__KeWaitForSingleObject, ev, 0, 0, 0, 0x40600310);
+    CHECK_EQ(w.r3.u32, 0u);
+}

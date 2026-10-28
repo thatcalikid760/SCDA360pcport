@@ -43,3 +43,8 @@
 - **Q:** Xbox 360 XAM: give exact big-endian layout of X_USER_READ_PROFILE_SETTINGS header and X_USER_PROFILE_SETTING (size 40?) as used by XamUserReadProfileSettings in Xenia: field offsets for source/from, user_index/xuid union, setting_id, X_USER_DATA (type byte offset, value offset). Also: is the 9th arg
 - **Files:** -
 - **A:** Gemini API gemini-3.8-flash HTTP 503: { "error": { "code": 503, "message": "This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.", "status": "UNAVAILABLE" } }
+
+## 2026-10-28 07:53:12 via api:gemini-3.8-flash
+- **Q:** Xbox 360 xboxkrnl XMA hardware context (XMA_CONTEXT_DATA, 64 bytes, as in Xenia src/xenia/apu/xma_context.h). Give the exact bitfield layout per big-endian DWORD 0..9 (LSB-first bit positions as declared in Xenia), and the XMA_CONTEXT_INIT struct field order used by XMAInitializeContext (incl. XMA_L
+- **Files:** -
+- **A:** ### 1. `XMA_CONTEXT_DATA` DWORD Layout (10 DWORDs / 40 bytes active state, 64 bytes total struct size padded) *Note: Bit numbers are LSB 0..31 inside big-endian 32-bit words (matching Xenia bitfield definitions).* ```c // DWORD 0 uint32_t current_buffer : 1; // [0] 0 = buffer 0, 1 = buffer 1 uint32_t is_stereo : 1; // [1] 0 = mono, 1 = stereo (or context pair) uint32_t sample_rate : 2; // [2:3] 0=24kHz, 1=32kHz, 2=44.1kHz, 3=48kHz uint32_t loop_count : 8; // [4:11] loop repetitions (255 = infinite) uint32_t input_buffer_0_valid : 1; // [12] buffer 0 ready for decode uint32_t input_buffer_1_val

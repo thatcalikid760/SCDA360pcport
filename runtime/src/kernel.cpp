@@ -31,6 +31,7 @@ struct GuestObject
 static std::mutex g_objMutex;
 static std::unordered_map<uint32_t, GuestObject> g_handles;     // guest handle -> object
 static std::unordered_map<uint32_t, HANDLE> g_dispatchers;      // guest struct address -> host object
+static std::unordered_set<uint32_t> g_handleBodies;              // dispatchers that are handle bodies
 static uint32_t g_nextHandle = 0xF8000000;                      // disjoint from fs.cpp handles
 
 static uint32_t AddHandle(HANDLE host)
@@ -59,6 +60,7 @@ void KernelReset()
         CloseHandle(h);
     g_handles.clear();
     g_dispatchers.clear();
+    g_handleBodies.clear();
 }
 
 static HANDLE HostHandle(uint32_t guest)
@@ -84,7 +86,14 @@ static HANDLE DispatcherObject(uint32_t addr)
     std::lock_guard lock(g_objMutex);
     auto it = g_dispatchers.find(addr);
     if (it != g_dispatchers.end())
+    {
+        // Events re-initialised inline (KeInitializeEvent is a macro: header writes only) keep
+        // their host object; SignalState 0 there means the guest reset it. Ke{Set,Reset}Event
+        // update the guest state under this lock, so 0 here never hides a later set.
+        if (g_base[addr] != 5 && !GuestLoad32(addr + 4) && !g_handleBodies.count(addr))
+            ResetEvent(it->second);
         return it->second;
+    }
     uint8_t type = g_base[addr];
     int32_t signal = (int32_t)GuestLoad32(addr + 4);
     HANDLE h;
@@ -218,6 +227,7 @@ SCDA_IMPORT(ObReferenceObjectByHandle)
                 it->second.guestBody = GuestAllocVirtual(0x200, 0x10);
                 // Ke* calls on the object must reach the same host object as Nt* on the handle.
                 g_dispatchers[it->second.guestBody] = it->second.host;
+                g_handleBodies.insert(it->second.guestBody);
             }
             body = it->second.guestBody;
         }
@@ -368,15 +378,19 @@ SCDA_IMPORT(NtWaitForMultipleObjectsEx)
 SCDA_IMPORT(KeSetEvent)
 {
     TraceSync("keset", ctx, ctx.r3.u32);
-    SetEvent(DispatcherObject(ctx.r3.u32));
+    HANDLE h = DispatcherObject(ctx.r3.u32);
+    std::lock_guard lock(g_objMutex);
     GuestStore32(ctx.r3.u32 + 4, 1);
+    SetEvent(h);
     ctx.r3.u64 = 0;
 }
 
 SCDA_IMPORT(KeResetEvent)
 {
-    ResetEvent(DispatcherObject(ctx.r3.u32));
+    HANDLE h = DispatcherObject(ctx.r3.u32);
+    std::lock_guard lock(g_objMutex);
     GuestStore32(ctx.r3.u32 + 4, 0);
+    ResetEvent(h);
     ctx.r3.u64 = 0;
 }
 
