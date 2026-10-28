@@ -15,10 +15,11 @@ XINPUT_GAMEPAD KeyboardGamepad(bool (*down)(int vk));
 
 struct AutoPress
 {
-    uint32_t ms;      // since start
+    uint32_t frame;   // guest frame number (as SCDA_DUMP_FRAME counts)
     uint16_t buttons; // XINPUT_GAMEPAD_* bits
 };
-// "<seconds>:<button>,..." with buttons A B X Y START BACK UP DOWN LEFT RIGHT LB RB; bad entries are skipped.
+// "<frame>:<button>,..." with buttons A B X Y START BACK UP DOWN LEFT RIGHT LB RB; bad entries are skipped.
 std::vector<AutoPress> ParseAutoPress(const char* text);
-// Buttons the script holds at time ms (each press lasts 200 ms).
-uint16_t AutoPressButtons(const std::vector<AutoPress>& script, uint32_t ms);
+// Buttons the script holds at a frame (each press lasts kAutoPressFrames frames).
+constexpr uint32_t kAutoPressFrames = 4;
+uint16_t AutoPressButtons(const std::vector<AutoPress>& script, uint32_t frame);

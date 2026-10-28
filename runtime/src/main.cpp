@@ -10,6 +10,7 @@
 #include <string>
 #include <alloc_tracker.h>
 #include <command_processor.h>
+#include <gpu/draw_state.h>
 #include <host_window.h>
 #include <image_loader.h>
 #include <module.h>
@@ -124,6 +125,7 @@ static bool InitMemory()
         g_base = ReserveMirroredMemory(nullptr);
     if (!g_base)
         return false;
+    g_physicalViewsCommitted = true; // ReserveMirroredMemory maps one committed section per view
 
     // Null guest page traps.
     DWORD old;
@@ -195,6 +197,8 @@ static LONG WINAPI CrashHandler(EXCEPTION_POINTERS* e)
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
+void ProfilerStart();
+
 int main(int argc, char** argv)
 {
     // Installer layout: <dir>\scda.exe + <dir>\game\ (extracted disc).
@@ -260,6 +264,8 @@ int main(int argc, char** argv)
     }
     InitThreadContext(ctx, 0, 1, mainStack);
     WatchdogRegisterThread(1, &ctx);
+    RuntimeLog("[thread] 1 (main) host %lu\n", GetCurrentThreadId());
+    ProfilerStart();
     if (const char* w = getenv("SCDA_WATCHDOG"))
         WatchdogStart((unsigned)atoi(w));
     RuntimeLog("[boot] calling _xstart (r1=0x%08X r13=0x%08X)\n", ctx.r1.u32, ctx.r13.u32);

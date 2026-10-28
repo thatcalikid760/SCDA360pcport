@@ -33,17 +33,17 @@ TEST(keyboard_maps_to_gamepad)
     CHECK_EQ(g.sThumbLY, int16_t(0));
 }
 
-// SCDA_AUTOPRESS="<seconds>:<button>,...": each button held for 200 ms from its time.
+// SCDA_AUTOPRESS="<frame>:<button>,...": each button held for kAutoPressFrames frames.
 TEST(autopress_script_parses_and_presses)
 {
-    auto script = ParseAutoPress("5:A, 6.5:down,7:START,bad,8:nope");
+    auto script = ParseAutoPress("500:A, 650:down,700:START,bad,800:nope");
     CHECK_EQ(script.size(), size_t(3));
-    CHECK_EQ(script[1].ms, 6500u);
+    CHECK_EQ(script[1].frame, 650u);
     CHECK_EQ(script[1].buttons, uint16_t(XINPUT_GAMEPAD_DPAD_DOWN));
-    CHECK_EQ(AutoPressButtons(script, 4999), uint16_t(0));
-    CHECK_EQ(AutoPressButtons(script, 5100), uint16_t(XINPUT_GAMEPAD_A));
-    CHECK_EQ(AutoPressButtons(script, 5300), uint16_t(0));
-    CHECK_EQ(AutoPressButtons(script, 7000), uint16_t(XINPUT_GAMEPAD_START));
+    CHECK_EQ(AutoPressButtons(script, 499), uint16_t(0));
+    CHECK_EQ(AutoPressButtons(script, 500 + kAutoPressFrames - 1), uint16_t(XINPUT_GAMEPAD_A));
+    CHECK_EQ(AutoPressButtons(script, 500 + kAutoPressFrames), uint16_t(0));
+    CHECK_EQ(AutoPressButtons(script, 700), uint16_t(XINPUT_GAMEPAD_START));
 }
 
 // One local profile, signed in, in slot 0.

@@ -97,7 +97,22 @@ std::string WatchdogReport(const uint8_t* guestBase)
             snprintf(buf, sizeof(buf), " 0x%08X", a);
             out += buf;
         }
+        // Callee-saved registers as last stored (frames above the stack walk keep their state here).
+        snprintf(buf, sizeof(buf), " r28-r31 %08X %08X %08X %08X", w->ctx->r28.u32, w->ctx->r29.u32, w->ctx->r30.u32, w->ctx->r31.u32);
+        out += buf;
         out += "\n";
+    }
+    // SCDA_PEEK=<addr>[,<addr>...]: guest dwords to show with each dump (and the dword each points at).
+    for (const char* p = getenv("SCDA_PEEK"); p && *p;)
+    {
+        char* end;
+        uint32_t addr = uint32_t(strtoul(p, &end, 0));
+        if (end == p)
+            break;
+        uint32_t v = GuestLoad32(addr), deref = (v >= 0x10000 && v < 0xE0000000u) ? GuestLoad32(v & ~3u) : 0;
+        snprintf(buf, sizeof(buf), "[watchdog] peek 0x%08X = 0x%08X (-> 0x%08X)\n", addr, v, deref);
+        out += buf;
+        p = *end == ',' ? end + 1 : end;
     }
     return out;
 }

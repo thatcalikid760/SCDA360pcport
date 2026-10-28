@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <gpu/draw_state.h>
+#include <runtime.h>
 
 static float AsFloat(uint32_t v) { return std::bit_cast<float>(v); }
 
@@ -79,8 +80,16 @@ std::bitset<96> VertexFetchSlots(const std::string& hlsl)
     return slots;
 }
 
+bool g_physicalViewsCommitted = false;
+
 bool GuestRangeReadable(const uint8_t* p, size_t n)
 {
+    // Inside a physical view: readable by construction. VirtualQuery would walk the whole 512 MB
+    // view's page tables to size the region (~0.2 ms a call, ~70 ms a frame on the menu).
+    if (g_physicalViewsCommitted && g_base)
+        for (uint64_t view : { 0xA0000000ull, 0xC0000000ull })
+            if (p >= g_base + view && p + n <= g_base + view + 0x20000000ull)
+                return true;
     while (n)
     {
         MEMORY_BASIC_INFORMATION mbi;

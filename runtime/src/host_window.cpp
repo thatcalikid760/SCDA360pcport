@@ -4,8 +4,10 @@
 #include <bit>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <thread>
+#include <vector>
 #include <gpu/d3d11_renderer.h>
 #include <gpu/draw_state.h>
 #include <gpu/shader_compiler.h>
@@ -72,6 +74,7 @@ static void WindowThread(DisplaySettings s)
 
 static void RenderThread(DisplaySettings s)
 {
+    RuntimeLog("[thread] renderer host %lu\n", GetCurrentThreadId());
     while (!g_hwnd.load())
         Sleep(1);
     HWND hwnd = g_hwnd.load();
@@ -134,12 +137,25 @@ static void RenderThread(DisplaySettings s)
                     r.drawIndex, r.copyControl, r.destBase, r.destPitch, r.destInfo, r.surfaceInfo, r.colorInfo, r.depthInfo, r.colorClear);
             RuntimeLog("[frame] frontbuffer 0x%08X\n", frame.frontbuffer);
         }
-        // SCDA_DUMP_FRAME=<n>: write frame n's render target to scda_frame_<n>.bmp.
-        static const long long dumpFrame = getenv("SCDA_DUMP_FRAME") ? atoll(getenv("SCDA_DUMP_FRAME")) : -1;
-        if ((long long)frame.stats.frame == dumpFrame)
-            renderer.DumpNextFrame("scda_frame_" + std::to_string(dumpFrame) + ".bmp");
+        // SCDA_DUMP_FRAME=<n>[,<n>...] (ascending): write the presented image of the first frame at or
+        // after each n (the renderer may drop frames) to scda_frame_<frame>.bmp.
+        static std::vector<uint64_t> dumpFrames = []
+        {
+            std::vector<uint64_t> v;
+            for (const char* p = getenv("SCDA_DUMP_FRAME"); p && *p; p += strcspn(p, ",") + (p[strcspn(p, ",")] ? 1 : 0))
+                v.push_back(strtoull(p, nullptr, 10));
+            return v;
+        }();
+        static size_t nextDump = 0;
+        bool dumping = nextDump < dumpFrames.size() && frame.stats.frame >= dumpFrames[nextDump];
+        if (dumping)
+        {
+            renderer.DumpNextFrame("scda_frame_" + std::to_string(frame.stats.frame) + ".bmp");
+            while (nextDump < dumpFrames.size() && dumpFrames[nextDump] <= frame.stats.frame)
+                nextDump++;
+        }
         renderer.Present(frame);
-        if ((long long)frame.stats.frame == dumpFrame || (long long)frame.stats.frame == traceFrame)
+        if (dumping || (long long)frame.stats.frame == traceFrame)
             RuntimeLog("[frame] %llu: drawn %u skipped %u resolved %u presented %s\n", (unsigned long long)frame.stats.frame, renderer.LastDrawn(),
                 renderer.LastSkipped(), renderer.LastResolved(), renderer.LastPresentedFrontbuffer() ? "frontbuffer" : "target");
         if (GetTickCount() - lastTitle > 500)

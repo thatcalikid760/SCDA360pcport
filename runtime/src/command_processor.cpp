@@ -1,6 +1,7 @@
 // PM4 packet semantics follow Xenia's command processor (BSD) and TTT2's notes (reference only).
 #include <windows.h>
 #include <atomic>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -40,6 +41,9 @@ constexpr int kMaxIndirectDepth = 4;
 static uint32_t g_read, g_lastBase;
 static std::atomic<uint64_t> g_opcodeCounts[128]; // unhandled type-3 opcodes (SCDA_TRACE_CP)
 static std::function<void(uint32_t)> g_interruptSink;
+static ULONGLONG g_waitSince;                                     // CP thread: current stalled WAIT_REG_MEM
+static std::mutex g_waitMutex;
+static std::map<uint64_t, std::pair<uint64_t, uint64_t>> g_waitStats; // (memory flag, address) -> (waits, ms)
 static std::mutex g_sinkMutex;
 
 uint32_t GpuRegister(uint32_t index) { return GuestLoad32(kGpuRegBase + index * 4); }
@@ -150,13 +154,7 @@ static uint32_t GpuLoad(uint32_t address)
     return GpuSwap(_byteswap_ulong(GuestLoad32(GuestPhysical(address & ~3u))), address);
 }
 
-static bool Committed(uint32_t guest, uint32_t bytes)
-{
-    MEMORY_BASIC_INFORMATION mbi;
-    if (!VirtualQuery(g_base + guest, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT)
-        return false;
-    return (uint8_t*)mbi.BaseAddress + mbi.RegionSize >= g_base + guest + bytes;
-}
+static bool Committed(uint32_t guest, uint32_t bytes) { return GuestRangeReadable(g_base + guest, bytes); }
 
 static bool Execute(uint32_t h, const Pm4Payload& p, int depth, CpStats& st);
 
@@ -305,7 +303,22 @@ static bool ExecutePacket(uint32_t h, const Pm4Payload& p, int depth, CpStats& s
         return true;
     }
     case kOpWaitRegMem:
-        return WaitSatisfied(p);
+    {
+        // SCDA_TRACE_CP: total time stalled per polled address/register (report every 10 s).
+        bool done = WaitSatisfied(p);
+        ULONGLONG now = GetTickCount64();
+        if (!done && !g_waitSince)
+            g_waitSince = now;
+        if (done && g_waitSince)
+        {
+            std::lock_guard lock(g_waitMutex);
+            auto& w = g_waitStats[(uint64_t(p(0) & 0x10) << 32) | p(1)];
+            w.first++;
+            w.second += now - g_waitSince;
+            g_waitSince = 0;
+        }
+        return done;
+    }
     case kOpCondWrite:
         // wait_info, poll, ref, mask, write address/register, value; bit 8 = write memory.
         if (PollCondition(p(0), p(1), p(2), p(3)))
@@ -370,6 +383,7 @@ void CommandProcessorStart()
     std::thread([]
     {
         CpStats st{};
+        RuntimeLog("[thread] command processor host %lu\n", GetCurrentThreadId());
         bool trace = getenv("SCDA_TRACE_CP") != nullptr;
         DWORD lastReport = GetTickCount();
         for (;;)
@@ -386,6 +400,12 @@ void CommandProcessorStart()
                         line += buf;
                     }
                 RuntimeLog("[cp] swaps %llu seen %llu vsyncs %llu\n", (unsigned long long)Gpu().swapsSubmitted.load(), (unsigned long long)Gpu().swapsSeen.load(), (unsigned long long)Gpu().vsyncs.load());
+                {
+                    std::lock_guard lock(g_waitMutex);
+                    for (auto& [key, w] : g_waitStats)
+                        RuntimeLog("[cp] wait %s 0x%08X: %llu waits, %llu ms stalled\n", (key >> 32) ? "mem" : "reg",
+                            uint32_t(key), (unsigned long long)w.first, (unsigned long long)w.second);
+                }
                 RuntimeLog("[cp] packets %llu fences %llu ib %llu irq %llu unhandled:%s\n",
                     (unsigned long long)st.packets, (unsigned long long)st.fences, (unsigned long long)st.indirect,
                     (unsigned long long)st.interrupts, line.c_str());

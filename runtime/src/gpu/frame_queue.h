@@ -97,6 +97,12 @@ public:
         m_done.pop_front();
         return true;
     }
+    // Frames closed so far: the next frame's FrameStats::frame (SCDA_DUMP_FRAME / SCDA_AUTOPRESS clock).
+    uint64_t FramesEnded() const
+    {
+        std::lock_guard lock(m_mutex);
+        return m_next;
+    }
     uint64_t Dropped() const
     {
         std::lock_guard lock(m_mutex);

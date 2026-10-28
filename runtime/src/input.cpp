@@ -5,6 +5,7 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <gpu/frame_queue.h>
 #include <input.h>
 #include <runtime.h>
 
@@ -69,24 +70,22 @@ std::vector<AutoPress> ParseAutoPress(const char* text)
         name.erase(0, name.find_first_not_of(' '));
         for (auto& c : name)
             c = char(toupper((unsigned char)c));
-        double seconds = atof(item.c_str());
+        int frame = atoi(item.c_str());
         for (auto& n : kNames)
-            if (name == n.name && seconds >= 0)
-                out.push_back({ uint32_t(seconds * 1000 + 0.5), n.button });
+            if (name == n.name && frame >= 0)
+                out.push_back({ uint32_t(frame), n.button });
     }
     return out;
 }
 
-uint16_t AutoPressButtons(const std::vector<AutoPress>& script, uint32_t ms)
+uint16_t AutoPressButtons(const std::vector<AutoPress>& script, uint32_t frame)
 {
     uint16_t buttons = 0;
     for (auto& p : script)
-        if (ms >= p.ms && ms < p.ms + 200)
+        if (frame >= p.frame && frame < p.frame + kAutoPressFrames)
             buttons |= p.buttons;
     return buttons;
 }
-
-static const ULONGLONG g_start = GetTickCount64();
 
 static bool KeyDown(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
 
@@ -110,7 +109,8 @@ SCDA_IMPORT(XamInputGetState)
     XINPUT_STATE pad{};
     bool connected = XInputGetState(0, &pad) == ERROR_SUCCESS;
     XINPUT_GAMEPAD g = connected ? pad.Gamepad : XINPUT_GAMEPAD{};
-    if (GameWindowFocused())
+    // A scripted run ignores the keyboard, so typing elsewhere cannot leak into it.
+    if (script.empty() && GameWindowFocused())
     {
         XINPUT_GAMEPAD k = KeyboardGamepad(KeyDown);
         g.wButtons |= k.wButtons;
@@ -121,7 +121,7 @@ SCDA_IMPORT(XamInputGetState)
         if (!connected || (!g.sThumbRX && !g.sThumbRY))
             g.sThumbRX = k.sThumbRX, g.sThumbRY = k.sThumbRY;
     }
-    g.wButtons |= AutoPressButtons(script, uint32_t(GetTickCount64() - g_start));
+    g.wButtons |= AutoPressButtons(script, uint32_t(Frames().FramesEnded()));
     // The packet number changes whenever the state does.
     static std::mutex m;
     static XINPUT_GAMEPAD last{};

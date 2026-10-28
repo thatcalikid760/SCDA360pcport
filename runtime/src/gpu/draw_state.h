@@ -48,6 +48,9 @@ bool VertexFetchRange(const RegisterFile& regs, uint32_t slot, MemoryRange& out)
 std::bitset<96> VertexFetchSlots(const std::string& hlsl);
 // True when [p, p + n) is committed, readable host memory (fetch constants can hold garbage).
 bool GuestRangeReadable(const uint8_t* p, size_t n);
+// Set by the runtime once guest physical memory (views at 0xA0000000 and 0xC0000000) is one
+// committed section; GuestRangeReadable then answers ranges inside a view without the OS.
+extern bool g_physicalViewsCommitted;
 // Key of a guest range in Frame::memory snapshots.
 inline uint64_t MemoryRangeKey(const MemoryRange& m) { return (uint64_t(m.physical) << 32) | m.bytes; }
 

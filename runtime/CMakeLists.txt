@@ -40,6 +40,7 @@ add_executable(scda
     src/thread_context.cpp
     src/xam.cpp
     src/input.cpp
+    src/profiler.cpp
     src/guest_time.cpp
     src/gpu/shader_cache.cpp
     src/gpu/draw.cpp
