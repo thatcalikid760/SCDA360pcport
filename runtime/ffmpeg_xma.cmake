@@ -22,3 +22,8 @@ target_compile_definitions(scda_xma PRIVATE HAVE_AV_CONFIG_H _ISOC99_SOURCE _FIL
     _CRT_NONSTDC_NO_WARNINGS)
 # Third-party code: its warnings are not ours to fix. /fp:strict (global) is kept.
 target_compile_options(scda_xma PRIVATE /w)
+
+# Offline decode of SCDA_DUMP_XMA packet dumps (tests/xma_decode_tool.cpp).
+add_executable(scda_xma_tool tests/xma_decode_tool.cpp)
+target_include_directories(scda_xma_tool PRIVATE src)
+target_link_libraries(scda_xma_tool PRIVATE scda_xma bcrypt)

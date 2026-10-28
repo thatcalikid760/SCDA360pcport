@@ -76,14 +76,15 @@ TEST(xma_decoder_fills_output_and_returns_input_buffers)
     CHECK_EQ(GuestLoad16(pcm + 4 * 256 + 2), 0x22u);  // second packet from block 4
     CHECK_EQ(GuestLoad16(pcm + 8 * 256 + 510), 0x33u); // in1 after in0
 
-    // Refill in0 with 2 more packets: 8 blocks, but only 3 are free: the ring fills
-    // (write offset wraps to the read offset 0) and output buffer valid clears.
+    // Refill in0 with 2 more packets: 8 blocks, but write == read would read as empty, so only
+    // 2 of the 3 free blocks fill (write offset 14, one short of read offset 0) and output
+    // buffer valid clears.
     XmaCall(__imp__XMASetInputBuffer0Valid, c);
     XmaCall(__imp__XMAEnableContext, c);
     for (int i = 0; i < 200 && XmaCall(__imp__XMAIsOutputBufferValid, c); i++)
         Sleep(2);
     XmaCall(__imp__XMADisableContext, c);
     CHECK_EQ(XmaCall(__imp__XMAIsOutputBufferValid, c), 0u);
-    CHECK_EQ(XmaCall(__imp__XMAGetOutputBufferWriteOffset, c), 0u);
+    CHECK_EQ(XmaCall(__imp__XMAGetOutputBufferWriteOffset, c), 14u);
     XmaCall(__imp__XMAReleaseContext, c);
 }

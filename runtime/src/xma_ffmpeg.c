@@ -77,9 +77,10 @@ int scda_xma_decode_packet(ScdaXmaStream* x, const uint8_t* packet, int16_t* out
     x->packet->data = x->data;
     x->packet->size = 2048;
     int written = 0;
-    // decode_packet takes one frame per call; the packet is done when it says so. A packet
+    // decode_packet takes one frame per call and returns the bytes it consumed; like FFmpeg's
+    // decode loop (decode.c), the next call gets the rest, until the packet is used up. A packet
     // holds at most 64 frames (6-bit count): bound the loop against a corrupt stream.
-    for (int i = 0; i < 128; i++)
+    for (int i = 0; i < 128 && x->packet->size > 0; i++)
     {
         if (!frame->data[0])
         {
@@ -102,8 +103,10 @@ int scda_xma_decode_packet(ScdaXmaStream* x, const uint8_t* packet, int16_t* out
         }
         if (ret < 0)
             return written ? written : ret;
-        if (s->packet_done)
+        if (ret >= x->packet->size)
             break;
+        x->packet->data += ret;
+        x->packet->size -= ret;
     }
     return written;
 }

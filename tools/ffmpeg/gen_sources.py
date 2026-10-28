@@ -75,6 +75,7 @@ def config():
         m = re.match(r"^(!?[A-Za-z0-9_]+)=(.*)$", line)
         if m:
             env[m.group(1)] = m.group(2).strip()
+    env["SRC_PATH"] = SRC.as_posix()  # config.mak holds an msys path (/c/...)
     return env
 
 

@@ -46,6 +46,7 @@ struct Decode
     ScdaXmaStream* stream;
     std::vector<uint8_t> pcm;
     size_t pcmRead;
+    FILE* dump; // SCDA_DUMP_XMA=<dir>: every packet fed to the decoder
 };
 Decode g_decode[kContexts];
 HANDLE g_kick; // auto-reset: a context may have work
@@ -78,6 +79,9 @@ void CloseDecode(Decode& d)
 {
     scda_xma_close(d.stream);
     d.stream = nullptr;
+    if (d.dump)
+        fclose(d.dump);
+    d.dump = nullptr;
     d.pcm.clear();
     d.pcmRead = 0;
 }
@@ -107,6 +111,8 @@ bool DecodePacket(uint32_t c, Decode& d)
         {
             static int16_t samples[64 * 512 * 2];
             const uint8_t* data = static_cast<const uint8_t*>(GuestPtr(FromPhysical(Get(c, cur ? kIn1Ptr : kIn0Ptr)))) + packet * 2048;
+            if (d.dump)
+                fwrite(data, 1, 2048, d.dump);
             int n = scda_xma_decode_packet(d.stream, data, samples, 64 * 512);
             int total = n > 0 ? n * (Get(c, kStereo) ? 2 : 1) : 0;
             for (int i = 0; i < total; i++)
@@ -139,23 +145,24 @@ void RunContext(uint32_t i)
         return;
     Decode& d = g_decode[i];
     uint8_t* out = static_cast<uint8_t*>(GuestPtr(FromPhysical(Get(c, kOutPtr))));
+    // Write offset == read offset means empty (the engine, sub_825733E8, reads it so): the ring
+    // is full one block short of that, and output buffer valid is then cleared.
     for (;;)
     {
+        uint32_t w = Get(c, kOutWrite) % blocks;
+        if ((w + 1) % blocks == Get(c, kOutRead))
+        {
+            Set(c, kOutValid, 0);
+            break;
+        }
         while (d.pcm.size() - d.pcmRead < kBlockBytes && DecodePacket(c, d))
         {
         }
         if (d.pcm.size() - d.pcmRead < kBlockBytes)
             break;
-        uint32_t w = Get(c, kOutWrite) % blocks;
         memcpy(out + w * kBlockBytes, d.pcm.data() + d.pcmRead, kBlockBytes);
         d.pcmRead += kBlockBytes;
-        w = (w + 1) % blocks;
-        Set(c, kOutWrite, w);
-        if (w == Get(c, kOutRead))
-        {
-            Set(c, kOutValid, 0); // full
-            break;
-        }
+        Set(c, kOutWrite, (w + 1) % blocks);
     }
     if (d.pcmRead == d.pcm.size())
     {
@@ -271,7 +278,7 @@ SCDA_IMPORT(XMAInitializeContext)
     Set(c, kOutBlocks, GuestLoad32(init + 24));
     Set(c, kWork, Physical(GuestLoad32(init + 28)));
     Set(c, kSubframes, GuestLoad32(init + 32));
-    Set(c, kStereo, GuestLoad32(init + 36) >= 1);
+    Set(c, kStereo, GuestLoad32(init + 36) != 0); // 0 mono, 1 stereo (verified on dumped streams)
     Set(c, kSampleRate, GuestLoad32(init + 40));
     Set(c, kLoopStart, GuestLoad32(init + 44));
     Set(c, kLoopEnd, GuestLoad32(init + 48));
@@ -283,6 +290,13 @@ SCDA_IMPORT(XMAInitializeContext)
         static const uint32_t kRates[] = {24000, 32000, 44100, 48000};
         CloseDecode(g_decode[i]);
         g_decode[i].stream = scda_xma_open(Get(c, kStereo) ? 2 : 1, kRates[Get(c, kSampleRate)]);
+        if (const char* dir = getenv("SCDA_DUMP_XMA"))
+        {
+            static int streams;
+            char path[512];
+            snprintf(path, sizeof(path), "%s\\%04d_ctx%u_init%u.xma", dir, streams++, i, GuestLoad32(init + 36));
+            g_decode[i].dump = fopen(path, "wb");
+        }
     }
     Trace("init", c, uint32_t(ctx.lr));
     ctx.r3.u64 = 0;
