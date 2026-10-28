@@ -165,6 +165,61 @@ TEST(cp_scratch_register_writeback)
     CHECK_EQ(GuestLoad32(0xA068170C), 0x42u);
 }
 
+// Review Focus: predicated type-3 packets (header bit 0) run only when bin_select & bin_mask != 0
+// (predicated tiling: D3D's tail INTERRUPT must fire once, not on every tile pass). Masks reset to all-ones.
+TEST(cp_predicated_packets_follow_bin_mask)
+{
+    SetupRing();
+    GuestStore32(0xA0681800, 0);
+    GuestStore32(0xA0681804, 0);
+    g_w = 0;
+    Emit(0xC0006000); Emit(0x1);                                   // SET_BIN_MASK_LO = 1
+    Emit(0xC0006200); Emit(0x2);                                   // SET_BIN_SELECT_LO = 2 -> no match
+    Emit(0xC0006100); Emit(0); Emit(0xC0006300); Emit(0);          // HI halves 0
+    Emit(0xC0013D01); Emit(0x00681802); Emit(0x11);                // predicated MEM_WRITE: skipped
+    Emit(0xC0006200); Emit(0x1);                                   // SELECT_LO = 1 -> match
+    Emit(0xC0013D01); Emit(0x00681806); Emit(0x22);                // predicated MEM_WRITE: runs
+    Publish();
+    CpStats st{};
+    CommandProcessorTick(&st);
+    CHECK_EQ(GuestLoad32(0xA0681800), 0u);
+    CHECK_EQ(GuestLoad32(0xA0681804), 0x22u);
+    CHECK_EQ(GuestLoad32(kRptr), g_w);
+    CommandProcessorReset();
+    SetupRing();
+    g_w = 0;
+    Emit(0xC0013D01); Emit(0x00681802); Emit(0x33);                // after reset: masks all-ones
+    Publish();
+    CommandProcessorTick(&st);
+    CHECK_EQ(GuestLoad32(0xA0681800), 0x33u);
+}
+
+// Review Focus: EVENT_WRITE_ZPD fakes occlusion results like Xenia. D3D marks an issued end with
+// 0xFFFFFEED in ZFail (or ZPass) A/B and polls until it is gone; begin blocks are just zeroed.
+TEST(cp_event_write_zpd_completes_occlusion_query)
+{
+    SetupRing();
+    const uint32_t end = 0xA0681900, begin = 0xA0681940;
+    for (uint32_t i = 0; i < 8; i++)
+    {
+        GuestStore32(end + i * 4, i < 4 ? 0xFFFFFEED : 0);
+        GuestStore32(begin + i * 4, 0x5555);
+    }
+    g_w = 0;
+    Emit(0x00002325); Emit(0x00681900);          // RB_SAMPLE_COUNT_ADDR
+    Emit(0xC0005B00); Emit(0x15);                // EVENT_WRITE_ZPD
+    Emit(0x00002325); Emit(0x00681940);
+    Emit(0xC0005B00); Emit(0x15);
+    Publish();
+    CpStats st{};
+    CommandProcessorTick(&st);
+    CHECK_EQ(GuestLoad32(end + 0), _byteswap_ulong(1000));  // Total_A (little-endian)
+    CHECK_EQ(GuestLoad32(end + 8), 0u);                     // ZFail_A
+    CHECK_EQ(GuestLoad32(end + 16), _byteswap_ulong(1000)); // ZPass_A
+    CHECK_EQ(GuestLoad32(begin + 0), 0u);
+    CHECK_EQ(GuestLoad32(begin + 16), 0u);
+}
+
 TEST(cp_wait_reg_mem_blocks_until_satisfied)
 {
     SetupRing();

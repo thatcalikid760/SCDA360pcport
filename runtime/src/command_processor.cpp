@@ -35,11 +35,18 @@ enum : uint32_t
     kOpWaitRegMem = 0x3C,
     kOpMemWrite = 0x3D,
     kOpInterrupt = 0x54,
+    kOpSetBinMaskLo = 0x60,
+    kOpSetBinMaskHi = 0x61,
+    kOpSetBinSelectLo = 0x62,
+    kOpSetBinSelectHi = 0x63,
     kOpEventWriteShd = 0x58,
+    kOpEventWriteZpd = 0x5B,
 };
+constexpr uint32_t kRegSampleCountAddr = 0x2325; // RB_SAMPLE_COUNT_ADDR (occlusion query block)
 constexpr int kMaxIndirectDepth = 4;
 
 static uint32_t g_read, g_lastBase;
+static uint64_t g_binMask = ~0ull, g_binSelect = ~0ull; // predicated tiling (SET_BIN_MASK/SELECT)
 // Per nesting depth: IB stalled on a wait and the dword to resume at (the ring retries the IB packet).
 struct IbResume
 {
@@ -136,6 +143,7 @@ void CommandProcessorReset()
     g_read = 0;
     g_lastBase = 0;
     memset(g_resume, 0, sizeof(g_resume));
+    g_binMask = g_binSelect = ~0ull;
     // Display registers D3D reads over MMIO (Xenia's values): 1280x720 viewport, V counter.
     GuestStore32(kGpuRegBase + 0x194C * 4, 0x000002D0);
     GuestStore32(kGpuRegBase + 0x1961 * 4, 0x050002D0);
@@ -252,8 +260,43 @@ static bool ExecutePacket(uint32_t h, const Pm4Payload& p, int depth, CpStats& s
     }
 
     uint32_t count = ((h >> 16) & 0x3FFF) + 1;
+    // Predicated tiling: header bit 0 = run only for the selected bins (Xenia).
+    if ((h & 1) && !(g_binSelect & g_binMask))
+        return true;
     switch (Pm4Opcode(h))
     {
+    case kOpEventWriteZpd:
+    {
+        // Occlusion query (Xenia's fake): sample counts {Total, ZFail, ZPass, StencilFail} x {A, B},
+        // little-endian, at RB_SAMPLE_COUNT_ADDR. D3D marks an issued end with 0xFFFFFEED in the
+        // ZPass or ZFail pair and polls until it is replaced; report kFakeSamples passed samples.
+        constexpr uint32_t kQueryEnd = 0xFFFFFEED, kFakeSamples = 1000;
+        uint32_t a = GuestPhysical(GpuRegister(kRegSampleCountAddr));
+        if (!Committed(a, 32))
+            return true;
+        bool end = (GuestLoad32(a + 16) == kQueryEnd && GuestLoad32(a + 20) == kQueryEnd) ||
+                   (GuestLoad32(a + 8) == kQueryEnd && GuestLoad32(a + 12) == kQueryEnd);
+        for (uint32_t i = 0; i < 8; i++)
+            GuestStore32(a + i * 4, 0);
+        if (end)
+        {
+            GuestStore32(a, _byteswap_ulong(kFakeSamples));
+            GuestStore32(a + 16, _byteswap_ulong(kFakeSamples));
+        }
+        return true;
+    }
+    case kOpSetBinMaskLo:
+        g_binMask = (g_binMask & ~0xFFFFFFFFull) | p(0);
+        return true;
+    case kOpSetBinMaskHi:
+        g_binMask = (g_binMask & 0xFFFFFFFFull) | uint64_t(p(0)) << 32;
+        return true;
+    case kOpSetBinSelectLo:
+        g_binSelect = (g_binSelect & ~0xFFFFFFFFull) | p(0);
+        return true;
+    case kOpSetBinSelectHi:
+        g_binSelect = (g_binSelect & 0xFFFFFFFFull) | uint64_t(p(0)) << 32;
+        return true;
     case kOpEventWriteShd:
         // initiator, address, value; initiator bit 31 = write the swap counter instead.
         GpuStore(p(1), (p(0) & 0x80000000u) ? Gpu().swapCounter.load() : p(2));
