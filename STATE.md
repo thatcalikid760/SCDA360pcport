@@ -44,7 +44,7 @@
 4. Audio (XMA/XAudio). Installer must write `game\SC4_Offline.img` + `.xexhdr` (does not yet).
 
 ## Open questions / risks
-- 4 undecodable words 82C51468-82C51490 (.text tail).
-- setjmp/longjmp not located.
+- 4 undecodable words 82C51468-82C51490 (.text tail); setjmp/longjmp not located.
+- Resolve map (`DrawResources::resolved`) never invalidated: clear it on title restart.
 - Gemini cross-check of VMX patch pending (bridge timed out 2x on 2026-10-27).
 - 134 logging-stub imports may hide wrong behavior past the menu.

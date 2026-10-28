@@ -274,7 +274,8 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs)
         if (!t.valid)
             continue;
         // A resolve target: guest memory there does not hold the image, the host copy does.
-        if (auto res = r.resolved.find(t.physical); res != r.resolved.end())
+        // shortcut: matched by address and size only; entries are never invalidated.
+        if (auto res = r.resolved.find(t.physical); res != r.resolved.end() && t.width <= res->second.width && t.height <= res->second.height)
         {
             srvs[slot] = res->second.srv.Get();
             continue;
