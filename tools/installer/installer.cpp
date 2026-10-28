@@ -20,6 +20,8 @@
 
 // SHA-256 of the SC4_Offline.xex that generated/ was recompiled from.
 static const char* kExpectedXexSha256 = "86d32713b57feb6631f0810a9416046beb3a2157084498e61f5b59b669e82a93";
+// SHA-256 of the flat image xex_dump builds from it (config/expected_image.txt).
+static const char* kExpectedImageSha256 = "01193b2556abc03506ad9c0d40f30b04ce27d027e27a59cf786eeb90b53aea4e";
 
 constexpr uint32_t SECTOR = 2048;
 constexpr uint64_t kXgdBases[] = { 0, 0x18300000, 0xFD90000, 0x2080000 }; // xiso, XGD3, XGD2, XGD1
@@ -152,6 +154,30 @@ static bool WriteResource(int id, const std::wstring& path)
     return ok;
 }
 
+// Runs the embedded xex_dump: SC4_Offline.xex -> flat image + XEX header (what scda.exe loads).
+static bool BuildImage(const std::wstring& game)
+{
+    wchar_t tmp[MAX_PATH];
+    GetTempPathW(MAX_PATH, tmp);
+    std::wstring tool = std::wstring(tmp) + L"scda_xex_dump.exe";
+    if (!WriteResource(IDR_XEX_DUMP, tool))
+        return false;
+    std::wstring cmd = L"\"" + tool + L"\" \"" + game + L"\\SC4_Offline.xex\" --out-img \"" + game +
+        L"\\SC4_Offline.img\" --out-header \"" + game + L"\\SC4_Offline.xexhdr\"";
+    STARTUPINFOW si{ sizeof(si) };
+    PROCESS_INFORMATION pi;
+    DWORD code = 1;
+    if (CreateProcessW(tool.c_str(), cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+    {
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        GetExitCodeProcess(pi.hProcess, &code);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+    DeleteFileW(tool.c_str());
+    return code == 0 && Sha256File(game + L"\\SC4_Offline.img") == kExpectedImageSha256;
+}
+
 static void CreateDesktopShortcut(const std::wstring& target, const std::wstring& workDir)
 {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
@@ -265,6 +291,10 @@ static void Install(std::wstring iso, std::wstring dir, bool shortcut)
     }
     CloseHandle(f);
 
+    PostStatus(L"Building SC4_Offline.img...");
+    if (!BuildImage(game))
+        return fail(L"Failed building SC4_Offline.img from SC4_Offline.xex.");
+
     PostStatus(L"Installing scda.exe...");
     std::wstring exe = dir + L"\\scda.exe";
     if (!WriteResource(IDR_SCDA_EXE, exe))
@@ -274,7 +304,7 @@ static void Install(std::wstring iso, std::wstring dir, bool shortcut)
 
     PostMessageW(g_wnd, WM_APP_PROGRESS, 1000, 0);
     g_ok = true;
-    PostStatus(L"Done. Installed to " + dir + L"  (developer preview: the game does not run yet)");
+    PostStatus(L"Done. Installed to " + dir + L"  (developer preview)");
     PostMessageW(g_wnd, WM_APP_DONE, 1, 0);
 }
 
