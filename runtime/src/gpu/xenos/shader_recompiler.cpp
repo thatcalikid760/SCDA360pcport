@@ -1707,6 +1707,7 @@ void ShaderRecompiler::recompileBody(const be<uint32_t>* code, uint32_t shaderSi
             uint32_t sequence = 0;
             bool shouldReturn = false;
             bool shouldCloseCurlyBracket = false;
+            std::string execCondition;
 
             switch (cfInstr.opcode)
             {
@@ -1725,7 +1726,11 @@ void ShaderRecompiler::recompileBody(const be<uint32_t>* code, uint32_t shaderSi
                 address = cfInstr.condExec.address;
                 count = cfInstr.condExec.count;
                 sequence = cfInstr.condExec.sequence;
-                shouldReturn = (cfInstr.opcode == ControlFlowOpcode::CondExecEnd || cfInstr.opcode == ControlFlowOpcode::CondExecEnd);
+                shouldReturn = (cfInstr.opcode == ControlFlowOpcode::CondExecEnd || cfInstr.opcode == ControlFlowOpcode::CondExecPredCleanEnd);
+                // SCDA raw: the clause runs only when the bool constant equals the condition (upstream
+                // ran it unconditionally: both sides of e.g. the particle VS's b0 paths, clobbering each other).
+                if (raw)
+                    execCondition = fmt::format("b{} {}= 0", uint32_t(cfInstr.condExec.boolAddress), cfInstr.condExec.condition ? "!" : "=");
                 break;
 
             case ControlFlowOpcode::CondExecPred:
@@ -1734,6 +1739,9 @@ void ShaderRecompiler::recompileBody(const be<uint32_t>* code, uint32_t shaderSi
                 count = cfInstr.condExecPred.count;
                 sequence = cfInstr.condExecPred.sequence;
                 shouldReturn = (cfInstr.opcode == ControlFlowOpcode::CondExecPredEnd);
+                // SCDA raw: the clause runs only when p0 equals the condition.
+                if (raw)
+                    execCondition = cfInstr.condExecPred.condition ? "p0" : "!p0";
                 break;
 
             case ControlFlowOpcode::LoopStart:
@@ -1825,7 +1833,16 @@ void ShaderRecompiler::recompileBody(const be<uint32_t>* code, uint32_t shaderSi
             }
 
             auto instructionCode = code + address * 3;
-            
+
+            if (!execCondition.empty() && count)
+            {
+                indent();
+                println("if ({})", execCondition);
+                indent();
+                out += "{\n";
+                ++indentation;
+            }
+
             for (uint32_t i = 0; i < count; i++)
             {
                 union
@@ -1895,6 +1912,13 @@ void ShaderRecompiler::recompileBody(const be<uint32_t>* code, uint32_t shaderSi
             
                 sequence >>= 2;
                 instructionCode += 3;
+            }
+
+            if (!execCondition.empty() && count)
+            {
+                --indentation;
+                indent();
+                out += "}\n";
             }
 
             if (shouldReturn)

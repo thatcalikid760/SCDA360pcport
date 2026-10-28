@@ -85,6 +85,23 @@ TEST(raw_unknown_opcode_still_compiles)
     CHECK(!code.empty());
 }
 
+// A bool-conditional exec clause (01_Intro particle VS: cond_exec_pred_clean on b0) runs only when
+// the bool matches its condition; translated unconditionally, both b0 paths clobbered each other.
+TEST(raw_cond_exec_tests_bool_constant)
+{
+    ShaderBlob b = AluShader(1, 0);
+    // CF 0: CondExecPredCleanEnd (14), bool 5, condition 1.
+    b.ucode[1] = (5u << 2) | (1u << 10) | (14u << 12);
+    TranslateResult t = TranslateShader(b);
+    CHECK(t.ok);
+    CHECK(t.hlsl.find("if (b5 != 0)") != std::string::npos);
+    b.ucode[1] &= ~(1u << 10); // condition 0
+    t = TranslateShader(b);
+    CHECK(t.hlsl.find("if (b5 == 0)") != std::string::npos);
+    std::string err;
+    CHECK(!CompileHlsl(t.hlsl, true, &err).empty());
+}
+
 // Review Focus: a control-flow address past the end of the microcode fails cleanly.
 TEST(raw_rejects_out_of_range_exec_address)
 {
