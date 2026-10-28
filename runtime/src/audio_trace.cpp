@@ -781,3 +781,25 @@ extern "C" PPC_FUNC(__imp__sub_82A58B38);
 PPC_FUNC(sub_82A58B38) { LogFadeWriter(ctx, base, "MUTE", __imp__sub_82A58B38); }
 extern "C" PPC_FUNC(__imp__sub_82A57A40);
 PPC_FUNC(sub_82A57A40) { LogFadeWriter(ctx, base, "UNMUTE", __imp__sub_82A57A40); }
+
+// sub_82A68F48(obj, listener, zone, &score): distance score of one music zone (positions +932..+940)
+// against the listener; sub_82A66FC0 picks the best zone above obj+564 into mix+1420 (-1 = none).
+extern "C" PPC_FUNC(__imp__sub_82A68F48);
+PPC_FUNC(sub_82A68F48)
+{
+    static uint32_t s_calls;
+    const bool log = Enabled() && s_calls++ % 600 == 0;
+    const uint32_t o = ctx.r3.u32, l = ctx.r4.u32, z = ctx.r5.u32, out = ctx.r6.u32;
+    __imp__sub_82A68F48(ctx, base);
+    if (!log)
+        return;
+    auto f = [&](uint32_t a) {
+        union { uint32_t u; float f; } v{PPC_LOAD_U32(a)};
+        return v.f;
+    };
+    fprintf(stderr,
+            "[dare] zone-score obj %08X thr %g listener %08X (%g %g %g) zone %08X (%g %g %g) r %g/%g flags228 %08X "
+            "1444 %08X 1304 %08X score %g\n",
+            o, f(o + 564), l, f(l + 932), f(l + 936), f(l + 940), z, f(z + 932), f(z + 936), f(z + 940), f(z + 340),
+            f(z + 356), PPC_LOAD_U32(z + 228), PPC_LOAD_U32(z + 1444), PPC_LOAD_U32(z + 1304), f(out));
+}
