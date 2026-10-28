@@ -249,3 +249,16 @@ TEST(ke_event_inline_reinit_drops_stale_signal)
     w = Call5(__imp__KeWaitForSingleObject, ev, 0, 0, 0, 0x40600310);
     CHECK_EQ(w.r3.u32, 0u);
 }
+
+TEST(xmp_get_status_reports_idle)
+{
+    TestGuestBase();
+    // XMPGetStatus = XMsgInProcessCall(0xFA, 0x00070009, {u32 client 2, u32* state}, 0). A nonzero
+    // state means a user soundtrack is playing: the game then fades its own music to -96 dB.
+    GuestStore32(0x40500100, 2);
+    GuestStore32(0x40500104, 0x40500108);
+    GuestStore32(0x40500108, 0xDEADBEEF);
+    auto r = Call5(__imp__XMsgInProcessCall, 0xFA, 0x00070009, 0x40500100, 0, 0);
+    CHECK_EQ(r.r3.u32, 0u);
+    CHECK_EQ(GuestLoad32(0x40500108), 0u);
+}

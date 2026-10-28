@@ -619,3 +619,165 @@ PPC_FUNC(sub_8254D848)
         fprintf(stderr, "[dare] fadecurve frac %.4f curve %d -> %.3f dB lr %08X\n", frac / 65536.0, curve,
                 ctx.r3.s32 / 65536.0, lr);
 }
+
+// sub_82536D08(obj, def, target dB 16.16, f1 time): arms a volume fade (FadeTo 825385B0 lands here).
+extern "C" PPC_FUNC(__imp__sub_82536D08);
+PPC_FUNC(sub_82536D08)
+{
+    if (Enabled())
+    {
+        fprintf(stderr, "[dare] fadeto r3 %08X r4 %08X dB %.3f time %g lr %08X stack", ctx.r3.u32, ctx.r4.u32,
+                ctx.r5.s32 / 65536.0, ctx.f1.f64, uint32_t(ctx.lr));
+        for (uint32_t fr = PPC_LOAD_U32(ctx.r1.u32), n = 0; fr && n < 8; fr = PPC_LOAD_U32(fr), n++)
+            fprintf(stderr, " %08X", PPC_LOAD_U32(fr - 8));
+        fprintf(stderr, "\n");
+    }
+    __imp__sub_82536D08(ctx, base);
+}
+
+// Per-frame params modifiers in tick 825356E8 (r3 = inst, r4 = params): logs dB before/after for
+// the multi-track music bus instance (def id 007F0018 at inst+40).
+namespace
+{
+void WatchBusModifier(PPCContext& ctx, uint8_t* base, const char* name, void (*impl)(PPCContext&, uint8_t*))
+{
+    const uint32_t inst = ctx.r3.u32, p = ctx.r4.u32, def = Enabled() && inst ? PPC_LOAD_U32(inst + 40) : 0;
+    const bool bus = def && def < 0xE0000000 && PPC_LOAD_U32(def) == 0x007F0018;
+    const int32_t before = bus ? int32_t(PPC_LOAD_U32(p + 4)) : 0;
+    impl(ctx, base);
+    if (bus)
+    {
+        const int32_t after = int32_t(PPC_LOAD_U32(p + 4));
+        if (after != before)
+            fprintf(stderr, "[dare] busmod %s inst %08X %.3f -> %.3f +100 %u +104 %08X +108 %d +112 %d +116 %d\n", name,
+                    inst, before / 65536.0, after / 65536.0, PPC_LOAD_U32(inst + 100), PPC_LOAD_U32(inst + 104),
+                    int32_t(PPC_LOAD_U32(inst + 108)), int32_t(PPC_LOAD_U32(inst + 112)),
+                    int32_t(PPC_LOAD_U32(inst + 116)));
+    }
+}
+} // namespace
+extern "C" PPC_FUNC(__imp__sub_8252C678);
+PPC_FUNC(sub_8252C678) { WatchBusModifier(ctx, base, "C678", __imp__sub_8252C678); }
+extern "C" PPC_FUNC(__imp__sub_8252C720);
+PPC_FUNC(sub_8252C720) { WatchBusModifier(ctx, base, "C720", __imp__sub_8252C720); }
+extern "C" PPC_FUNC(__imp__sub_8252C560);
+PPC_FUNC(sub_8252C560) { WatchBusModifier(ctx, base, "C560", __imp__sub_8252C560); }
+
+// Per-frame base params for each playing sound (tick 82538870): sub_82533860(a, b, c, out) builds
+// them, sub_825304C8(b, c, params) then applies type/object volume changes. Logs changes by
+// 825304C8 (sampled per (b, c)).
+extern "C" PPC_FUNC(__imp__sub_825304C8);
+PPC_FUNC(sub_825304C8)
+{
+    if (!Enabled())
+        return __imp__sub_825304C8(ctx, base);
+    const uint32_t b = ctx.r3.u32, c = ctx.r4.u32, p = ctx.r5.u32;
+    const int32_t before = int32_t(PPC_LOAD_U32(p + 4));
+    __imp__sub_825304C8(ctx, base);
+    const int32_t after = int32_t(PPC_LOAD_U32(p + 4));
+    static std::map<uint64_t, uint32_t> s_seen;
+    static std::mutex s_lock;
+    std::lock_guard lock(s_lock);
+    if (after != before && s_seen[(uint64_t(b) << 32) | c]++ % 30 == 0)
+        fprintf(stderr, "[dare] objvol b %08X c %08X %.3f -> %.3f\n", b, c, before / 65536.0, after / 65536.0);
+}
+
+extern "C" PPC_FUNC(__imp__sub_82533860);
+PPC_FUNC(sub_82533860)
+{
+    if (!Enabled())
+        return __imp__sub_82533860(ctx, base);
+    const uint32_t a = ctx.r3.u32, b = ctx.r4.u32, c = ctx.r5.u32, p = ctx.r6.u32, lr = uint32_t(ctx.lr);
+    __imp__sub_82533860(ctx, base);
+    const int32_t dB = int32_t(PPC_LOAD_U32(p + 4));
+    static std::map<uint64_t, int32_t> s_last;
+    static std::mutex s_lock;
+    std::lock_guard lock(s_lock);
+    const uint64_t key = (uint64_t(b) << 32) | c;
+    auto it = s_last.find(key);
+    if (it == s_last.end() || it->second != dB)
+    {
+        if (it == s_last.end() || std::abs(it->second - dB) > 0x8000)
+            fprintf(stderr, "[dare] base a %08X (id %08X) b %08X c %08X dB %.3f lr %08X\n", a,
+                    a && a < 0xE0000000 ? PPC_LOAD_U32(a) : 0, b, c, dB / 65536.0, lr);
+        s_last[key] = dB;
+    }
+}
+
+// Volume-with-fade lookups added to every sound's dB in 82533D40: sub_825330B8(object, 1)
+// (ChangeVolumeForObjectWithFade) and sub_825332B8(type, object, 1) (ChangeVolumeForTypeWithFade).
+namespace
+{
+void LogVolumeLookup(const char* what, uint32_t a, uint32_t b, int32_t dB, uint32_t lr)
+{
+    static std::map<uint64_t, int32_t> s_last;
+    static std::mutex s_lock;
+    std::lock_guard lock(s_lock);
+    const uint64_t key = (uint64_t(a) << 32) | b;
+    auto it = s_last.find(key);
+    if (dB && (it == s_last.end() || std::abs(it->second - dB) > 0x40000))
+    {
+        fprintf(stderr, "[dare] %s %08X %08X -> %.3f lr %08X\n", what, a, b, dB / 65536.0, lr);
+        s_last[key] = dB;
+    }
+}
+} // namespace
+extern "C" PPC_FUNC(__imp__sub_825330B8);
+PPC_FUNC(sub_825330B8)
+{
+    const uint32_t a = ctx.r3.u32, lr = uint32_t(ctx.lr);
+    __imp__sub_825330B8(ctx, base);
+    if (Enabled())
+        LogVolumeLookup("objfade", a, 0, ctx.r3.s32, lr);
+}
+extern "C" PPC_FUNC(__imp__sub_825332B8);
+PPC_FUNC(sub_825332B8)
+{
+    const uint32_t a = ctx.r3.u32, b = ctx.r4.u32, lr = uint32_t(ctx.lr);
+    __imp__sub_825332B8(ctx, base);
+    if (Enabled())
+        LogVolumeLookup("typefade", a, b, ctx.r3.s32, lr);
+}
+
+// sub_82536A90(type, dB 16.16, f1 time): ChangeVolumeForTypeWithFade.
+extern "C" PPC_FUNC(__imp__sub_82536A90);
+PPC_FUNC(sub_82536A90)
+{
+    if (Enabled())
+    {
+        fprintf(stderr, "[dare] typevol r3 %08X r4 %08X r5 %08X f1 %g lr %08X stack", ctx.r3.u32, ctx.r4.u32, ctx.r5.u32,
+                ctx.f1.f64, uint32_t(ctx.lr));
+        for (uint32_t fr = PPC_LOAD_U32(ctx.r1.u32), n = 0; fr && n < 10; fr = PPC_LOAD_U32(fr), n++)
+            fprintf(stderr, " %08X", PPC_LOAD_U32(fr - 8));
+        fprintf(stderr, "\n");
+    }
+    __imp__sub_82536A90(ctx, base);
+}
+
+// Other writers of the type-fade map (0x82CDBC94): log args + stack.
+namespace
+{
+void LogFadeWriter(PPCContext& ctx, uint8_t* base, const char* name, void (*impl)(PPCContext&, uint8_t*))
+{
+    if (Enabled())
+    {
+        fprintf(stderr, "[dare] %s r3 %08X r4 %08X r5 %08X r6 %08X f1 %g lr %08X stack", name, ctx.r3.u32, ctx.r4.u32,
+                ctx.r5.u32, ctx.r6.u32, ctx.f1.f64, uint32_t(ctx.lr));
+        for (uint32_t fr = PPC_LOAD_U32(ctx.r1.u32), n = 0; fr && n < 10; fr = PPC_LOAD_U32(fr), n++)
+            fprintf(stderr, " %08X", PPC_LOAD_U32(fr - 8));
+        fprintf(stderr, "\n");
+    }
+    impl(ctx, base);
+}
+} // namespace
+extern "C" PPC_FUNC(__imp__sub_82532DA0);
+PPC_FUNC(sub_82532DA0) { LogFadeWriter(ctx, base, "fadew2DA0", __imp__sub_82532DA0); }
+extern "C" PPC_FUNC(__imp__sub_82537B10);
+PPC_FUNC(sub_82537B10) { LogFadeWriter(ctx, base, "fadew7B10", __imp__sub_82537B10); }
+
+// Audio manager (vt 0x82128C80) mute-all: slot 79 sub_82A58B38 sets +400 (every group fades to
+// -96 in 82A56818), slot 80 sub_82A57A40 clears it.
+extern "C" PPC_FUNC(__imp__sub_82A58B38);
+PPC_FUNC(sub_82A58B38) { LogFadeWriter(ctx, base, "MUTE", __imp__sub_82A58B38); }
+extern "C" PPC_FUNC(__imp__sub_82A57A40);
+PPC_FUNC(sub_82A57A40) { LogFadeWriter(ctx, base, "UNMUTE", __imp__sub_82A57A40); }

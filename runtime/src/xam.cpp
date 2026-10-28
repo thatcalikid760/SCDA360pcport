@@ -88,9 +88,16 @@ SCDA_IMPORT(XMsgStartIORequest)
 SCDA_IMPORT(XMsgStartIORequestEx) { __imp__XMsgStartIORequest(ctx, base); }
 
 // XMsgInProcessCall(App, Message, Param1, Param2): synchronous.
+// XMsgInProcessCall(App, Message, Param1, Param2). XMP (music player, app 0xFA) XMPGetStatus
+// (0x00070009, Param1 -> {u32 client, u32* state}) reports idle: the title fades its own music
+// to -96 dB while it believes a user soundtrack plays (it reads an uninitialised stack word).
 SCDA_IMPORT(XMsgInProcessCall)
 {
+    constexpr uint32_t kAppXmp = 0xFA, kXmpGetStatus = 0x00070009, kXmpStateIdle = 0;
     RuntimeLog("[xam] XMsgInProcessCall app 0x%X msg 0x%X\n", ctx.r3.u32, ctx.r4.u32);
+    if (ctx.r3.u32 == kAppXmp && ctx.r4.u32 == kXmpGetStatus && ctx.r5.u32)
+        if (uint32_t state = GuestLoad32(ctx.r5.u32 + 4))
+            GuestStore32(state, kXmpStateIdle);
     ctx.r3.u64 = kErrorSuccess;
 }
 
