@@ -38,8 +38,8 @@
 - Run new builds from `_install\` (needs `game\` next to the exe): copy `runtime\build\scda.exe` -> `_install\scda_dev.exe`.
 
 ## Next
-1. Sign-in: XamUserGetSigninState=0 -> PROFILE dialog. Fake local profile (signin state, XUID, name) + XamInputGetState -> XInput so the menu can be driven.
-2. Renderer: perf (texture cache across frames), points/rect lists, depth.
+1. Done (aa09e97): input (XInput + keyboard + `SCDA_AUTOPRESS="40:A"`), local profile, XNotify, XamShowSigninUI, profile settings (not persisted). A on "Sign in" reaches LOAD GAME menu.
+2. Next: drive menus to a mission (launch-data relaunch path), renderer perf (~14 fps: texture cache across frames), points/rect lists, depth, persist profile settings.
 3. Kernel/XAM HLE: XAM content/profile, XNotify, ExGetXConfigSetting, RtlImageXexHeaderField; launch-data intercept (capture in-process, restart title loop, never exit).
 4. Audio (XMA/XAudio). Installer must write `game\SC4_Offline.img` + `.xexhdr` (does not yet).
 
