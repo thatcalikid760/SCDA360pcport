@@ -3,6 +3,7 @@
 // fill data imports, build the main thread's PCR/TLS/TEB/stack, call _xstart.
 #include <windows.h>
 #include <dbghelp.h>
+#include <psapi.h>
 #include <cstdarg>
 #include <cstdlib>
 #include <cstring>
@@ -368,7 +369,12 @@ int main(int argc, char** argv)
         TitleStopAll();
         if (!ResetTitle(imagePath))
             return 2;
+        LaunchDataNewInstance();
         TitleRestarted();
-        RuntimeLog("[title] instance %u starting\n", instance + 1);
+        PROCESS_MEMORY_COUNTERS_EX pm{ sizeof(pm) };
+        K32GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pm, sizeof(pm));
+        DWORD handles = 0;
+        GetProcessHandleCount(GetCurrentProcess(), &handles);
+        RuntimeLog("[title] instance %u starting (private %zu MB, %lu host handles)\n", instance + 1, pm.PrivateUsage >> 20, handles);
     }
 }

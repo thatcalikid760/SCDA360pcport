@@ -9,3 +9,6 @@
 void LaunchDataSet(const uint8_t* data, uint32_t size);
 void LaunchDataClear();
 bool LaunchDataPresent();
+// Whether the current title instance called SetLaunchData (cleared on relaunch; diagnostics).
+bool LaunchDataSetThisInstance();
+void LaunchDataNewInstance();

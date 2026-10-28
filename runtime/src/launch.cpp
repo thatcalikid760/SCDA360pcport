@@ -16,6 +16,7 @@ constexpr uint32_t kErrorSuccess = 0, kErrorNotFound = 0x490, kErrorInvalidParam
 static std::mutex g_launchMutex;
 static std::vector<uint8_t> g_launchData;
 static bool g_launchPresent = false;
+static bool g_setThisInstance = false;
 
 void LaunchDataSet(const uint8_t* data, uint32_t size)
 {
@@ -37,11 +38,27 @@ bool LaunchDataPresent()
     return g_launchPresent;
 }
 
+bool LaunchDataSetThisInstance()
+{
+    std::lock_guard lock(g_launchMutex);
+    return g_setThisInstance;
+}
+
+void LaunchDataNewInstance()
+{
+    std::lock_guard lock(g_launchMutex);
+    g_setThisInstance = false;
+}
+
 // XamLoaderSetLaunchData(Data, Size)
 SCDA_IMPORT(XamLoaderSetLaunchData)
 {
     uint32_t data = ctx.r3.u32, size = ctx.r4.u32;
     LaunchDataSet(data ? g_base + data : nullptr, data ? size : 0);
+    {
+        std::lock_guard lock(g_launchMutex);
+        g_setThisInstance = true;
+    }
     RuntimeLog("[launch] SetLaunchData %u bytes\n", size);
     if (const char* out = getenv("SCDA_LAUNCH_DATA_OUT"); out && data)
         if (FILE* f = fopen(out, "wb"))
@@ -57,7 +74,7 @@ SCDA_IMPORT(XamLoaderSetLaunchData)
 SCDA_IMPORT(XamLoaderLaunchTitle)
 {
     const char* path = ctx.r3.u32 ? (const char*)GuestPtr(ctx.r3.u32) : "(null)";
-    RuntimeLog("[launch] LaunchTitle \"%s\" flags 0x%X, launch data %s\n", path, ctx.r4.u32, LaunchDataPresent() ? "set" : "none");
+    RuntimeLog("[launch] LaunchTitle \"%s\" flags 0x%X, launch data %s\n", path, ctx.r4.u32, LaunchDataSetThisInstance() ? "set by this instance" : LaunchDataPresent() ? "STALE (from an earlier instance)" : "none");
     // shortcut: any other image path (or none: back to the dashboard) relaunches this title too.
     TitleRequestRelaunch();
 }

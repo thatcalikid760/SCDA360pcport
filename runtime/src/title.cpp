@@ -75,19 +75,21 @@ void TitleCheckExit()
         TitleThreadExit();
 }
 
+// Only the owning thread writes its depth (the manager reads it after a synchronous suspend):
+// plain relaxed load/store, no locked read-modify-write on every import call.
 TitleImportScope::TitleImportScope()
 {
     if (t_self)
     {
         TitleCheckExit();
-        t_self->importDepth++;
+        t_self->importDepth.store(t_self->importDepth.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
     }
 }
 
 TitleImportScope::~TitleImportScope()
 {
     if (t_self)
-        t_self->importDepth--;
+        t_self->importDepth.store(t_self->importDepth.load(std::memory_order_relaxed) - 1, std::memory_order_relaxed);
 }
 
 DWORD TitleWait(DWORD count, const HANDLE* handles, bool waitAll, DWORD ms, bool alertable)

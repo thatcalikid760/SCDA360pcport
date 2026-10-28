@@ -160,6 +160,8 @@ static void ResetForRelaunch()
     for (auto& w : g_stalledWait)
         w = 0;
     g_waitSince = 0;
+    Gpu().pendingSwaps = 0; // the last tick after VideoReset may have counted a swap
+    Gpu().swapCounter = 0;
     CommandProcessorReset();
 }
 
