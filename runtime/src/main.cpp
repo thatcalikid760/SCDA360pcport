@@ -75,18 +75,61 @@ static PPC_FUNC(UnmappedCall)
     std::_Exit(3);
 }
 
+// Physical memory (512 MB) appears twice in guest space: 0xA0000000 (64 KB pages, where the
+// physical allocator hands it out) and 0xC0000000 (16 MB pages; D3D reads shader microcode
+// there). Both are views of one pagefile section; the rest of the 4 GB is plain memory.
+// shortcut: the 0xE0000000 (4 KB page) alias is not mirrored yet; SCDA_TRAP_ALIAS=1 traps it.
+static constexpr uint64_t kPhysicalViews[] = { 0xA0000000ull, 0xC0000000ull };
+static constexpr uint64_t kPhysicalSize = 0x20000000ull;
+
+static uint8_t* ReserveMirroredMemory(uint8_t* want)
+{
+    using VirtualAlloc2Fn = PVOID(WINAPI*)(HANDLE, PVOID, SIZE_T, ULONG, ULONG, MEM_EXTENDED_PARAMETER*, ULONG);
+    using MapViewOfFile3Fn = PVOID(WINAPI*)(HANDLE, HANDLE, PVOID, ULONG64, SIZE_T, ULONG, ULONG, MEM_EXTENDED_PARAMETER*, ULONG);
+    HMODULE kb = GetModuleHandleW(L"kernelbase.dll");
+    auto alloc2 = kb ? (VirtualAlloc2Fn)GetProcAddress(kb, "VirtualAlloc2") : nullptr;
+    auto map3 = kb ? (MapViewOfFile3Fn)GetProcAddress(kb, "MapViewOfFile3") : nullptr;
+    if (!alloc2 || !map3)
+        return nullptr;
+    HANDLE section = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, DWORD(kPhysicalSize), nullptr);
+    if (!section)
+        return nullptr;
+    auto* base = (uint8_t*)alloc2(nullptr, want, PPC_MEMORY_SIZE, MEM_RESERVE | MEM_RESERVE_PLACEHOLDER, PAGE_NOACCESS, nullptr, 0);
+    if (!base)
+    {
+        CloseHandle(section);
+        return nullptr;
+    }
+    // Split the placeholder at the view boundaries, then fill each piece.
+    for (uint64_t view : kPhysicalViews)
+        VirtualFree(base + view, kPhysicalSize, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER);
+    bool ok = true;
+    for (uint64_t view : kPhysicalViews)
+        ok &= map3(section, GetCurrentProcess(), base + view, 0, kPhysicalSize, MEM_REPLACE_PLACEHOLDER, PAGE_READWRITE, nullptr, 0) != nullptr;
+    // Plain memory below the first view and above the last (views are contiguous).
+    uint64_t lo = kPhysicalViews[0], hi = kPhysicalViews[std::size(kPhysicalViews) - 1] + kPhysicalSize;
+    ok &= alloc2(nullptr, base, lo, MEM_RESERVE | MEM_COMMIT | MEM_REPLACE_PLACEHOLDER, PAGE_READWRITE, nullptr, 0) != nullptr;
+    ok &= alloc2(nullptr, base + hi, PPC_MEMORY_SIZE - hi, MEM_RESERVE | MEM_COMMIT | MEM_REPLACE_PLACEHOLDER, PAGE_READWRITE, nullptr, 0) != nullptr;
+    CloseHandle(section); // the views keep it alive
+    if (!ok)
+        RuntimeLog("[mem] mirrored physical memory setup failed\n");
+    return ok ? base : nullptr; // shortcut: a failed setup leaks its reservation; the process exits anyway
+}
+
 static bool InitMemory()
 {
     // Prefer 0x100000000 like UnleashedRecomp so host pointers never alias low guest addresses.
-    g_base = (uint8_t*)VirtualAlloc((void*)0x100000000ull, PPC_MEMORY_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    g_base = ReserveMirroredMemory((uint8_t*)0x100000000ull);
     if (!g_base)
-        g_base = (uint8_t*)VirtualAlloc(nullptr, PPC_MEMORY_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        g_base = ReserveMirroredMemory(nullptr);
     if (!g_base)
         return false;
 
     // Null guest page traps.
     DWORD old;
     VirtualProtect(g_base, 4096, PAGE_NOACCESS, &old);
+    if (getenv("SCDA_TRAP_ALIAS"))
+        VirtualProtect(g_base + 0xE0000000ull, 0x20000000, PAGE_NOACCESS, &old);
 
     for (uint64_t guest = PPC_CODE_BASE; guest < PPC_CODE_BASE + PPC_CODE_SIZE; guest += 4)
         PPC_LOOKUP_FUNC(g_base, guest) = UnmappedCall;

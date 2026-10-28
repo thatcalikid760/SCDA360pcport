@@ -3,6 +3,7 @@
 #pragma once
 #include <deque>
 #include <mutex>
+#include <unordered_map>
 #include <gpu/draw.h>
 
 struct FrameStats
@@ -15,6 +16,9 @@ struct Frame
 {
     std::vector<DrawCall> draws;
     std::vector<Resolve> resolves;
+    // Guest vertex ranges the draws fetch, copied when the draw was submitted (MemoryRangeKey ->
+    // bytes as in guest memory): the CPU reuses vertex rings long before the renderer gets here.
+    std::unordered_map<uint64_t, std::vector<uint8_t>> vertexData;
     FrameStats stats;
 };
 
@@ -34,6 +38,14 @@ public:
             return;
         }
         m_open.draws.push_back(std::move(d));
+    }
+    // Copies a guest range into the open frame once (later calls with the same key are ignored).
+    void AddVertexData(uint64_t key, const uint8_t* data, uint32_t bytes)
+    {
+        std::lock_guard lock(m_mutex);
+        auto [it, added] = m_open.vertexData.try_emplace(key);
+        if (added)
+            it->second.assign(data, data + bytes);
     }
     void AddResolve(Resolve r)
     {

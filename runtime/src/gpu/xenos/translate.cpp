@@ -22,8 +22,32 @@ cbuffer SharedConstants : register(b2)
     uint g_SpecConstantsValue;
     float g_AlphaThreshold;
     float2 g_HalfPixelOffset;
+    uint g_Vte;              // PA_CL_VTE_CNTL
+    float3 g_VpScale;        // PA_CL_VPORT_X/Y/ZSCALE
+    float4 g_VpOffset;       // PA_CL_VPORT_X/Y/ZOFFSET, w unused
+    float4 g_WindowToNdc;    // x, y: 2 / render target size; z, w: window offset in pixels
 };
 uint g_SpecConstants() { return g_SpecConstantsValue; }
+
+// Xenos viewport transform (PA_CL_VTE_CNTL: bits 0-5 scale/offset enables, 8 xy not divided
+// by w, 9 z not divided, 10 w holds 1/w), then window pixels -> host clip space (y down).
+float4 XenosViewport(float4 p)
+{
+    uint vte = g_Vte;
+    float w = (vte & 0x400) ? (p.w != 0.0 ? 1.0 / p.w : 1.0) : p.w;
+    float invW = w != 0.0 ? 1.0 / w : 1.0;
+    float3 s = p.xyz;
+    if (!(vte & 0x100)) s.xy *= invW;
+    if (!(vte & 0x200)) s.z *= invW;
+    if (vte & 0x01) s.x *= g_VpScale.x;
+    if (vte & 0x02) s.x += g_VpOffset.x;
+    if (vte & 0x04) s.y *= g_VpScale.y;
+    if (vte & 0x08) s.y += g_VpOffset.y;
+    if (vte & 0x10) s.z *= g_VpScale.z;
+    if (vte & 0x20) s.z += g_VpOffset.z;
+    s.xy += g_HalfPixelOffset + g_WindowToNdc.zw;
+    return float4((s.x * g_WindowToNdc.x - 1.0) * w, (1.0 - s.y * g_WindowToNdc.y) * w, s.z * w, w);
+}
 
 Texture2D<float4> g_Tex2D[32] : register(t0);
 Texture3D<float4> g_Tex3D[32] : register(t32);
@@ -99,13 +123,13 @@ float Comp(uint v, uint bits, uint isSigned, uint normalized)
 }
 
 // Xenos vertex fetch from guest memory. Fetch constant: dword0 = byte address | type,
-// dword1 = size | endian. stride/offset are in dwords. Formats: Xenia's VertexFormat values.
+// dword1 = size | endian; addresses are physical (29 bits). stride/offset are in dwords. Formats: Xenia's VertexFormat values.
 float4 FetchVertex(uint slot, float index, int offset, uint stride, uint format, uint isSigned, uint normalized)
 {
     uint4 g = g_Fetch[slot >> 1];
     uint2 fc = (slot & 1) ? g.zw : g.xy;
     uint endian = fc.y & 3;
-    uint addr = (fc.x & 0xFFFFFFFC) + (uint(max(index, 0.0) + 0.5) * stride + uint(offset)) * 4;
+    uint addr = (fc.x & 0x1FFFFFFC) + (uint(max(index, 0.0) + 0.5) * stride + uint(offset)) * 4;
     uint4 d;
     d.x = SwapDword(g_Memory.Load(addr), endian);
     d.y = SwapDword(g_Memory.Load(addr + 4), endian);

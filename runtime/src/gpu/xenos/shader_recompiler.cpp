@@ -1894,7 +1894,8 @@ void ShaderRecompiler::recompileBody(const be<uint32_t>* code, uint32_t shaderSi
                     if (!hasMtxProjection)
                 #endif
                     {
-                        out += "\toPos.xy += g_HalfPixelOffset * oPos.w;\n";
+                        // SCDA raw: PA_CL_VTE_CNTL viewport transform + window -> host clip space.
+                        out += raw ? "\toPos = XenosViewport(oPos);\n" : "\toPos.xy += g_HalfPixelOffset * oPos.w;\n";
                     }
                 }
 

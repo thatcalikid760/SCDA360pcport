@@ -1,5 +1,6 @@
 // Translated + compiled shaders (Xenos microcode -> SM5 bytecode), cached in memory and on disk.
 #pragma once
+#include <bitset>
 #include <cstdint>
 #include <filesystem>
 #include <vector>
@@ -14,6 +15,9 @@ struct CompiledShader
 // Translate + compile once per blob; memory cache, disk cache in cacheDir (tests pass a temp dir).
 // Failures are cached too (logged once). Returned references stay valid until ShaderCompilerResetMemory.
 const CompiledShader& GetCompiledShader(const ShaderBlob& blob, const std::filesystem::path& cacheDir);
+
+// Vertex fetch constant slots the vertex shader reads (translated once per blob, cached).
+std::bitset<96> ShaderVertexFetchSlots(const ShaderBlob& blob);
 
 // %LOCALAPPDATA%\SCDARecomp\shadercache (falls back to .\shadercache).
 std::filesystem::path DefaultShaderCacheDir();

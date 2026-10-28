@@ -1,0 +1,159 @@
+#include "check.h"
+#include <bit>
+#include <set>
+#include <gpu/draw_state.h>
+
+static uint32_t FloatBits(float f) { return std::bit_cast<uint32_t>(f); }
+
+TEST(shared_constants_viewport_and_offsets)
+{
+    RegisterFile r;
+    r.Set(kRegPaClVteCntl, 0x43F);
+    r.Set(0x210F, FloatBits(640.0f));
+    r.Set(0x2110, FloatBits(640.0f));
+    r.Set(0x2111, FloatBits(-360.0f));
+    r.Set(0x2112, FloatBits(360.0f));
+    r.Set(0x2113, FloatBits(1.0f));
+    r.Set(0x2114, FloatBits(0.0f));
+    r.Set(kRegFetchConstants + 190, 0x002322D3);
+    r.Set(kRegBoolConstants + 7, 0x80000000);
+    SharedConstants c = BuildSharedConstants(r, 1280, 720);
+    CHECK_EQ(c.vte, 0x43Fu);
+    CHECK(c.vpScale[0] == 640.0f && c.vpOffset[0] == 640.0f && c.vpScale[1] == -360.0f && c.vpOffset[1] == 360.0f);
+    CHECK(c.vpScale[2] == 1.0f && c.vpOffset[2] == 0.0f);
+    CHECK(c.windowToNdc[0] == 2.0f / 1280 && c.windowToNdc[1] == 2.0f / 720);
+    CHECK(c.halfPixelOffset[0] == 0.5f); // PA_SU_VTX_CNTL pix_center 0 = D3D9 centers
+    CHECK(c.windowToNdc[2] == 0.0f);     // window offset disabled
+    CHECK_EQ(c.fetch[190], 0x002322D3u);
+    CHECK_EQ(c.boolWords[7], 0x80000000u);
+    CHECK_EQ(c.specConstants, 0u);
+
+    r.Set(0x2302, 1);              // OpenGL pixel centers
+    r.Set(0x2205, 1u << 16);       // window offset enable
+    r.Set(kRegPaScWindowOffset, (uint32_t(-8) & 0x7FFF) | (16u << 16));
+    r.Set(0x2202, 8);              // alpha test
+    r.Set(0x210E, FloatBits(0.5f));
+    c = BuildSharedConstants(r, 1280, 720);
+    CHECK(c.halfPixelOffset[1] == 0.0f);
+    CHECK(c.windowToNdc[2] == -8.0f && c.windowToNdc[3] == 16.0f);
+    CHECK_EQ(c.specConstants, 2u);
+    CHECK(c.alphaThreshold == 0.5f);
+}
+
+TEST(alu_constants_per_stage)
+{
+    RegisterFile r;
+    r.Set(kRegAluConstants + 3, 11);
+    r.Set(kRegAluConstants + 1024 + 5, 22);
+    uint32_t out[1024];
+    CopyAluConstants(r, false, out);
+    CHECK_EQ(out[3], 11u);
+    CopyAluConstants(r, true, out);
+    CHECK_EQ(out[5], 22u);
+    CHECK_EQ(out[3], 0u);
+}
+
+TEST(vertex_fetch_range)
+{
+    RegisterFile r;
+    // Menu quad: slot 95, 4 vertices x 5 dwords, endian 8-in-32.
+    r.Set(kRegFetchConstants + 190, 0x002322D3);
+    r.Set(kRegFetchConstants + 191, 0x10000052);
+    MemoryRange m;
+    CHECK(VertexFetchRange(r, 95, m));
+    CHECK_EQ(m.physical, 0x002322D0u);
+    CHECK_EQ(m.bytes, 80u);
+    CHECK(!VertexFetchRange(r, 94, m)); // type 0
+    r.Set(kRegFetchConstants + 0, 0x0A024802); // texture constant, not vertex
+    r.Set(kRegFetchConstants + 1, 0x059F1086);
+    CHECK(!VertexFetchRange(r, 0, m));
+}
+
+TEST(texture_fetch_decode_menu_constant)
+{
+    RegisterFile r;
+    const uint32_t c[6] = { 0x0A024802, 0x059F1086, 0x0059E4FF, 0x00A80C14, 0x00000003, 0x00000200 };
+    for (uint32_t i = 0; i < 6; i++)
+        r.Set(kRegFetchConstants + i, c[i]);
+    TextureFetch t = DecodeTextureFetch(r, 0);
+    CHECK(t.valid && !t.tiled);
+    CHECK_EQ(t.format, 6u);
+    CHECK_EQ(t.endian, 2u);
+    CHECK_EQ(t.physical, 0x059F1000u);
+    CHECK_EQ(t.width, 1280u);
+    CHECK_EQ(t.height, 720u);
+    CHECK_EQ(t.pitch, 1280u);
+    CHECK_EQ(t.swizzle, 0x60Au); // z y x w
+    CHECK_EQ(TextureGuestBytes(t), 1280u * 720 * 4);
+    CHECK(!DecodeTextureFetch(r, 1).valid);
+}
+
+TEST(convert_texture_argb_swizzle)
+{
+    // Guest big-endian ARGB dwords; 8-in-32 swap + zyxw swizzle gives RGBA.
+    const uint8_t guest[8] = { 0xFF, 0x10, 0x20, 0x30, 0x80, 0x01, 0x02, 0x03 };
+    TextureFetch t;
+    t.valid = true;
+    t.format = 6;
+    t.endian = 2;
+    t.width = t.pitch = 2;
+    t.height = 1;
+    t.swizzle = 0x60A;
+    auto out = ConvertTexture(t, guest);
+    CHECK_EQ(out.size(), size_t(2));
+    CHECK_EQ(out[0], 0xFF302010u); // A=FF B=30 G=20 R=10
+    CHECK_EQ(out[1], 0x80030201u);
+
+    const uint8_t luma[4] = { 7, 8, 9, 10 };
+    TextureFetch l = t;
+    l.format = 2;
+    l.endian = 0;
+    l.width = l.pitch = 4;
+    l.swizzle = 0 | (0 << 3) | (0 << 6) | (5 << 9); // xxx1
+    out = ConvertTexture(l, luma);
+    CHECK_EQ(out[2], 0xFF090909u);
+}
+
+TEST(tiled_index_is_a_permutation)
+{
+    for (uint32_t log2 : { 0u, 2u })
+    {
+        std::set<uint32_t> seen;
+        for (uint32_t y = 0; y < 32; y++)
+            for (uint32_t x = 0; x < 64; x++)
+                seen.insert(TiledTexelIndex(x, y, 64, log2));
+        CHECK_EQ(seen.size(), size_t(64 * 32));
+        // 32 bpp tiles are dense; 8 bpp interleaves past them (tiled footprint covers it).
+        CHECK_EQ(*seen.rbegin(), log2 == 2 ? 64u * 32 - 1 : 3071u);
+    }
+    TextureFetch t;
+    t.tiled = true;
+    t.format = 2;
+    t.width = t.pitch = 64;
+    t.height = 32;
+    CHECK_EQ(TextureGuestBytes(t), 3072u);
+    CHECK_EQ(TiledTexelIndex(0, 0, 32, 2), 0u);
+    CHECK_EQ(TiledTexelIndex(1, 0, 32, 2), 1u);
+}
+
+TEST(topology_and_index_swap)
+{
+    CHECK_EQ(HostTopology(4), 4u);
+    CHECK_EQ(HostTopology(6), 5u);
+    CHECK_EQ(HostTopology(1), 0u); // points: not drawn yet
+    CHECK_EQ(HostTopology(8), 0u); // rect list
+    const uint8_t guest[6] = { 0x00, 0x01, 0x00, 0x02, 0x00, 0x03 };
+    uint8_t out[6];
+    SwapIndices(guest, 6, 1, out);
+    uint16_t idx[3];
+    memcpy(idx, out, 6);
+    CHECK(idx[0] == 1 && idx[1] == 2 && idx[2] == 3);
+}
+
+TEST(vertex_fetch_slots_from_hlsl)
+{
+    auto slots = VertexFetchSlots("float4 FetchVertex(uint slot, ...)\n r1 = FetchVertex(95, r0.x, 0, 5, 57, 0, 0);\n"
+                                  " r2 = FetchVertex(3, r0.x, 3, 5, 37, 0, 0); r3 = FetchVertex(95, r0.x, 0, 0, 38, 0, 0);");
+    CHECK_EQ(slots.count(), size_t(2));
+    CHECK(slots[95] && slots[3]);
+}

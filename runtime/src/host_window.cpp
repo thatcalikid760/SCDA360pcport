@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 #include <thread>
 #include <gpu/d3d11_renderer.h>
 #include <gpu/shader_compiler.h>
@@ -100,26 +101,33 @@ static void RenderThread(DisplaySettings s)
                     d.primType, uint32_t(d.source), d.index32, d.indexCount, d.indexBase,
                     (unsigned long long)(d.vs ? d.vs->hash : 0), (unsigned long long)(d.ps ? d.ps->hash : 0),
                     (*d.regs)[kRegRbSurfaceInfo], (*d.regs)[kRegRbColorInfo], (*d.regs)[kRegRbModeControl] & 7);
+            for (auto& d : frame.draws)
+            {
+                const RegisterFile& r = *d.regs;
+                RuntimeLog("[frame]  vte 0x%08X vp %08X %08X %08X %08X %08X %08X winoff 0x%08X scis 0x%08X 0x%08X\n",
+                    r[0x2206], r[0x210F], r[0x2110], r[0x2111], r[0x2112], r[0x2113], r[0x2114], r[0x2080], r[0x2081], r[0x2082]);
+                for (uint32_t i = 0; i < 18; i += 6) // fetch dwords 0-17: texture slots 0-2 / vertex slots 0-8
+                    RuntimeLog("[frame]  fetch %2u: %08X %08X %08X %08X %08X %08X\n", i, r[0x4800 + i], r[0x4801 + i], r[0x4802 + i],
+                        r[0x4803 + i], r[0x4804 + i], r[0x4805 + i]);
+            }
             for (auto& r : frame.resolves)
                 RuntimeLog("[frame] resolve ctrl 0x%08X dest 0x%08X pitch 0x%08X info 0x%08X surf 0x%08X color 0x%08X depth 0x%08X\n",
                     r.copyControl, r.destBase, r.destPitch, r.destInfo, r.surfaceInfo, r.colorInfo, r.depthInfo);
         }
-        // Phase 2b-2: translate + compile every shader the frame uses (binding comes in 2b-3).
-        static const std::filesystem::path shaderCacheDir = DefaultShaderCacheDir();
-        for (auto& d : frame.draws)
-        {
-            if (d.vs)
-                GetCompiledShader(*d.vs, shaderCacheDir);
-            if (d.ps)
-                GetCompiledShader(*d.ps, shaderCacheDir);
-        }
+        // SCDA_DUMP_FRAME=<n>: write frame n's render target to scda_frame_<n>.bmp.
+        static const long long dumpFrame = getenv("SCDA_DUMP_FRAME") ? atoll(getenv("SCDA_DUMP_FRAME")) : -1;
+        if ((long long)frame.stats.frame == dumpFrame)
+            renderer.DumpNextFrame("scda_frame_" + std::to_string(dumpFrame) + ".bmp");
         renderer.Present(frame);
+        if ((long long)frame.stats.frame == dumpFrame || (long long)frame.stats.frame == traceFrame)
+            RuntimeLog("[frame] %llu: drawn %u skipped %u\n", (unsigned long long)frame.stats.frame, renderer.LastDrawn(), renderer.LastSkipped());
         if (GetTickCount() - lastTitle > 500)
         {
             lastTitle = GetTickCount();
             wchar_t title[200];
-            swprintf(title, 200, L"Splinter Cell: Double Agent Recomp - frame %llu draws %u resolves %u shaders %u compiled %u failed %u",
-                (unsigned long long)frame.stats.frame, frame.stats.draws, frame.stats.resolves, frame.stats.shaders,
+            swprintf(title, 200, L"Splinter Cell: Double Agent Recomp - frame %llu draws %u (drawn %u skipped %u) resolves %u shaders %u compiled %u failed %u",
+                (unsigned long long)frame.stats.frame, frame.stats.draws, renderer.LastDrawn(), renderer.LastSkipped(),
+                frame.stats.resolves, frame.stats.shaders,
                 ShaderCompilerReadyCount(), ShaderCompilerFailedCount());
             SetWindowTextW(hwnd, title);
         }

@@ -5,11 +5,12 @@
 #include <memory>
 #include <mutex>
 #include <unordered_map>
+#include <gpu/draw_state.h>
 #include <gpu/shader_compiler.h>
 #include <gpu/xenos/translate.h>
 
 // Bump when the translator or shader_common changes: old disk entries are then ignored.
-static constexpr uint32_t kTranslatorVersion = 1;
+static constexpr uint32_t kTranslatorVersion = 2;
 static constexpr uint32_t kCacheMagic = 0x53444353; // "SCDS"
 
 struct CacheHeader
@@ -124,6 +125,17 @@ const CompiledShader& GetCompiledShader(const ShaderBlob& blob, const std::files
     if (shader->ok)
         g_readyCount++;
     return *g_compiled.emplace(blob.hash, std::move(shader)).first->second;
+}
+
+std::bitset<96> ShaderVertexFetchSlots(const ShaderBlob& blob)
+{
+    static std::mutex mutex;
+    static std::unordered_map<uint64_t, std::bitset<96>> slots;
+    std::lock_guard lock(mutex);
+    auto it = slots.find(blob.hash);
+    if (it == slots.end())
+        it = slots.emplace(blob.hash, VertexFetchSlots(TranslateShader(blob).hlsl)).first;
+    return it->second;
 }
 
 std::filesystem::path DefaultShaderCacheDir()

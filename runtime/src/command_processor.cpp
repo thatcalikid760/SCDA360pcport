@@ -7,7 +7,9 @@
 #include <algorithm>
 #include <vector>
 #include <command_processor.h>
+#include <gpu/draw_state.h>
 #include <gpu/frame_queue.h>
+#include <gpu/shader_compiler.h>
 #include <gpu/shader_cache.h>
 #include <gpu_state.h>
 #include <pm4.h>
@@ -86,9 +88,25 @@ static void SubmitDraw(DrawCall d)
     d.vs = CurrentShader(ShaderType::Vertex);
     d.ps = CurrentShader(ShaderType::Pixel);
     if (IsResolve(*d.regs))
+    {
         Frames().AddResolve(DecodeResolve(*d.regs));
-    else
-        Frames().AddDraw(std::move(d));
+        return;
+    }
+    // Snapshot the vertex data now, in stream order (see Frame::vertexData).
+    if (d.vs)
+    {
+        std::bitset<96> slots = ShaderVertexFetchSlots(*d.vs);
+        for (uint32_t slot = 0; slot < 96; slot++)
+        {
+            MemoryRange range;
+            if (!slots[slot] || !VertexFetchRange(*d.regs, slot, range) || range.bytes > (16u << 20))
+                continue;
+            const uint8_t* p = (const uint8_t*)GuestPtr(GuestPhysical(range.physical));
+            if (GuestRangeReadable(p, range.bytes))
+                Frames().AddVertexData(MemoryRangeKey(range), p, range.bytes);
+        }
+    }
+    Frames().AddDraw(std::move(d));
 }
 
 void CommandProcessorReset()
