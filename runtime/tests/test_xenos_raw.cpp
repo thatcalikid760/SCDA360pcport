@@ -24,8 +24,12 @@ TEST(raw_translates_and_compiles_menu_shaders)
         printf("  (skipped: no dumped shaders)\n");
         return;
     }
+    // 01_Intro blobs (_run/shaders_intro) too, when dumped.
+    std::vector<std::filesystem::directory_entry> files(std::filesystem::directory_iterator(dir), {});
+    if (std::filesystem::path intro = SCDA_ROOT "/_run/shaders_intro"; std::filesystem::exists(intro))
+        files.insert(files.end(), std::filesystem::directory_iterator(intro), std::filesystem::directory_iterator());
     int n = 0;
-    for (auto& e : std::filesystem::directory_iterator(dir))
+    for (auto& e : files)
     {
         if (e.path().extension() != ".bin")
             continue;

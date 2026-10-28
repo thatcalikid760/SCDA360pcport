@@ -10,7 +10,7 @@
 #include <gpu/xenos/translate.h>
 
 // Bump when the translator or shader_common changes: old disk entries are then ignored.
-static constexpr uint32_t kTranslatorVersion = 3;
+static constexpr uint32_t kTranslatorVersion = 4;
 static constexpr uint32_t kCacheMagic = 0x53444353; // "SCDS"
 
 struct CacheHeader

@@ -63,11 +63,17 @@ float2 Dims2D(Texture2D<float4> t)
     return float2(w, h);
 }
 
-#define tfetch2D(t, s, uv, off) g_Tex2D[t].Sample(g_Samp[(s) & 15], (uv) + (off) / Dims2D(g_Tex2D[t]))
+// Vertex shaders have no derivatives: sample mip 0 (SCDA_VERTEX is defined by CompileHlsl).
+#ifdef SCDA_VERTEX
+#define SAMPLE(tex, s, c) tex.SampleLevel(s, c, 0)
+#else
+#define SAMPLE(tex, s, c) tex.Sample(s, c)
+#endif
+#define tfetch2D(t, s, uv, off) SAMPLE(g_Tex2D[t], g_Samp[(s) & 15], (uv) + (off) / Dims2D(g_Tex2D[t]))
 #define tfetch2DBicubic(t, s, uv, off) tfetch2D(t, s, uv, off)
 #define getWeights2D(t, s, uv, off) (isnan(uv) ? 0.0 : frac((uv) * Dims2D(g_Tex2D[t]) + (off) - 0.5))
-#define tfetch3D(t, s, uvw) g_Tex3D[t].Sample(g_Samp[(s) & 15], uvw)
-#define tfetchCube(t, s, uvw, cmd) g_TexCube[t].Sample(g_Samp[(s) & 15], (cmd).cubeMapDirections[(uvw).z])
+#define tfetch3D(t, s, uvw) SAMPLE(g_Tex3D[t], g_Samp[(s) & 15], uvw)
+#define tfetchCube(t, s, uvw, cmd) SAMPLE(g_TexCube[t], g_Samp[(s) & 15], (uvw).z ? (cmd).cubeMapDirections[1] : (cmd).cubeMapDirections[0])
 #define getPixelCoord(t, uv) (Dims2D(g_Tex2D[t]) * (uv))
 
 struct CubeMapData
@@ -79,7 +85,11 @@ struct CubeMapData
 float4 cube(float4 value, inout CubeMapData cubeMapData)
 {
     uint index = cubeMapData.cubeMapIndex;
-    cubeMapData.cubeMapDirections[index] = value.xyz;
+    // fxc cannot write a local array at a dynamic index inside branches (X3500).
+    if (index == 0)
+        cubeMapData.cubeMapDirections[0] = value.xyz;
+    else
+        cubeMapData.cubeMapDirections[1] = value.xyz;
     ++cubeMapData.cubeMapIndex;
     return float4(0.0, 0.0, 0.0, index);
 }
@@ -230,7 +240,8 @@ std::vector<uint8_t> CompileHlsl(const std::string& hlsl, bool pixel, std::strin
 {
     ID3DBlob* code = nullptr;
     ID3DBlob* errors = nullptr;
-    HRESULT hr = D3DCompile(hlsl.data(), hlsl.size(), pixel ? "ps.hlsl" : "vs.hlsl", nullptr, nullptr, "main",
+    static const D3D_SHADER_MACRO kVertexDefines[] = { { "SCDA_VERTEX", "1" }, { nullptr, nullptr } };
+    HRESULT hr = D3DCompile(hlsl.data(), hlsl.size(), pixel ? "ps.hlsl" : "vs.hlsl", pixel ? nullptr : kVertexDefines, nullptr, "main",
         pixel ? "ps_5_0" : "vs_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL1, 0, &code, &errors);
     std::vector<uint8_t> out;
     if (SUCCEEDED(hr) && code)

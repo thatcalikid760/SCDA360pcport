@@ -172,14 +172,38 @@ void ShaderRecompiler::recompile(const VertexFetchInstruction& instr, uint32_t a
         ++indentation;
     }
 
-    indent();
-    print("r{}.", instr.dstRegister);
-    printDstSwizzle(instr.dstSwizzle, false);
+    // SCDA raw: a fetch whose destination is only 0/1 constants (or masked) emits no FetchVertex.
+    bool fetches = false;
+    for (uint32_t i = 0; i < 4; i++)
+    {
+        const auto swizzle = getDestSwizzle(instr.dstSwizzle, i);
+        fetches |= swizzle >= FetchDestinationSwizzle::X && swizzle <= FetchDestinationSwizzle::W;
+    }
 
-    out += " = ";
+    if (raw && !fetches)
+    {
+        printDstSwizzle01(instr.dstRegister, instr.dstSwizzle);
+    }
+    else
+    {
+        indent();
+        print("r{}.", instr.dstRegister);
+        printDstSwizzle(instr.dstSwizzle, false);
+        out += " = ";
+    }
 
     if (raw)
     {
+        if (!fetches)
+        {
+            if (instr.isPredicated)
+            {
+                --indentation;
+                indent();
+                out += "}\n";
+            }
+            return;
+        }
         // SCDA raw: fetch from guest memory with the fetch constant's base/endian (see shader_common_sm5).
         static constexpr char kComp[] = { 'x', 'y', 'z', 'w' };
         print("FetchVertex({}, r{}.{}, {}, {}, {}, {}, {}).", instr.constIndex * 3 + instr.constIndexSelect,
@@ -1563,6 +1587,10 @@ void ShaderRecompiler::recompileBody(const be<uint32_t>* code, uint32_t shaderSi
     uint32_t instrSize = shaderSize;
     const uint32_t codeDwords = shaderSize / 4;
     bool simpleControlFlow = true;
+    // SCDA: only backward jumps (loops) need the "while (true)" pc dispatcher. fxc force-unrolls that
+    // loop when it holds gradient samples and fails, so forward-only shaders run the blocks once.
+    bool needsLoop = false;
+    uint32_t cfIndex = 0;
 
     while (instrAddress < instrSize)
     {
@@ -1600,10 +1628,17 @@ void ShaderRecompiler::recompileBody(const be<uint32_t>* code, uint32_t shaderSi
                     simpleControlFlow = false;
                 else
                     ++ifEndLabels[cfInstr.condJmp.address];
+                if (cfInstr.condJmp.address <= cfIndex)
+                    needsLoop = true;
 
                 break;
             }
+
+            case ControlFlowOpcode::LoopEnd:
+                needsLoop = true;
+                break;
             }
+            ++cfIndex;
 
             if (address != 0)
                 instrSize = std::min<uint32_t>(instrSize, address * 12);
@@ -1621,10 +1656,11 @@ void ShaderRecompiler::recompileBody(const be<uint32_t>* code, uint32_t shaderSi
     else
     {
         out += "\n\tuint pc = 0;\n";
-        out += "\twhile (true)\n";
-        out += "\t{\n";
-        out += "\t\tswitch (pc)\n";
-        out += "\t\t{\n";
+        if (needsLoop)
+        {
+            out += "\twhile (true)\n";
+            out += "\t{\n";
+        }
     }
 
     controlFlowCode = code;
@@ -1642,8 +1678,13 @@ void ShaderRecompiler::recompileBody(const be<uint32_t>* code, uint32_t shaderSi
         {
             if (!simpleControlFlow)
             {
+                // SCDA: fxc (SM5) rejects switch fall-through and continue inside a switch, so each
+                // block is "if (pc <= N)": a jump sets pc and restarts the loop, later blocks fall through.
                 indentation = 3;
-                println("\t\tcase {}:", pc);
+                if (pc != 0)
+                    out += "\t\t}\n";
+                println("\t\tif (pc <= {})", pc);
+                out += "\t\t{\n";
             }
             else
             {
@@ -1737,7 +1778,8 @@ void ShaderRecompiler::recompileBody(const be<uint32_t>* code, uint32_t shaderSi
                 {
                     assert(!simpleControlFlow);
                     println("\t\t\tpc = {};", uint32_t(cfInstr.condJmp.address));
-                    out += "\t\t\tcontinue;\n";
+                    if (needsLoop)
+                        out += "\t\t\tcontinue;\n";
                 }
                 else
                 {
@@ -1765,7 +1807,8 @@ void ShaderRecompiler::recompileBody(const be<uint32_t>* code, uint32_t shaderSi
                     {
                         out += "\t\t\t{\n";
                         println("\t\t\t\tpc = {};", uint32_t(cfInstr.condJmp.address));
-                        out += "\t\t\t\tcontinue;\n";
+                        if (needsLoop)
+                            out += "\t\t\t\tcontinue;\n";
                         out += "\t\t\t}\n";
                     }
                 }
@@ -1915,7 +1958,7 @@ void ShaderRecompiler::recompileBody(const be<uint32_t>* code, uint32_t shaderSi
                 }
                 else
                 {
-                    out += "\t\t\tbreak;\n";
+                    out += needsLoop ? "\t\t\tbreak;\n" : "\t\t\tpc = 0xFFFF;\n";
                 }
             }
 
@@ -1933,10 +1976,12 @@ void ShaderRecompiler::recompileBody(const be<uint32_t>* code, uint32_t shaderSi
 
     if (!simpleControlFlow)
     {
-        out += "\t\t\tbreak;\n";
         out += "\t\t}\n";
-        out += "\t\tbreak;\n";
-        out += "\t}\n";
+        if (needsLoop)
+        {
+            out += "\t\tbreak;\n";
+            out += "\t}\n";
+        }
     }
 
 #ifdef UNLEASHED_RECOMP
