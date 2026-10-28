@@ -100,8 +100,13 @@ struct HostSampler
 };
 HostSampler DecodeSampler(const RegisterFile& regs, uint32_t slot);
 
-// Xenos primitive type -> D3D11_PRIMITIVE_TOPOLOGY value; 0 = not drawn yet (points, fans, quads).
+// Xenos primitive type -> D3D11_PRIMITIVE_TOPOLOGY value; 0 = not drawn yet (points, line loops,
+// quad strips). Fans and quad lists draw as triangle lists after ExpandToTriangleList.
 uint32_t HostTopology(uint32_t primType);
+// True for primitive types the renderer re-indexes into a triangle list (5 fan, 13 quad list).
+inline bool NeedsTriangleListExpansion(uint32_t primType) { return primType == 5 || primType == 13; }
+// Fan (v0, vi, vi+1) or quad list (a b c, a c d) indices -> triangle list indices.
+std::vector<uint32_t> ExpandToTriangleList(uint32_t primType, const std::vector<uint32_t>& indices);
 
 // RB_COLOR_INFO format (bits 16-19) -> DXGI_FORMAT of its host render target: 8_8_8_8(_GAMMA)
 // RGBA8, 32_FLOAT R32, 32_32_FLOAT R32G32, everything else (2_10_10_10 variants, 16-bit) RGBA16F.

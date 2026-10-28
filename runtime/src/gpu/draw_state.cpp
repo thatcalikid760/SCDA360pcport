@@ -375,10 +375,24 @@ uint32_t HostTopology(uint32_t primType)
     case 2: return 2; // line list
     case 3: return 3; // line strip
     case 4: return 4; // triangle list
+    case 5: return 4; // triangle fan: re-indexed as a list
     case 6: return 5; // triangle strip
     case 8: return 4; // rect list: triangle list, the renderer's geometry shader adds the 4th corner
+    case 13: return 4; // quad list: re-indexed as a list
     default: return 0;
     }
+}
+
+std::vector<uint32_t> ExpandToTriangleList(uint32_t primType, const std::vector<uint32_t>& in)
+{
+    std::vector<uint32_t> out;
+    if (primType == 5)
+        for (size_t i = 1; i + 1 < in.size(); i++)
+            out.insert(out.end(), { in[0], in[i], in[i + 1] });
+    else if (primType == 13)
+        for (size_t i = 0; i + 3 < in.size(); i += 4)
+            out.insert(out.end(), { in[i], in[i + 1], in[i + 2], in[i], in[i + 2], in[i + 3] });
+    return out;
 }
 
 uint32_t HostColorFormat(uint32_t guestFormat)

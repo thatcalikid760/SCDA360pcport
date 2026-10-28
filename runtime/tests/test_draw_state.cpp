@@ -173,6 +173,9 @@ TEST(topology_and_index_swap)
     CHECK_EQ(HostTopology(6), 5u);
     CHECK_EQ(HostTopology(1), 0u); // points: not drawn yet
     CHECK_EQ(HostTopology(8), 4u); // rect list (geometry shader quad)
+    CHECK_EQ(HostTopology(13), 4u); // quad list (re-indexed)
+    CHECK(ExpandToTriangleList(5, { 7, 8, 9, 10 }) == std::vector<uint32_t>({ 7, 8, 9, 7, 9, 10 }));
+    CHECK(ExpandToTriangleList(13, { 0, 1, 2, 3, 4 }) == std::vector<uint32_t>({ 0, 1, 2, 0, 2, 3 }));
     CHECK_EQ(HostColorFormat(0), 28u);  // RGBA8
     CHECK_EQ(HostColorFormat(3), 10u);  // 2_10_10_10_FLOAT -> RGBA16F
     CHECK_EQ(HostColorFormat(14), 41u); // 32_FLOAT -> R32

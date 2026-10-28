@@ -476,7 +476,19 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs)
             continue;
         }
         if (!TextureElementBytes(t.format))
+        {
+            // SCDA_DUMP_TEXTURES: each unsupported texture once, with the nearest resolve at or below it.
+            static const bool log = getenv("SCDA_DUMP_TEXTURES") != nullptr;
+            static std::unordered_set<uint64_t> logged;
+            if (log && logged.insert((uint64_t(t.physical) << 8) | t.format).second && logged.size() < 500)
+            {
+                auto res = std::find_if(r.resolved.begin(), r.resolved.end(), [&](auto& e) { return e.first <= t.physical && t.physical < e.first + 0x01000000; });
+                const bool hit = res != r.resolved.end();
+                RuntimeLog("[tex] unsupported fmt %u phys %08X %ux%u tiled %d; resolve %08X %ux%u\n", t.format, t.physical, t.width, t.height, t.tiled,
+                    hit ? res->first : 0, hit ? res->second.width : 0, hit ? res->second.height : 0);
+            }
             continue;
+        }
         uint64_t key = 1469598103934665603ull;
         for (uint32_t i = 0; i < 6; i++)
             key = (key ^ regs[kRegFetchConstants + slot * 6 + i]) * 1099511628211ull;
@@ -586,18 +598,47 @@ void D3D11Renderer::ExecuteDraw(const DrawCall& d, const Frame& frame)
     m_context->PSSetShader(ps.Get(), nullptr, 0);
     m_context->GSSetShader(rectList ? r.rectListGs.Get() : nullptr, nullptr, 0);
     m_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY(topology));
-    if (d.source == IndexSource::Dma)
+    const bool expand = NeedsTriangleListExpansion(d.primType);
+    if (d.source == IndexSource::Dma || expand)
     {
-        if (d.indexSnapshot < 0 || size_t(d.indexSnapshot) >= frame.memory.size())
+        // shortcut: one immutable index buffer per draw.
+        std::vector<uint8_t> indices;
+        uint32_t count = d.indexCount;
+        bool wide = d.index32;
+        if (d.source == IndexSource::Dma)
+        {
+            if (d.indexSnapshot < 0 || size_t(d.indexSnapshot) >= frame.memory.size())
+            {
+                m_lastSkipped++;
+                return;
+            }
+            indices.resize(d.indexBytes);
+            SwapIndices(frame.memory[d.indexSnapshot].bytes.data(), d.indexBytes, d.indexEndian, indices.data());
+            count = std::min(d.indexCount, d.indexBytes / (d.index32 ? 4 : 2));
+        }
+        if (expand)
+        {
+            std::vector<uint32_t> list(count);
+            for (uint32_t i = 0; i < count; i++)
+                if (indices.empty())
+                    list[i] = i;
+                else if (d.index32)
+                    memcpy(&list[i], &indices[i * 4], 4);
+                else
+                    list[i] = uint16_t(indices[i * 2] | (indices[i * 2 + 1] << 8));
+            list = ExpandToTriangleList(d.primType, list);
+            count = uint32_t(list.size());
+            indices.resize(list.size() * 4);
+            memcpy(indices.data(), list.data(), indices.size());
+            wide = true;
+        }
+        if (!count)
         {
             m_lastSkipped++;
             return;
         }
-        // shortcut: one immutable index buffer per draw.
-        std::vector<uint8_t> indices(d.indexBytes);
-        SwapIndices(frame.memory[d.indexSnapshot].bytes.data(), d.indexBytes, d.indexEndian, indices.data());
         D3D11_BUFFER_DESC bd{};
-        bd.ByteWidth = d.indexBytes;
+        bd.ByteWidth = uint32_t(indices.size());
         bd.Usage = D3D11_USAGE_IMMUTABLE;
         bd.BindFlags = D3D11_BIND_INDEX_BUFFER;
         D3D11_SUBRESOURCE_DATA init{ indices.data(), 0, 0 };
@@ -607,8 +648,8 @@ void D3D11Renderer::ExecuteDraw(const DrawCall& d, const Frame& frame)
             m_lastSkipped++;
             return;
         }
-        m_context->IASetIndexBuffer(ib.Get(), d.index32 ? DXGI_FORMAT_R32_UINT : DXGI_FORMAT_R16_UINT, 0);
-        m_context->DrawIndexed(std::min(d.indexCount, d.indexBytes / (d.index32 ? 4 : 2)), 0, 0);
+        m_context->IASetIndexBuffer(ib.Get(), wide ? DXGI_FORMAT_R32_UINT : DXGI_FORMAT_R16_UINT, 0);
+        m_context->DrawIndexed(count, 0, 0);
     }
     else
         m_context->Draw(d.indexCount, 0);
