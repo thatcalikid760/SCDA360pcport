@@ -8,6 +8,7 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <vector>
 #include <alloc_tracker.h>
 #include <command_processor.h>
 #include <gpu/draw_state.h>
@@ -16,6 +17,7 @@
 #include <module.h>
 #include <fstream>
 #include <interrupts.h>
+#include <launch.h>
 #include <runtime.h>
 #include <thread_context.h>
 #include <watchdog.h>
@@ -268,6 +270,16 @@ int main(int argc, char** argv)
     ProfilerStart();
     if (const char* w = getenv("SCDA_WATCHDOG"))
         WatchdogStart((unsigned)atoi(w));
+    // SCDA_LAUNCH_DATA=<file>: boot as if relaunched with that launch data (see SCDA_LAUNCH_DATA_OUT).
+    if (const char* path = getenv("SCDA_LAUNCH_DATA"))
+        if (FILE* f = fopen(path, "rb"))
+        {
+            std::vector<uint8_t> data(0x10000);
+            data.resize(fread(data.data(), 1, data.size(), f));
+            fclose(f);
+            LaunchDataSet(data.data(), uint32_t(data.size()));
+            RuntimeLog("[boot] launch data: %zu bytes from %s\n", data.size(), path);
+        }
     RuntimeLog("[boot] calling _xstart (r1=0x%08X r13=0x%08X)\n", ctx.r1.u32, ctx.r13.u32);
     _xstart(ctx, g_base);
     RuntimeLog("[boot] _xstart returned r3=0x%08X\n", ctx.r3.u32);

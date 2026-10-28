@@ -132,7 +132,8 @@ static DWORD WINAPI GuestThreadMain(void* p)
     uint32_t target = s.startup ? s.startup : s.entry;
     ctx->r3.u64 = s.startup ? s.entry : s.context;
     ctx->r4.u64 = s.context;
-    RuntimeLog("[thread] %u start 0x%08X (entry 0x%08X ctx 0x%08X) host %lu\n", s.id, target, s.entry, s.context, GetCurrentThreadId());
+    RuntimeLog("[thread] %u start 0x%08X (entry 0x%08X ctx 0x%08X) host %lu stack 0x%X below 0x%08X\n", s.id, target, s.entry, s.context,
+        GetCurrentThreadId(), ThreadStackSize(*ctx), ctx->r13.u32);
     (PPC_LOOKUP_FUNC(g_base, target))(*ctx, g_base);
     RuntimeLog("[thread] %u exit\n", s.id);
     WatchdogUnregisterThread(s.id);
