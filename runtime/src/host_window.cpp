@@ -137,8 +137,9 @@ static void RenderThread(DisplaySettings s)
                 }
             }
             for (auto& r : frame.resolves)
-                RuntimeLog("[frame] resolve @draw %u ctrl 0x%08X dest 0x%08X pitch 0x%08X info 0x%08X surf 0x%08X color 0x%08X depth 0x%08X clear 0x%08X zclear 0x%08X\n",
-                    r.drawIndex, r.copyControl, r.destBase, r.destPitch, r.destInfo, r.surfaceInfo, r.colorInfo, r.depthInfo, r.colorClear, r.depthClear);
+                RuntimeLog("[frame] resolve @draw %u ctrl 0x%08X dest 0x%08X pitch 0x%08X info 0x%08X surf 0x%08X color 0x%08X depth 0x%08X clear 0x%08X zclear 0x%08X rect %d %d %d %d (%d)\n",
+                    r.drawIndex, r.copyControl, r.destBase, r.destPitch, r.destInfo, r.surfaceInfo, r.colorInfo, r.depthInfo, r.colorClear, r.depthClear,
+                    r.rect[0], r.rect[1], r.rect[2], r.rect[3], int(r.hasRect));
             RuntimeLog("[frame] frontbuffer 0x%08X\n", frame.frontbuffer);
         }
         // SCDA_DUMP_FRAME=<n>[,<n>...] (ascending): write the presented image of the first frame at or

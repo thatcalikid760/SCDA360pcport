@@ -94,6 +94,29 @@ TEST(resolve_source_and_edram_keys)
     CHECK_EQ(EdramDepthKey(0x00010278, 0x0A000280), 0x02800278u);
 }
 
+// Resolve rect: bounds of the 3 big-endian float2 vertices (8in32), rounded, plus the window offset.
+TEST(resolve_rect_from_vertices)
+{
+    RegisterFile regs;
+    const float v[6] = { -0.5f, -0.5f, 1279.5f, -0.5f, 1279.5f, 223.5f };
+    uint8_t guest[24];
+    for (int i = 0; i < 6; i++)
+    {
+        uint32_t d;
+        memcpy(&d, &v[i], 4);
+        d = _byteswap_ulong(d);
+        memcpy(guest + i * 4, &d, 4);
+    }
+    Resolve r{};
+    SetResolveRect(r, regs, guest, 2);
+    CHECK(r.hasRect);
+    CHECK_EQ(r.rect[0], 0); CHECK_EQ(r.rect[1], 0); CHECK_EQ(r.rect[2], 1280); CHECK_EQ(r.rect[3], 224);
+    regs.Set(0x2205, 1u << 16);   // vtx_window_offset_enable
+    regs.Set(0x2080, 0x7F000010); // x +16, y -256
+    SetResolveRect(r, regs, guest, 2);
+    CHECK_EQ(r.rect[0], 16); CHECK_EQ(r.rect[1], -256); CHECK_EQ(r.rect[3], -32);
+}
+
 // Snapshots share pages; a write after a snapshot changes only the live file.
 TEST(register_file_copy_on_write)
 {

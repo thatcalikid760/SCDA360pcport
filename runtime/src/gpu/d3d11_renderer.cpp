@@ -115,6 +115,7 @@ struct DrawResources
         ComPtr<ID3D11ShaderResourceView> srv;
         uint32_t width = 0, height = 0;
         DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN; // the source target's
+        uint32_t rowBytes = 0; // guest bytes per row (RB_COPY_DEST_INFO format x width)
     };
     std::unordered_map<uint32_t, Resolved> resolved;
 };
@@ -682,37 +683,78 @@ void D3D11Renderer::ExecuteResolve(const Resolve& res)
     // shortcut: depth-source resolves copy nothing (the destination keeps its last copy, if any).
     if (ResolveCopies(res) && source && !ResolveFromDepth(res))
     {
-        // shortcut: the whole destination from the surface origin; the resolve draw's rect and the
-        // window offset are not applied, and the destination keeps the surface's host format.
+        // The resolve rect goes to the same position in the destination. A destination inside an
+        // earlier resolve's texture (predicated tiling: one 32-row-aligned base per screen tile)
+        // is written into that texture at the row the base advanced to.
+        // shortcut: the destination keeps the surface's host format; rows only, no x offset in the base.
         D3D11_TEXTURE2D_DESC sd;
         source->texture->GetDesc(&sd);
-        uint32_t w = std::min(ResolveWidth(res), kTargetWidth), h = std::min(ResolveHeight(res), kTargetHeight);
-        auto& dst = r.resolved[res.destBase & 0x1FFFF000];
-        if (w && h && (dst.width != w || dst.height != h || dst.format != sd.Format))
-        {
-            D3D11_TEXTURE2D_DESC td{};
-            td.Width = w;
-            td.Height = h;
-            td.MipLevels = td.ArraySize = 1;
-            td.Format = sd.Format;
-            td.SampleDesc.Count = 1;
-            td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-            dst = {};
-            if (SUCCEEDED(m_device->CreateTexture2D(&td, nullptr, &dst.texture)) &&
-                SUCCEEDED(m_device->CreateShaderResourceView(dst.texture.Get(), nullptr, &dst.srv)))
+        const uint32_t base = res.destBase & 0x1FFFF000;
+        uint32_t dy = 0;
+        auto dstIt = r.resolved.end();
+        for (auto it = r.resolved.begin(); it != r.resolved.end(); ++it)
+            if (it->first < base && it->second.rowBytes && it->second.format == sd.Format && it->second.width == ResolveWidth(res) &&
+                (base - it->first) % it->second.rowBytes == 0 && (base - it->first) / it->second.rowBytes < it->second.height)
             {
-                dst.width = w;
-                dst.height = h;
-                dst.format = sd.Format;
+                dstIt = it;
+                dy = (base - it->first) / it->second.rowBytes;
+                break;
             }
+        if (dstIt == r.resolved.end())
+        {
+            uint32_t w = std::min(ResolveWidth(res), kTargetWidth), h = std::min(ResolveHeight(res), kTargetHeight);
+            auto& dst = r.resolved[base];
+            if (w && h && (dst.width != w || dst.height != h || dst.format != sd.Format))
+            {
+                D3D11_TEXTURE2D_DESC td{};
+                td.Width = w;
+                td.Height = h;
+                td.MipLevels = td.ArraySize = 1;
+                td.Format = sd.Format;
+                td.SampleDesc.Count = 1;
+                td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+                dst = {};
+                if (SUCCEEDED(m_device->CreateTexture2D(&td, nullptr, &dst.texture)) &&
+                    SUCCEEDED(m_device->CreateShaderResourceView(dst.texture.Get(), nullptr, &dst.srv)))
+                {
+                    dst.width = w;
+                    dst.height = h;
+                    dst.format = sd.Format;
+                }
+            }
+            dst.rowBytes = w * TextureElementBytes((res.destInfo >> 7) & 0x3F);
+            dstIt = r.resolved.find(base);
         }
+        auto& dst = dstIt->second;
         if (!dst.srv)
-            r.resolved.erase(res.destBase & 0x1FFFF000);
+            r.resolved.erase(dstIt);
         else
         {
-            D3D11_BOX box{ 0, 0, 0, w, h, 1 };
-            m_context->CopySubresourceRegion(dst.texture.Get(), 0, 0, 0, 0, source->texture.Get(), 0, &box);
-            m_lastResolved++;
+            // Source rect: the resolve draw's, else the whole destination from the surface origin.
+            int32_t x0 = 0, y0 = 0, x1 = int32_t(dst.width), y1 = int32_t(dst.height - dy);
+            if (res.hasRect)
+            {
+                x0 = std::max(res.rect[0], 0);
+                y0 = std::max(res.rect[1], 0);
+                x1 = std::min(res.rect[2], x1);
+                y1 = std::min(res.rect[3], y1);
+            }
+            x1 = std::min(x1, int32_t(kTargetWidth));
+            y1 = std::min(y1, int32_t(kTargetHeight));
+            if (x1 > x0 && y1 > y0)
+            {
+                D3D11_BOX box{ UINT(x0), UINT(y0), 0, UINT(x1), UINT(y1), 1 };
+                m_context->CopySubresourceRegion(dst.texture.Get(), 0, UINT(x0), UINT(y0) + dy, 0, source->texture.Get(), 0, &box);
+                m_lastResolved++;
+                // SCDA_DUMP_RESOLVES=<dir>: on a SCDA_DUMP_FRAME frame, each resolve's destination after the copy.
+                static const char* dumpResolves = getenv("SCDA_DUMP_RESOLVES");
+                if (dumpResolves && !m_dumpPath.empty())
+                {
+                    char name[96];
+                    snprintf(name, sizeof(name), "/res_%02u_%08X_y%u.bmp", m_lastResolved, base, dy);
+                    Dump(std::string(dumpResolves) + name, dst.texture.Get());
+                }
+            }
         }
     }
     if (source)
@@ -799,12 +841,15 @@ void D3D11Renderer::Present(const Frame& frame)
         m_context->PSSetConstantBuffers(0, 3, cbs);
         r.lastRegs = nullptr;
         // Draws and resolves in stream order: resolve k runs before draw resolves[k].drawIndex.
+        // SCDA_DRAW_LIMIT=<n>: run only draws [0, n) (and the resolves before them), then show the
+        // last RT0 instead of the frontbuffer (bisecting which pass draws what).
+        static const size_t drawLimit = getenv("SCDA_DRAW_LIMIT") ? size_t(atoll(getenv("SCDA_DRAW_LIMIT"))) : SIZE_MAX;
         size_t next = 0;
-        for (size_t i = 0; i <= frame.draws.size(); i++)
+        for (size_t i = 0; i <= std::min(frame.draws.size(), drawLimit); i++)
         {
             for (; next < frame.resolves.size() && frame.resolves[next].drawIndex <= i; next++)
                 ExecuteResolve(frame.resolves[next]);
-            if (i < frame.draws.size())
+            if (i < std::min(frame.draws.size(), drawLimit))
                 ExecuteDraw(frame.draws[i], frame);
         }
         r.uploaded.clear();
@@ -813,7 +858,7 @@ void D3D11Renderer::Present(const Frame& frame)
         m_context->VSSetShaderResources(0, 32, none);
         m_context->PSSetShaderResources(0, 32, none);
         auto front = frame.frontbuffer ? r.resolved.find(frame.frontbuffer & 0x1FFFF000) : r.resolved.end();
-        m_lastFrontbuffer = front != r.resolved.end();
+        m_lastFrontbuffer = front != r.resolved.end() && drawLimit == SIZE_MAX;
         // No frontbuffer resolve: the last RT0 (or the idle colour when nothing was drawn yet).
         ID3D11Texture2D* shown = m_lastFrontbuffer ? front->second.texture.Get() : r.last ? r.last->texture.Get() : nullptr;
         ID3D11ShaderResourceView* shownSrv = m_lastFrontbuffer ? front->second.srv.Get() : r.last ? r.last->srv.Get() : nullptr;

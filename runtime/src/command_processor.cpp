@@ -40,6 +40,7 @@ enum : uint32_t
     kOpSetBinSelectLo = 0x62,
     kOpSetBinSelectHi = 0x63,
     kOpEventWriteShd = 0x58,
+    kOpEventWriteExt = 0x5A,
     kOpEventWriteZpd = 0x5B,
 };
 constexpr uint32_t kRegSampleCountAddr = 0x2325; // RB_SAMPLE_COUNT_ADDR (occlusion query block)
@@ -112,7 +113,21 @@ static void SubmitDraw(DrawCall d)
     d.ps = CurrentShader(ShaderType::Pixel);
     if (IsResolve(*d.regs))
     {
-        Frames().AddResolve(DecodeResolve(*d.regs));
+        Resolve res = DecodeResolve(*d.regs);
+        MemoryRange range;
+        if (d.vs)
+        {
+            std::bitset<96> slots = ShaderVertexFetchSlots(*d.vs);
+            for (uint32_t slot = 0; slot < 96; slot++)
+                if (slots[slot] && VertexFetchRange(*d.regs, slot, range) && range.bytes >= 24)
+                {
+                    const uint8_t* p = (const uint8_t*)GuestPtr(GuestPhysical(range.physical));
+                    if (GuestRangeReadable(p, 24))
+                        SetResolveRect(res, *d.regs, p, (*d.regs)[kRegFetchConstants + slot * 2 + 1] & 3);
+                    break;
+                }
+        }
+        Frames().AddResolve(res);
         return;
     }
     // Snapshot vertex and index data now, in stream order (see Frame::memory).
@@ -311,6 +326,18 @@ static bool ExecutePacket(uint32_t h, const Pm4Payload& p, int depth, CpStats& s
             GuestStore32(a, _byteswap_ulong(kFakeSamples));
             GuestStore32(a + 16, _byteswap_ulong(kFakeSamples));
         }
+        return true;
+    }
+    case kOpEventWriteExt:
+    {
+        // Screen extents (Xenia): D3D's predicated tiling turns them into per-draw bin masks.
+        // Report the whole screen so every draw runs in every tile: 6 big-endian u16 (8in16) at
+        // the address, x/y in units of 8 pixels: min x, max x, min y, max y, min z, max z.
+        static constexpr uint16_t kExtents[6] = { 0, 2560 >> 3, 0, 2560 >> 3, 0, 1 };
+        uint32_t a = GuestPhysical(p(1) & ~3u);
+        if (Committed(a, sizeof(kExtents)))
+            for (uint32_t i = 0; i < 6; i++)
+                GuestStore16(a + i * 2, kExtents[i]);
         return true;
     }
     case kOpSetBinMaskLo:

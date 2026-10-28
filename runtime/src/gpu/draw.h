@@ -68,6 +68,10 @@ struct Resolve
     uint32_t colorClear;    // RB_COLOR_CLEAR: red in the low byte
     uint32_t depthClear;    // RB_DEPTH_CLEAR: bits 8-31 depth, 0-7 stencil
     uint32_t drawIndex = 0; // draws submitted before it in the frame (set by FrameQueue)
+    // Source rect in surface pixels (x0, y0, x1, y1): the resolve draw's 3 rect-list vertices plus
+    // PA_SC_WINDOW_OFFSET when enabled. hasRect false: the vertices were not readable.
+    int32_t rect[4] = {};
+    bool hasRect = false;
 };
 
 // RB_COPY_CONTROL copy_command (bits 20-21) 3 = clear only; bit 8 = colour clear enable.
@@ -96,3 +100,5 @@ DrawCall DecodeDrawIndx(const Pm4Payload& p, uint32_t payloadDwords);  // opcode
 DrawCall DecodeDrawIndx2(const Pm4Payload& p, uint32_t payloadDwords); // opcode 0x36
 bool IsResolve(const RegisterFile& regs);                              // RB_MODECONTROL & 7 == 6
 Resolve DecodeResolve(const RegisterFile& regs);
+// Sets res.rect from the resolve draw's vertices: 3 x float2 (6 dwords) in GPU endian mode endian.
+void SetResolveRect(Resolve& res, const RegisterFile& regs, const uint8_t* guest, uint32_t endian);

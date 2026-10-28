@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cmath>
 #include <gpu/draw.h>
+#include <gpu/draw_state.h>
 
 static DrawCall FromInitiator(uint32_t init)
 {
@@ -48,6 +49,26 @@ Resolve DecodeResolve(const RegisterFile& r)
     const uint32_t source = r[kRegRbCopyControl] & 7;
     return { r[kRegRbCopyControl], r[kRegRbCopyDestBase], r[kRegRbCopyDestPitch], r[kRegRbCopyDestInfo],
              r[kRegRbSurfaceInfo], r[source < 4 ? kInfo[source] : kRegRbColorInfo], r[kRegRbDepthInfo], r[kRegRbColorClear], r[kRegRbDepthClear] };
+}
+
+void SetResolveRect(Resolve& res, const RegisterFile& r, const uint8_t* guest, uint32_t endian)
+{
+    float v[6];
+    SwapIndices(guest, sizeof(v), endian, reinterpret_cast<uint8_t*>(v));
+    float x0 = std::min({v[0], v[2], v[4]}), x1 = std::max({v[0], v[2], v[4]});
+    float y0 = std::min({v[1], v[3], v[5]}), y1 = std::max({v[1], v[3], v[5]});
+    int32_t ox = 0, oy = 0;
+    if ((r[0x2205] >> 16) & 1) // PA_SU_SC_MODE_CNTL vtx_window_offset_enable
+    {
+        const uint32_t w = r[0x2080]; // PA_SC_WINDOW_OFFSET: x bits 0-14, y bits 16-30, signed
+        ox = int32_t(w << 17) >> 17;
+        oy = int32_t((w >> 16) << 17) >> 17;
+    }
+    res.rect[0] = int32_t(std::floor(x0 + 0.5f)) + ox;
+    res.rect[1] = int32_t(std::floor(y0 + 0.5f)) + oy;
+    res.rect[2] = int32_t(std::floor(x1 + 0.5f)) + ox;
+    res.rect[3] = int32_t(std::floor(y1 + 0.5f)) + oy;
+    res.hasRect = true;
 }
 
 float ResolveDepthClearValue(const Resolve& r)
