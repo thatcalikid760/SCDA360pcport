@@ -13,6 +13,7 @@ SCDA Recomp is licensed under GPL-3.0 (see `LICENSE`). It builds on or adapts:
 | tiny-AES-c | Unlicense | XEX decryption inside XenonUtils | https://github.com/kokke/tiny-AES-c |
 | fmt | MIT | Formatting in XenonRecomp | https://github.com/fmtlib/fmt |
 | toml++ | MIT | Config parsing in XenonRecomp | https://github.com/marzer/tomlplusplus |
+| FFmpeg (n7.1) | LGPL-2.1+ | XMA audio decoding: libavutil + WMA Pro/XMA2 decoder subset, built unmodified from `external/ffmpeg` (`tools/ffmpeg/`, `runtime/ffmpeg_xma.cmake`) | https://ffmpeg.org |
 
 The Tekken Tag Tournament 2 PC port (https://github.com/shihabal3amri/tekken-tag-tournament-2-pc)
 is used as a design reference only. No code from it is included: it has no license.

@@ -22,7 +22,7 @@ add_link_options(/DEBUG)
 # (XMA contexts stay undecoded: silent).
 set(FFMPEG_BUILD "${SCDA_ROOT}/external/ffmpeg/build")
 if(EXISTS "${FFMPEG_BUILD}/config.h")
-    include(ffmpeg_xma.cmake)
+    include("${CMAKE_CURRENT_SOURCE_DIR}/ffmpeg_xma.cmake")
 else()
     add_library(scda_xma STATIC src/xma_null.c)
 endif()
