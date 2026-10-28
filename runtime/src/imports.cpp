@@ -164,6 +164,13 @@ static std::mutex g_tlsMutex;
 static uint32_t g_tlsNext;
 static thread_local std::vector<uint32_t> t_tls;
 
+// Title relaunch: slot numbers start over (each new thread has an empty t_tls).
+void TlsReset()
+{
+    std::lock_guard lock(g_tlsMutex);
+    g_tlsNext = 0;
+}
+
 SCDA_IMPORT(KeTlsAlloc)
 {
     std::lock_guard lock(g_tlsMutex);

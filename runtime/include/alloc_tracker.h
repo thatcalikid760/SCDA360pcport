@@ -39,6 +39,13 @@ public:
         return uint64_t(addr) < uint64_t(it->first) + it->second ? it->first : 0;
     }
 
+    // Forgets every allocation based in [lo, hi) (title relaunch).
+    void RemoveRange(uint32_t lo, uint64_t hi)
+    {
+        std::lock_guard lock(m_mutex);
+        m_sizes.erase(m_sizes.lower_bound(lo), hi > 0xFFFFFFFFull ? m_sizes.end() : m_sizes.lower_bound(uint32_t(hi)));
+    }
+
 private:
     mutable std::mutex m_mutex;
     std::map<uint32_t, uint32_t> m_sizes;

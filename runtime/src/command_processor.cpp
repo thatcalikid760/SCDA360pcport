@@ -149,6 +149,32 @@ void CommandProcessorReset()
     GuestStore32(kGpuRegBase + 0x1961 * 4, 0x050002D0);
 }
 
+static std::atomic<bool> g_cpThreadRunning, g_relaunchReset;
+
+// On the CP thread (or without one): everything an old title instance left in the GPU.
+static void ResetForRelaunch()
+{
+    memset(GuestPtr(kGpuRegBase), 0, 0x8000 * 4);
+    g_shadow = RegisterFile();
+    g_regsDirty = true;
+    for (auto& w : g_stalledWait)
+        w = 0;
+    g_waitSince = 0;
+    CommandProcessorReset();
+}
+
+void CommandProcessorResetForRelaunch()
+{
+    if (!g_cpThreadRunning)
+    {
+        ResetForRelaunch();
+        return;
+    }
+    g_relaunchReset = true; // the CP thread finishes its current tick, resets, then acks
+    while (g_relaunchReset.load())
+        Sleep(1);
+}
+
 void CommandProcessorSetInterruptSink(std::function<void(uint32_t, uint32_t)> sink)
 {
     std::lock_guard lock(g_sinkMutex);
@@ -457,6 +483,7 @@ bool CommandProcessorTick(CpStats* stats)
 void CommandProcessorStart()
 {
     CommandProcessorReset();
+    g_cpThreadRunning = true;
     std::thread([]
     {
         CpStats st{};
@@ -465,6 +492,11 @@ void CommandProcessorStart()
         DWORD lastReport = GetTickCount();
         for (;;)
         {
+            if (g_relaunchReset.load())
+            {
+                ResetForRelaunch();
+                g_relaunchReset = false;
+            }
             if (trace && GetTickCount() - lastReport > 10000)
             {
                 lastReport = GetTickCount();

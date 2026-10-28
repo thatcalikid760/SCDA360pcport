@@ -13,6 +13,9 @@ struct CpStats
 // index) to the RPtr writeback. Returns false when the ring is not initialized.
 bool CommandProcessorTick(CpStats* stats);
 void CommandProcessorReset();
+// Title relaunch (after VideoReset cleared the ring): GPU registers, register shadow and stream
+// state back to boot values, done on the CP thread between ticks. Returns once done.
+void CommandProcessorResetForRelaunch();
 void CommandProcessorStart();
 void CommandProcessorSetInterruptSink(std::function<void(uint32_t source, uint32_t cpu)> sink);
 uint32_t GpuRegister(uint32_t index);

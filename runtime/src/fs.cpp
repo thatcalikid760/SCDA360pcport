@@ -41,6 +41,18 @@ struct BigRead
 };
 static std::vector<BigRead> g_bigReads;
 
+// Title relaunch: closes the old instance's files.
+void FsReset()
+{
+    std::lock_guard lock(g_fileMutex);
+    for (auto& [guest, h] : g_files)
+        CloseHandle(h);
+    g_files.clear();
+    g_paths.clear();
+    g_scans.clear();
+    g_bigReads.clear();
+}
+
 void FsVerifyReads()
 {
     for (const BigRead& r : g_bigReads)

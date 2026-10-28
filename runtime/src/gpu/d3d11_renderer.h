@@ -34,6 +34,8 @@ public:
     // Writes the presented image (frontbuffer resolve, else the render target) as a 32-bit BMP
     // after the next frame (SCDA_DUMP_FRAME, tests).
     void DumpNextFrame(std::string path) { m_dumpPath = std::move(path); }
+    // Title relaunch (any thread): the next Present drops EDRAM targets and resolve copies first.
+    static void RequestReset();
     // Reads one texel (as RGBA8) of the last RT0 drawn or resolved (tests); 0 when unavailable.
     uint32_t ReadTargetTexel(uint32_t x, uint32_t y);
 

@@ -11,6 +11,7 @@
 #include <vector>
 #include <alloc_tracker.h>
 #include <command_processor.h>
+#include <gpu/d3d11_renderer.h>
 #include <gpu/draw_state.h>
 #include <gpu/frame_queue.h>
 #include <host_window.h>
@@ -207,6 +208,40 @@ static LONG WINAPI CrashHandler(EXCEPTION_POINTERS* e)
 }
 
 void ProfilerStart();
+void KernelReset();
+void FsReset();
+void TlsReset();
+void XamReset();
+void AudioReset();
+void VideoReset();
+
+// Between title instances (no title thread running): guest memory and every HLE module back to
+// boot state. Kept: service-region contexts, host windows/devices, compiled shaders, launch data.
+static bool ResetTitle(const char* imagePath)
+{
+    VideoReset(); // ring first: the command processor goes idle
+    CommandProcessorResetForRelaunch();
+    D3D11Renderer::RequestReset();
+    AudioReset();
+    KernelReset();
+    FsReset();
+    TlsReset();
+    XamReset();
+    // Title heaps: stack guard pages back to read/write (BumpAlloc zeroes what it hands out).
+    DWORD old;
+    VirtualProtect(g_base + 0x40000000u, g_virtualCursor - 0x40000000u, PAGE_READWRITE, &old);
+    GuestAllocations().RemoveRange(0x40000000u, 0x7F000000u);
+    GuestAllocations().RemoveRange(0xA0000000u, 0xC0000000u);
+    g_virtualCursor = 0x40000000;
+    g_physicalCursor = 0xA0000000;
+    g_xexHeader = 0;
+    // Code is never written; this restores .data and zeroes .bss.
+    std::string sha;
+    ImageLoadResult loaded = LoadFlatImage(imagePath, g_base, &sha);
+    if (loaded != ImageLoadResult::Ok)
+        RuntimeLog("[fatal] relaunch: reloading %s: %s\n", imagePath, ImageLoadResultName(loaded));
+    return loaded == ImageLoadResult::Ok;
+}
 
 // One title instance: XEX header, data imports, main thread context, _xstart. Every guest
 // allocation of the instance starts here, so each boot lays out guest memory the same way.
@@ -331,8 +366,9 @@ int main(int argc, char** argv)
             return 0;
         RuntimeLog("[title] relaunch: stopping instance %u\n", instance);
         TitleStopAll();
-        // shortcut (slice 2): no reset yet; the process ends after the stop.
-        RuntimeLog("[title] stop complete; reset not implemented, exiting\n");
-        return 0;
+        if (!ResetTitle(imagePath))
+            return 2;
+        TitleRestarted();
+        RuntimeLog("[title] instance %u starting\n", instance + 1);
     }
 }

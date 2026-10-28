@@ -11,6 +11,26 @@ GpuState& Gpu()
     return state;
 }
 
+static uint32_t g_systemCommandBuffer; // VdGetSystemCommandBuffer block, per title instance
+
+// Title relaunch: forget the old instance's GPU setup (the ring first: the command processor
+// idles until the new instance initializes one).
+void VideoReset()
+{
+    GpuState& g = Gpu();
+    g.ringBase = 0;
+    g.ringSize = 0;
+    g.rptrWriteback = 0;
+    g.sysCmdBuf = 0;
+    g.interruptCallback = 0;
+    g.interruptContext = 0;
+    g.pendingSwaps = 0;
+    g.swapCounter = 0;
+    g.swapsSubmitted = 0;
+    g.swapsSeen = 0;
+    g_systemCommandBuffer = 0;
+}
+
 // VdInitializeRingBuffer(PhysicalAddress, SizeLog2): ring bytes = 1 << (SizeLog2 + 3).
 SCDA_IMPORT(VdInitializeRingBuffer)
 {
@@ -96,8 +116,9 @@ SCDA_IMPORT(VdCallGraphicsNotificationRoutines) { ctx.r3.u64 = 0; }
 // VdGetSystemCommandBuffer(u32* Buffer, u32* Value)
 SCDA_IMPORT(VdGetSystemCommandBuffer)
 {
-    static uint32_t block = GuestAllocPhysical(0x94, 0x1000);
-    if (ctx.r3.u32) GuestStore32(ctx.r3.u32, block);
+    if (!g_systemCommandBuffer)
+        g_systemCommandBuffer = GuestAllocPhysical(0x94, 0x1000);
+    if (ctx.r3.u32) GuestStore32(ctx.r3.u32, g_systemCommandBuffer);
     if (ctx.r4.u32) GuestStore32(ctx.r4.u32, 0xBEEF0000);
 }
 

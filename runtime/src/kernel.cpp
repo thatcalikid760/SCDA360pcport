@@ -11,6 +11,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <runtime.h>
 #include <thread_context.h>
 #include <title.h>
@@ -43,6 +44,22 @@ static uint32_t AddHandle(HANDLE host)
 
 // A guest handle for a host waitable object created outside this file (XAM notify listeners).
 uint32_t KernelAddHandle(HANDLE host) { return AddHandle(host); }
+
+// Title relaunch (no title thread running): closes every host object of the old instance.
+// Dispatchers are keyed by guest address, which the new instance reuses for new objects.
+void KernelReset()
+{
+    std::lock_guard lock(g_objMutex);
+    std::unordered_set<HANDLE> hosts;
+    for (auto& [guest, o] : g_handles)
+        hosts.insert(o.host);
+    for (auto& [addr, h] : g_dispatchers)
+        hosts.insert(h);
+    for (HANDLE h : hosts)
+        CloseHandle(h);
+    g_handles.clear();
+    g_dispatchers.clear();
+}
 
 static HANDLE HostHandle(uint32_t guest)
 {

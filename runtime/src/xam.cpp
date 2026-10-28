@@ -185,6 +185,19 @@ struct NotifyListener
 static std::mutex g_notifyMutex;
 static std::unordered_map<uint32_t, NotifyListener> g_listeners;
 static bool g_startupNotified = false;
+// Title relaunch: listener events are kernel handles (closed by KernelReset); the new instance
+// gets the startup notifications again.
+void XamReset()
+{
+    {
+        std::lock_guard lock(g_notifyMutex);
+        g_listeners.clear();
+        g_startupNotified = false;
+    }
+    std::lock_guard lock(g_enumMutex);
+    g_enumerators.clear();
+}
+
 constexpr uint64_t kNotifySystem = 1;
 constexpr uint32_t kNotifySysUi = 0x9, kNotifySysSigninChanged = 0xA;
 

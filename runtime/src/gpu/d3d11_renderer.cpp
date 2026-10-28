@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <atomic>
 #include <bitset>
 #include <cmath>
 #include <cstdio>
@@ -117,6 +118,10 @@ struct DrawResources
     };
     std::unordered_map<uint32_t, Resolved> resolved;
 };
+
+static std::atomic<bool> g_resetRequested;
+
+void D3D11Renderer::RequestReset() { g_resetRequested = true; }
 
 D3D11Renderer::D3D11Renderer() = default;
 
@@ -763,6 +768,15 @@ void D3D11Renderer::Present(const Frame& frame)
     else
     {
         DrawResources& r = *m_draw;
+        if (g_resetRequested.exchange(false))
+        {
+            m_context->ClearState();
+            r.colorTargets.clear();
+            r.depthTargets.clear();
+            r.resolved.clear();
+            r.last = nullptr;
+            r.lastRegs = nullptr;
+        }
         // EDRAM surfaces persist across frames; only guest clears (resolves) clear them.
         r.bound = false;
         D3D11_VIEWPORT vp{ 0, 0, float(kTargetWidth), float(kTargetHeight), 0, 1 };
