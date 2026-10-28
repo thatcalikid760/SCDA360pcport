@@ -20,3 +20,13 @@ int scda_xma_decode_packet(ScdaXmaStream* stream, const uint8_t* packet, int16_t
     (void)max_samples;
     return -1;
 }
+
+int scda_xma_decode_frame(ScdaXmaStream* stream, const uint8_t* bits, int nbits, int16_t* out, int max_samples)
+{
+    (void)stream;
+    (void)bits;
+    (void)nbits;
+    (void)out;
+    (void)max_samples;
+    return -1;
+}

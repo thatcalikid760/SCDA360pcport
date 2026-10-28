@@ -11,6 +11,15 @@ static uint32_t XmaCall(void (*fn)(PPCContext&, uint8_t*), uint32_t a, uint32_t 
     return ctx.r3.u32;
 }
 
+// A packet holding one 32-bit frame at its start whose third byte is value (xma_fake_decoder.c
+// decodes it to 512 samples of that value), then padding.
+static void PutFramePacket(uint32_t packet, uint8_t value)
+{
+    const uint8_t frame[] = {0, 0, 0, 0, 0x00, 0x40, value, 0}; // header, length 32 bits
+    memcpy(g_base + packet, frame, sizeof(frame));
+    memset(g_base + packet + sizeof(frame), 0xFF, 2048 - sizeof(frame));
+}
+
 TEST(xma_context_create_init_and_buffer_state)
 {
     TestGuestBase();
@@ -45,15 +54,15 @@ TEST(xma_context_create_init_and_buffer_state)
     CHECK_EQ(GuestLoad32(out + 8), c);
 }
 
-// Decoder pass (tests link xma_fake_decoder.c: one 512-sample frame per packet, value = byte 1).
+// Decoder pass (tests link xma_fake_decoder.c), one frame per packet.
 TEST(xma_decoder_fills_output_and_returns_input_buffers)
 {
     TestGuestBase();
     const uint32_t out = 0x40700100, init = 0x40700110;
     const uint32_t in0 = 0xA3000000, in1 = 0xA3001000, pcm = 0xA3002000;
-    g_base[in0 + 1] = 0x11;        // in0 packet 0
-    g_base[in0 + 2048 + 1] = 0x22; // in0 packet 1
-    g_base[in1 + 1] = 0x33;        // in1 packet 0
+    PutFramePacket(in0, 0x11);
+    PutFramePacket(in0 + 2048, 0x22);
+    PutFramePacket(in1, 0x33);
     CHECK_EQ(XmaCall(__imp__XMACreateContext, out), 0u);
     uint32_t c = GuestLoad32(out);
     // Mono 48 kHz, 15 output blocks: 3 packets = 3 x 1024 bytes = 12 blocks fit.
@@ -89,18 +98,19 @@ TEST(xma_decoder_fills_output_and_returns_input_buffers)
     XmaCall(__imp__XMAReleaseContext, c);
 }
 
-// Loop [packet 1, inside packet 2) x 2: packets 0 1 2 1 2 1 2, then the buffer is handed back.
-TEST(xma_decoder_loops_packets)
+// Loop from frame 1 to frame 2 (one per packet) x 2, subframe end 1, skip 1: frame 0, 1, 2 (256
+// samples), then twice 1 (from sample 128) and 2 (256, then 512 once the count is used up).
+TEST(xma_decoder_loops_frames)
 {
     TestGuestBase();
     const uint32_t out = 0x40700200, init = 0x40700210;
     const uint32_t in0 = 0xA3004000, pcm = 0xA3006000;
-    g_base[in0 + 1] = 0x11;
-    g_base[in0 + 2048 + 1] = 0x22;
-    g_base[in0 + 4096 + 1] = 0x33;
+    PutFramePacket(in0, 0x11);
+    PutFramePacket(in0 + 2048, 0x22);
+    PutFramePacket(in0 + 4096, 0x33);
     CHECK_EQ(XmaCall(__imp__XMACreateContext, out), 0u);
     uint32_t c = GuestLoad32(out);
-    const uint32_t fields[] = {in0, 3, 0, 0, 32, pcm, 30, 0, 2, 0, 3, 16384 + 32, 2 * 16384 + 100, 0x02000000};
+    const uint32_t fields[] = {in0, 3, 0, 0, 32, pcm, 30, 0, 2, 0, 3, 16384 + 32, 2 * 16384 + 32, 0x02010100};
     for (int i = 0; i < 14; i++)
         GuestStore32(init + i * 4, fields[i]);
     XmaCall(__imp__XMAInitializeContext, c, init);
@@ -111,11 +121,12 @@ TEST(xma_decoder_loops_packets)
         Sleep(2);
     XmaCall(__imp__XMADisableContext, c);
     CHECK_EQ(XmaCall(__imp__XMAIsInputBuffer0Valid, c), 0u);
-    CHECK_EQ(XmaCall(__imp__XMAGetOutputBufferWriteOffset, c), 28u);
+    CHECK_EQ(XmaCall(__imp__XMAGetOutputBufferWriteOffset, c), 22u); // 128-sample blocks
     CHECK_EQ((GuestLoad32(c) >> 12) & 0xFF, 0u); // loop count used up
-    const uint8_t expect[] = {0x11, 0x22, 0x33, 0x22, 0x33, 0x22, 0x33};
-    for (int p = 0; p < 7; p++)
-        CHECK_EQ(GuestLoad16(pcm + p * 4 * 256), expect[p]);
+    const uint8_t expect[] = {0x11, 0x11, 0x11, 0x11, 0x22, 0x22, 0x22, 0x22, 0x33, 0x33, 0x22,
+        0x22, 0x22, 0x33, 0x33, 0x22, 0x22, 0x22, 0x33, 0x33, 0x33, 0x33};
+    for (int b = 0; b < 22; b++)
+        CHECK_EQ(GuestLoad16(pcm + b * 256 + 254), expect[b]);
     XmaCall(__imp__XMAReleaseContext, c);
 }
 
@@ -131,7 +142,7 @@ TEST(xma_xaudio_voice_set_kick_and_lock)
     XmaEnsureArray();
     const uint32_t out = 0x40700200, set = 0x40700210, entries = 0x40700300;
     const uint32_t in0 = 0xA3010000, pcm = 0xA3012000;
-    g_base[in0 + 1] = 0x44;
+    PutFramePacket(in0, 0x44);
     CHECK_EQ(XmaCall(__imp__XMACreateContext, out), 0u);
     const uint32_t c = GuestLoad32(out);
     uint32_t reg;

@@ -19,6 +19,10 @@ void scda_xma_reset(ScdaXmaStream* stream);
 // Decodes one packet into out (room for max_samples samples per channel). Returns samples per
 // channel written, or < 0 on a bitstream error (the next packet resynchronises).
 int scda_xma_decode_packet(ScdaXmaStream* stream, const uint8_t* packet, int16_t* out, int max_samples);
+// Decodes one frame: nbits bits from bit 0 of bits (its 15-bit length field first), packet
+// headers already removed. Decoder state carries over from the previous frame, as on the
+// hardware. Returns samples per channel written (512), or < 0 on a bitstream error.
+int scda_xma_decode_frame(ScdaXmaStream* stream, const uint8_t* bits, int nbits, int16_t* out, int max_samples);
 
 #ifdef __cplusplus
 }

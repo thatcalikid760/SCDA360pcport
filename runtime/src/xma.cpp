@@ -7,20 +7,23 @@
 // output ring (256-byte blocks of 16-bit big-endian PCM) until the ring is full (output buffer
 // valid cleared) or the input runs out (each consumed buffer's valid bit cleared, then the
 // other buffer). Disable waits for a running pass, so the title can then rewrite the context.
-// shortcut: loops run at packet granularity (loop end's packet plays whole, loop start restarts
-// at its packet's first frame); subframe end/skip are ignored.
-// shortcut: a read offset set mid-packet restarts at that packet's start.
+// Decoding is per frame (xma_frames.h): the read offset, loop start and loop end are frame
+// bit offsets. A loop keeps the decoder state across the jump, so the first frame after it
+// overlaps with the loop end frame instead of the one before loop start (as on hardware, if the
+// encoder did not plan for it: in-game music differs from straight decoding for 512 samples).
 // The statically linked XAudio drives its own contexts without the XMA* exports beyond create /
 // release: it reads the array address from register 0x7FEA1800 and kicks / locks contexts with
 // one bit per context in registers 0x7FEA1940 / 0x7FEA1A40 (xma_xaudio.cpp).
 // SCDA_TRACE_XMA=1 logs every call with the context's state.
 #include <windows.h>
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <vector>
 #include <runtime.h>
 #include "xma_decoder.h"
+#include "xma_frames.h"
 
 namespace
 {
@@ -33,7 +36,7 @@ struct Field
 };
 constexpr Field kIn0Count{0, 0, 12}, kLoopCount{0, 12, 8}, kIn0Valid{0, 20, 1}, kIn1Valid{0, 21, 1},
     kOutBlocks{0, 22, 5}, kOutWrite{0, 27, 5};
-constexpr Field kIn1Count{1, 0, 12}, kLoopSubEnd{1, 14, 3}, kLoopSubSkip{1, 17, 3}, kSubframes{1, 20, 4},
+constexpr Field kIn1Count{1, 0, 12}, kLoopSubEnd{1, 12, 2}, kLoopSubSkip{1, 17, 3}, kSubframes{1, 20, 4},
     kSampleRate{1, 27, 2}, kStereo{1, 29, 1}, kOutValid{1, 31, 1};
 constexpr Field kReadOffset{2, 0, 26}, kLoopStart{3, 0, 26}, kLoopEnd{4, 0, 26}, kCurBuffer{4, 31, 1};
 constexpr Field kIn0Ptr{5, 0, 32}, kIn1Ptr{6, 0, 32}, kOutPtr{7, 0, 32}, kWork{8, 0, 32}, kOutRead{9, 0, 5};
@@ -51,7 +54,8 @@ struct Decode
     int channels, rate; // format the stream was opened with (XAudio contexts)
     std::vector<uint8_t> pcm;
     size_t pcmRead;
-    FILE* dump; // SCDA_DUMP_XMA=<dir>: every packet fed to the decoder
+    uint32_t skip; // samples per channel to drop from the next frame (loop start)
+    FILE* dump; // SCDA_DUMP_XMA=<dir>: every input buffer consumed
 };
 Decode g_decode[kContexts];
 HANDLE g_kick; // auto-reset: a context may have work
@@ -89,71 +93,115 @@ void CloseDecode(Decode& d)
     d.dump = nullptr;
     d.pcm.clear();
     d.pcmRead = 0;
+    d.skip = 0;
 }
 
 void Trace(const char* what, uint32_t c, uint32_t lr);
 
-// Decodes the next packet of the current input buffer into d.pcm. False when no input is valid
-// or there is no decoder (the context then keeps its input, as if the hardware stalled).
-bool DecodePacket(uint32_t c, Decode& d)
+// Packet n of the input as one bitstream: the current buffer, then the other one if valid.
+const uint8_t* InputPacket(uint32_t c, uint32_t n)
+{
+    const uint32_t cur = Get(c, kCurBuffer), count = Get(c, cur ? kIn1Count : kIn0Count);
+    if (n >= count)
+    {
+        if (!Get(c, cur ? kIn0Valid : kIn1Valid) || n - count >= Get(c, cur ? kIn0Count : kIn1Count))
+            return nullptr;
+        return static_cast<const uint8_t*>(GuestPtr(FromPhysical(Get(c, cur ? kIn0Ptr : kIn1Ptr)))) +
+               (n - count) * 2048;
+    }
+    return static_cast<const uint8_t*>(GuestPtr(FromPhysical(Get(c, cur ? kIn1Ptr : kIn0Ptr)))) + n * 2048;
+}
+
+// Decodes the frame at the read offset into d.pcm. False when no input is valid, a frame runs
+// into an input buffer not yet valid, or there is no decoder (the context then keeps its input,
+// as if the hardware stalled).
+bool DecodeFrame(uint32_t c, Decode& d)
 {
     if (!d.stream)
         return false;
-    for (int attempt = 0; attempt < 2; attempt++)
+    uint32_t cur = Get(c, kCurBuffer);
+    Field valid = cur ? kIn1Valid : kIn0Valid;
+    if (!Get(c, valid))
     {
-        uint32_t cur = Get(c, kCurBuffer);
-        Field valid = cur ? kIn1Valid : kIn0Valid;
-        if (!Get(c, valid))
+        if (!Get(c, cur ? kIn0Valid : kIn1Valid))
+            return false;
+        Set(c, kCurBuffer, cur = !cur);
+        Set(c, kReadOffset, kPacketHeaderBits);
+        valid = cur ? kIn1Valid : kIn0Valid;
+    }
+    const uint32_t count = Get(c, cur ? kIn1Count : kIn0Count);
+    auto packet = [c](uint32_t n) { return InputPacket(c, n); };
+    uint32_t pos = Get(c, kReadOffset), next = 0;
+    int bits = -1;
+    if (pos / kPacketBits < count)
+    {
+        // A read offset before the packet's first frame (buffer start, tail of a split frame)
+        // moves to that frame.
+        const uint32_t first = xma::FirstFrameBit(packet(pos / kPacketBits));
+        if (pos % kPacketBits < first)
+            pos = pos / kPacketBits * kPacketBits + first;
+        static uint8_t frame[xma::kMaxFrameBits / 8 + 1];
+        bits = xma::ReadFrame(packet, pos, frame, &next);
+        if (bits < 0)
+            return false;
+        if (bits > 0)
         {
-            Field otherValid = cur ? kIn0Valid : kIn1Valid;
-            if (!Get(c, otherValid))
-                return false;
-            Set(c, kCurBuffer, !cur);
-            Set(c, kReadOffset, kPacketHeaderBits);
-            continue;
-        }
-        uint32_t count = Get(c, cur ? kIn1Count : kIn0Count);
-        uint32_t packet = Get(c, kReadOffset) / kPacketBits;
-        if (packet < count)
-        {
-            static int16_t samples[64 * 512 * 2];
-            const uint8_t* data = static_cast<const uint8_t*>(GuestPtr(FromPhysical(Get(c, cur ? kIn1Ptr : kIn0Ptr)))) + packet * 2048;
-            if (d.dump)
-                fwrite(data, 1, 2048, d.dump);
-            int n = scda_xma_decode_packet(d.stream, data, samples, 64 * 512);
-            int total = n > 0 ? n * (Get(c, kStereo) ? 2 : 1) : 0;
-            for (int i = 0; i < total; i++)
+            static int16_t samples[512 * 2];
+            const int channels = Get(c, kStereo) ? 2 : 1;
+            int n = scda_xma_decode_frame(d.stream, frame, bits, samples, 512);
+            // Loop start drops subframe skip x 128 samples; the frame at loop end plays subframes
+            // 0..subframe end (fields filled by XAudio, sub_823FFEE0).
+            int from = n > 0 ? std::min(n, int(d.skip)) : 0, to = std::max(n, 0);
+            d.skip = 0;
+            const uint32_t loops = Get(c, kLoopCount);
+            const bool loopEnd = loops && pos == Get(c, kLoopEnd);
+            if (loopEnd)
+                to = std::min(to, int(Get(c, kLoopSubEnd) + 1) * 128);
+            for (int i = from * channels; i < to * channels; i++)
             {
                 d.pcm.push_back(uint8_t(uint16_t(samples[i]) >> 8));
                 d.pcm.push_back(uint8_t(samples[i]));
             }
-            packet++;
-            // Loop: the packet holding loop end is played whole, then decoding restarts at loop
-            // start's packet with a fresh stream. Count 255 loops forever.
-            const uint32_t loops = Get(c, kLoopCount), loopEnd = Get(c, kLoopEnd);
-            const uint32_t loopStart = Get(c, kLoopStart) / kPacketBits;
-            if (loops && loopEnd && packet * kPacketBits >= loopEnd && loopStart < count)
+            // Loop: jump back with the decoder state carried over, as the hardware does. Count
+            // 255 loops forever.
+            if (loopEnd)
             {
                 if (loops != 255)
                     Set(c, kLoopCount, loops - 1);
-                Set(c, kReadOffset, loopStart * kPacketBits + kPacketHeaderBits);
-                scda_xma_reset(d.stream);
+                if (const char* dir = getenv("SCDA_DUMP_XMA"))
+                {
+                    // Whole looped buffer, once per loop setup: name = ctx, loop fields, format.
+                    char path[512];
+                    snprintf(path, sizeof(path), "%s\loop_ctx%d_%u_%u_%u_%u_ch%d_%d.xma", dir, Index(c),
+                        Get(c, kLoopStart), pos, Get(c, kLoopSubEnd), Get(c, kLoopSubSkip), d.channels, d.rate);
+                    if (FILE* f = fopen(path, "rb"))
+                        fclose(f);
+                    else if ((f = fopen(path, "wb")))
+                    {
+                        fwrite(GuestPtr(FromPhysical(Get(c, cur ? kIn1Ptr : kIn0Ptr))), 1, count * 2048, f);
+                        fclose(f);
+                    }
+                }
+                Set(c, kReadOffset, Get(c, kLoopStart));
+                d.skip = Get(c, kLoopSubSkip) * 128;
                 Trace("loop", c, 0);
                 return true;
             }
         }
-        if (packet < count)
-            Set(c, kReadOffset, packet * kPacketBits + kPacketHeaderBits);
-        else
-        {
-            // Buffer consumed: hand it back to the title, continue in the other one.
-            Set(c, valid, 0);
-            Set(c, kCurBuffer, !cur);
-            Set(c, kReadOffset, kPacketHeaderBits);
-        }
+    }
+    if (bits >= 0 && next / kPacketBits < count)
+    {
+        Set(c, kReadOffset, next);
         return true;
     }
-    return false;
+    // Buffer consumed: hand it back to the title, continue in the other one (where the last
+    // frame may have ended).
+    if (d.dump)
+        fwrite(packet(0), 1, count * 2048, d.dump);
+    Set(c, valid, 0);
+    Set(c, kCurBuffer, !cur);
+    Set(c, kReadOffset, bits >= 0 ? next - count * kPacketBits : kPacketHeaderBits);
+    return true;
 }
 
 // One decoder pass over context i (g_lock held): fill its output ring.
@@ -175,7 +223,7 @@ void RunContext(uint32_t i)
             Set(c, kOutValid, 0);
             break;
         }
-        while (d.pcm.size() - d.pcmRead < kBlockBytes && DecodePacket(c, d))
+        while (d.pcm.size() - d.pcmRead < kBlockBytes && DecodeFrame(c, d))
         {
         }
         if (d.pcm.size() - d.pcmRead < kBlockBytes)
