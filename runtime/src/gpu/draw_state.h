@@ -58,9 +58,10 @@ struct TextureFetch
 };
 TextureFetch DecodeTextureFetch(const RegisterFile& regs, uint32_t slot);
 
-// Bytes per texel for the formats ConvertTexture supports (k_8, k_8_8_8_8); 0 = unsupported.
-uint32_t TextureBytesPerTexel(uint32_t format);
-// Guest bytes the texture occupies (tiled: 32x32-aligned).
+// Bytes per element (texel, or 4x4 block for DXT) for the formats ConvertTexture supports
+// (k_8, k_8_8_8_8, DXT1, DXT2_3, DXT4_5); 0 = unsupported.
+uint32_t TextureElementBytes(uint32_t format);
+// Guest bytes the texture occupies (tiled: 32x32 elements aligned).
 uint32_t TextureGuestBytes(const TextureFetch& t);
 // Texel index of (x, y) in a tiled surface of the given pitch (texels).
 uint32_t TiledTexelIndex(uint32_t x, uint32_t y, uint32_t pitch, uint32_t log2Bpp);

@@ -118,30 +118,44 @@ TextureFetch DecodeTextureFetch(const RegisterFile& r, uint32_t slot)
     return t;
 }
 
-uint32_t TextureBytesPerTexel(uint32_t format)
+uint32_t TextureElementBytes(uint32_t format)
 {
     switch (format)
     {
-    case 2: return 1; // k_8
-    case 6: return 4; // k_8_8_8_8
+    case 2: return 1;  // k_8
+    case 6: return 4;  // k_8_8_8_8
+    case 18: return 8; // k_DXT1
+    case 19:           // k_DXT2_3
+    case 20: return 16; // k_DXT4_5
     default: return 0;
     }
 }
 
+static bool IsBlockCompressed(uint32_t format) { return format >= 18 && format <= 20; }
 static uint32_t Align32(uint32_t v) { return (v + 31) & ~31u; }
+static uint32_t Log2(uint32_t v) { return v >= 16 ? 4 : v >= 8 ? 3 : v >= 4 ? 2 : v >= 2 ? 1 : 0; }
+
+// Elements (texels, or 4x4 blocks) the texture's rows span: pitch and height.
+static void ElementGrid(const TextureFetch& t, uint32_t& pitch, uint32_t& height)
+{
+    uint32_t b = IsBlockCompressed(t.format) ? 4 : 1;
+    pitch = (t.pitch + b - 1) / b;
+    height = (t.height + b - 1) / b;
+}
 
 uint32_t TextureGuestBytes(const TextureFetch& t)
 {
-    uint32_t bpp = TextureBytesPerTexel(t.format);
+    uint32_t bytes = TextureElementBytes(t.format), pitch, height;
+    ElementGrid(t, pitch, height);
     if (!t.tiled)
-        return t.pitch * t.height * bpp;
-    // Small texels interleave past the 32x32 tile (8 bpp: up to 2.5x), so take the highest texel
-    // index of the last macro-tile row.
-    uint32_t log2 = bpp == 4 ? 2 : 0, last = 0, rows = Align32(t.height);
+        return pitch * height * bytes;
+    // Small elements interleave past the 32x32 tile (8 bpp: up to 2.5x), so take the highest
+    // element index of the last macro-tile row.
+    uint32_t log2 = Log2(bytes), last = 0, rows = Align32(height);
     for (uint32_t y = rows - 32; y < rows; y++)
-        for (uint32_t x = 0; x < Align32(t.pitch); x++)
-            last = std::max(last, TiledTexelIndex(x, y, t.pitch, log2));
-    return (last + 1) * bpp;
+        for (uint32_t x = 0; x < Align32(pitch); x++)
+            last = std::max(last, TiledTexelIndex(x, y, pitch, log2));
+    return (last + 1) * bytes;
 }
 
 uint32_t TiledTexelIndex(uint32_t x, uint32_t y, uint32_t pitch, uint32_t log2Bpp)
@@ -167,32 +181,91 @@ static uint32_t SwapDword(uint32_t v, uint32_t e)
     }
 }
 
+static uint32_t Swizzle(const uint32_t ch[4], uint32_t swizzle)
+{
+    uint32_t texel = 0;
+    for (uint32_t i = 0; i < 4; i++)
+    {
+        uint32_t s = (swizzle >> (i * 3)) & 7;
+        texel |= (s < 4 ? ch[s] : s == 5 ? 0xFFu : 0u) << (i * 8);
+    }
+    return texel;
+}
+
+// One DXT1 / DXT2_3 / DXT4_5 block (dwords already endian-swapped, little-endian layout) ->
+// 16 texels of channels (R, G, B, A).
+static void DecodeBlock(uint32_t format, const uint32_t* d, uint32_t out[16][4])
+{
+    const uint32_t* color = format == 18 ? d : d + 2;
+    uint32_t c0 = color[0] & 0xFFFF, c1 = color[0] >> 16, bits = color[1], pal[4][4];
+    for (uint32_t i = 0; i < 2; i++)
+    {
+        uint32_t c = i ? c1 : c0, r = c >> 11, g = (c >> 5) & 63, b = c & 31;
+        pal[i][0] = (r << 3) | (r >> 2), pal[i][1] = (g << 2) | (g >> 4), pal[i][2] = (b << 3) | (b >> 2), pal[i][3] = 255;
+    }
+    // DXT1 with c0 <= c1: 3 colours + transparent black; DXT2-5 always use 4 colours.
+    bool four = format != 18 || c0 > c1;
+    for (uint32_t k = 0; k < 3; k++)
+    {
+        pal[2][k] = four ? (2 * pal[0][k] + pal[1][k]) / 3 : (pal[0][k] + pal[1][k]) / 2;
+        pal[3][k] = four ? (pal[0][k] + 2 * pal[1][k]) / 3 : 0;
+    }
+    pal[2][3] = 255;
+    pal[3][3] = four ? 255 : 0;
+    uint64_t alphaBits = uint64_t(d[0]) | (uint64_t(d[1]) << 32);
+    uint32_t a[8] = { uint32_t(alphaBits & 0xFF), uint32_t((alphaBits >> 8) & 0xFF) };
+    for (uint32_t i = 2; i < 8; i++)
+        a[i] = a[0] > a[1] ? ((8 - i) * a[0] + (i - 1) * a[1]) / 7
+             : i < 6 ? ((6 - i) * a[0] + (i - 1) * a[1]) / 5 : i == 6 ? 0 : 255;
+    for (uint32_t i = 0; i < 16; i++)
+    {
+        memcpy(out[i], pal[(bits >> (i * 2)) & 3], sizeof(out[i]));
+        if (format == 19)
+            out[i][3] = ((alphaBits >> (i * 4)) & 15) * 17;
+        else if (format == 20)
+            out[i][3] = a[(alphaBits >> (16 + i * 3)) & 7];
+    }
+}
+
 std::vector<uint32_t> ConvertTexture(const TextureFetch& t, const uint8_t* guest)
 {
     std::vector<uint32_t> out(size_t(t.width) * t.height);
-    uint32_t bpp = TextureBytesPerTexel(t.format);
-    if (!bpp)
+    uint32_t bytes = TextureElementBytes(t.format), log2 = Log2(bytes), pitch, height;
+    if (!bytes)
         return out;
-    uint32_t log2 = bpp == 4 ? 2 : 0;
+    ElementGrid(t, pitch, height);
+    if (IsBlockCompressed(t.format))
+    {
+        for (uint32_t by = 0; by < height; by++)
+            for (uint32_t bx = 0; bx < (t.width + 3) / 4; bx++)
+            {
+                uint32_t index = t.tiled ? TiledTexelIndex(bx, by, pitch, log2) : by * pitch + bx, d[4], texels[16][4];
+                memcpy(d, guest + size_t(index) * bytes, bytes);
+                for (uint32_t i = 0; i < bytes / 4; i++)
+                    d[i] = SwapDword(d[i], t.endian);
+                DecodeBlock(t.format, d, texels);
+                for (uint32_t i = 0; i < 16; i++)
+                {
+                    uint32_t x = bx * 4 + (i & 3), y = by * 4 + (i >> 2);
+                    if (x < t.width && y < t.height)
+                        out[size_t(y) * t.width + x] = Swizzle(texels[i], t.swizzle);
+                }
+            }
+        return out;
+    }
     for (uint32_t y = 0; y < t.height; y++)
         for (uint32_t x = 0; x < t.width; x++)
         {
-            uint32_t index = t.tiled ? TiledTexelIndex(x, y, t.pitch, log2) : y * t.pitch + x;
-            uint32_t byteOffset = index * bpp, d;
+            uint32_t index = t.tiled ? TiledTexelIndex(x, y, pitch, log2) : y * pitch + x;
+            uint32_t byteOffset = index * bytes, d;
             memcpy(&d, guest + (byteOffset & ~3u), 4);
             d = SwapDword(d, t.endian);
             uint32_t ch[4];
-            if (bpp == 4)
+            if (bytes == 4)
                 ch[0] = d & 0xFF, ch[1] = (d >> 8) & 0xFF, ch[2] = (d >> 16) & 0xFF, ch[3] = d >> 24;
             else
                 ch[0] = (d >> ((byteOffset & 3) * 8)) & 0xFF, ch[1] = ch[2] = 0, ch[3] = 0xFF;
-            uint32_t texel = 0;
-            for (uint32_t i = 0; i < 4; i++)
-            {
-                uint32_t s = (t.swizzle >> (i * 3)) & 7;
-                texel |= (s < 4 ? ch[s] : s == 5 ? 0xFFu : 0u) << (i * 8);
-            }
-            out[size_t(y) * t.width + x] = texel;
+            out[size_t(y) * t.width + x] = Swizzle(ch, t.swizzle);
         }
     return out;
 }

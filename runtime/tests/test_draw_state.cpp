@@ -114,6 +114,37 @@ TEST(convert_texture_argb_swizzle)
     CHECK_EQ(out[2], 0xFF090909u);
 }
 
+// DXT1 and DXT4_5 4x4 blocks decode to RGBA8 (endian 1 = 8-in-16, as the game stores them).
+TEST(convert_texture_dxt)
+{
+    // DXT1: color0 = F800 (red) > color1 = 001F (blue): 4-colour mode. Texel 0 index 0, texel 1
+    // index 1, texel 2 index 2 (2/3 red + 1/3 blue), rest 0. Bytes stored 16-bit big-endian.
+    const uint8_t dxt1[8] = { 0xF8, 0x00, 0x00, 0x1F, 0x00, 0x24, 0x00, 0x00 };
+    TextureFetch t;
+    t.valid = true;
+    t.format = 18;
+    t.endian = 1;
+    t.width = t.pitch = t.height = 4;
+    t.swizzle = 0 | (1 << 3) | (2 << 6) | (3 << 9); // xyzw
+    CHECK_EQ(TextureGuestBytes(t), 8u);
+    auto out = ConvertTexture(t, dxt1);
+    CHECK_EQ(out.size(), size_t(16));
+    CHECK_EQ(out[0], 0xFF0000FFu);
+    CHECK_EQ(out[1], 0xFFFF0000u);
+    CHECK_EQ(out[2], 0xFF5500AAu);
+    CHECK_EQ(out[15], 0xFF0000FFu);
+
+    // DXT4_5: alpha0 = FF, alpha1 = 00; texel 1 alpha index 1 (0). Colour block as above.
+    const uint8_t dxt5[16] = { 0x00, 0xFF, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00,
+                               0xF8, 0x00, 0x00, 0x1F, 0x00, 0x24, 0x00, 0x00 };
+    t.format = 20;
+    CHECK_EQ(TextureGuestBytes(t), 16u);
+    out = ConvertTexture(t, dxt5);
+    CHECK_EQ(out[0], 0xFF0000FFu);
+    CHECK_EQ(out[1], 0x00FF0000u);
+    CHECK_EQ(out[2], 0xFF5500AAu);
+}
+
 TEST(tiled_index_is_a_permutation)
 {
     for (uint32_t log2 : { 0u, 2u })

@@ -280,7 +280,7 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs)
             srvs[slot] = res->second.srv.Get();
             continue;
         }
-        if (!TextureBytesPerTexel(t.format))
+        if (!TextureElementBytes(t.format))
             continue;
         uint64_t key = 1469598103934665603ull;
         for (uint32_t i = 0; i < 6; i++)
