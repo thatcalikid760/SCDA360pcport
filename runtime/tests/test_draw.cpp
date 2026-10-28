@@ -53,14 +53,26 @@ TEST(resolve_detected_and_decoded)
     CHECK_EQ(r.surfaceInfo, 1280u);
     CHECK(ResolveCopies(r));
     CHECK(ResolveClearsColor(r));
+    CHECK(!ResolveClearsDepth(r));
     CHECK_EQ(ResolveWidth(r), 1280u);
     CHECK_EQ(ResolveHeight(r), 720u);
     regs->Set(0x231E, 0x80FF0000);
-    regs->Set(0x2318, 0x300000); // copy_command 3: clear only
+    regs->Set(0x231D, 0xFFFFFF00);
+    regs->Set(0x2318, 0x300200); // copy_command 3: clear only, depth clear
     r = DecodeResolve(*regs);
     CHECK_EQ(r.colorClear, 0x80FF0000u);
     CHECK(!ResolveCopies(r));
     CHECK(!ResolveClearsColor(r));
+    CHECK(ResolveClearsDepth(r));
+    CHECK_EQ(r.depthClear, 0xFFFFFF00u);
+    CHECK(ResolveDepthClearValue(r) == 1.0f);   // D24S8 unorm
+    r.depthClear = 0;
+    r.depthInfo = 1u << 16;                     // D24FS8
+    CHECK(ResolveDepthClearValue(r) == 0.0f);
+    r.depthClear = 0xF00000u << 8;              // exponent 15, mantissa 0 = 1.0
+    CHECK(ResolveDepthClearValue(r) == 1.0f);
+    r.depthClear = 0xC00000u << 8;              // exponent 12 = 0.125
+    CHECK(ResolveDepthClearValue(r) == 0.125f);
     regs->Set(0x2208, 4);
     CHECK(!IsResolve(*regs));
 }

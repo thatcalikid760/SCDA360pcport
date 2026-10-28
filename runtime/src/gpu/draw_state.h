@@ -80,6 +80,14 @@ struct HostBlend
     float factor[4] = {};
 };
 HostBlend DecodeBlend(const RegisterFile& regs);
+// RB_DEPTHCONTROL (0x2200) as D3D11 depth state: bit 1 z test, bit 2 z write, bits 4-6 zfunc
+// (Xenos 0 never..7 always = D3D11_COMPARISON_FUNC - 1), bit 0 stencil. z test off: no test, no write.
+struct HostDepthStencil
+{
+    bool depthEnable = false, depthWrite = false, stencilEnable = false;
+    uint32_t depthFunc = 8;
+};
+HostDepthStencil DecodeDepthStencil(const RegisterFile& regs);
 // PA_SU_SC_MODE_CNTL (0x2205): D3D11_CULL_MODE (1 none, 2 front, 3 back); front face winding.
 uint32_t HostCullMode(const RegisterFile& regs);
 bool HostFrontCounterClockwise(const RegisterFile& regs);

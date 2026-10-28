@@ -228,6 +228,32 @@ TEST(blend_and_cull_from_registers)
     CHECK_EQ(HostCullMode(r), 1u);
 }
 
+// RB_DEPTHCONTROL (0x2200): bit 0 stencil, bit 1 z test, bit 2 z write, bits 4-6 zfunc.
+TEST(depth_stencil_from_registers)
+{
+    RegisterFile r;
+    HostDepthStencil d = DecodeDepthStencil(r);
+    CHECK(!d.depthEnable && !d.depthWrite && !d.stencilEnable);
+    CHECK_EQ(d.depthFunc, 8u); // ALWAYS
+
+    r.Set(0x2200, 0x2 | 0x4 | (1u << 4)); // test + write, LESS
+    d = DecodeDepthStencil(r);
+    CHECK(d.depthEnable && d.depthWrite);
+    CHECK_EQ(d.depthFunc, 2u); // D3D11_COMPARISON_LESS
+    CHECK(!d.stencilEnable);
+
+    r.Set(0x2200, 0x1 | 0x2 | (3u << 4)); // stencil + test, no write, LESS_EQUAL
+    d = DecodeDepthStencil(r);
+    CHECK(d.depthEnable && !d.depthWrite && d.stencilEnable);
+    CHECK_EQ(d.depthFunc, 4u);
+
+    r.Set(0x2200, 0x2 | (7u << 4) | 0xFFFFFF00u); // other fields do not leak in
+    d = DecodeDepthStencil(r);
+    CHECK_EQ(d.depthFunc, 8u);
+    r.Set(0x2200, 0x2);                           // zfunc 0 = NEVER
+    CHECK_EQ(DecodeDepthStencil(r).depthFunc, 1u);
+}
+
 // Texture fetch constant clamp_x/y/z (dword 0 bits 10-18) and filters (dword 3) -> D3D11 sampler.
 TEST(sampler_from_fetch_constant)
 {

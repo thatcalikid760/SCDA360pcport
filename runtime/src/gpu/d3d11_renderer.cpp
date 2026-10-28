@@ -43,6 +43,10 @@ struct DrawResources
     ComPtr<ID3D11Texture2D> target;
     ComPtr<ID3D11RenderTargetView> targetRtv;
     ComPtr<ID3D11ShaderResourceView> targetSrv;
+    // Depth/stencil for the target. Float depth holds both guest formats (D24S8, D24FS8).
+    ComPtr<ID3D11Texture2D> depth;
+    ComPtr<ID3D11DepthStencilView> depthDsv;
+    float depthClear = 0.0f; // last guest depth clear, reused by the per-frame clear
     ComPtr<ID3D11VertexShader> blitVs;
     ComPtr<ID3D11PixelShader> blitPs;
     ComPtr<ID3D11RasterizerState> rasterizer;
@@ -58,6 +62,7 @@ struct DrawResources
     // Fixed-function state by the registers it is built from.
     std::unordered_map<uint64_t, ComPtr<ID3D11BlendState>> blend;
     std::unordered_map<uint32_t, ComPtr<ID3D11RasterizerState>> raster;
+    std::unordered_map<uint32_t, ComPtr<ID3D11DepthStencilState>> depthStates;
     std::unordered_map<uint64_t, ComPtr<ID3D11SamplerState>> samplers;
     // Per frame: guest ranges already uploaded, textures by fetch constant.
     std::unordered_map<uint64_t, uint32_t> uploaded; // range key -> Frame::memory snapshot in the buffer
@@ -145,6 +150,12 @@ bool D3D11Renderer::CreateDrawResources()
     if (FAILED(m_device->CreateTexture2D(&td, nullptr, &r->target)) ||
         FAILED(m_device->CreateRenderTargetView(r->target.Get(), nullptr, &r->targetRtv)) ||
         FAILED(m_device->CreateShaderResourceView(r->target.Get(), nullptr, &r->targetSrv)))
+        return false;
+    D3D11_TEXTURE2D_DESC dd = td;
+    dd.Format = DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
+    dd.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+    if (FAILED(m_device->CreateTexture2D(&dd, nullptr, &r->depth)) ||
+        FAILED(m_device->CreateDepthStencilView(r->depth.Get(), nullptr, &r->depthDsv)))
         return false;
 
     std::string error;
@@ -298,6 +309,8 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs)
     m_context->UpdateSubresource(r.constants[2].Get(), 0, nullptr, &shared, 0, 0);
 
     HostBlend b = DecodeBlend(regs);
+    if ((regs[kRegRbModeControl] & 7) == 5) // depth-only pass (Z prepass, occlusion queries)
+        b.writeMask = 0;
     auto& blend = r.blend[(uint64_t(regs[0x2201]) << 4) | b.writeMask];
     if (!blend)
     {
@@ -327,6 +340,20 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs)
         m_device->CreateRasterizerState(&rd, &raster);
     }
     m_context->RSSetState(raster.Get());
+
+    HostDepthStencil z = DecodeDepthStencil(regs);
+    auto& depth = r.depthStates[uint32_t(z.depthEnable) | (uint32_t(z.depthWrite) << 1) | (z.depthFunc << 2)];
+    if (!depth)
+    {
+        D3D11_DEPTH_STENCIL_DESC dd{};
+        dd.DepthEnable = z.depthEnable;
+        dd.DepthWriteMask = z.depthWrite ? D3D11_DEPTH_WRITE_MASK_ALL : D3D11_DEPTH_WRITE_MASK_ZERO;
+        dd.DepthFunc = D3D11_COMPARISON_FUNC(z.depthFunc);
+        // shortcut: stencil off; RB_DEPTHCONTROL stencil func/ops and RB_STENCILREFMASK are not decoded.
+        dd.StencilEnable = FALSE;
+        m_device->CreateDepthStencilState(&dd, &depth);
+    }
+    m_context->OMSetDepthStencilState(depth.Get(), 0);
 
     // Textures: every texture fetch constant the stages might sample (the shader's slots are not
     // known here), converted on the CPU once per frame.
@@ -524,6 +551,11 @@ void D3D11Renderer::ExecuteResolve(const Resolve& res)
         const float color[4] = { (c & 0xFF) / 255.0f, ((c >> 8) & 0xFF) / 255.0f, ((c >> 16) & 0xFF) / 255.0f, (c >> 24) / 255.0f };
         m_context->ClearRenderTargetView(r.targetRtv.Get(), color);
     }
+    if (ResolveClearsDepth(res))
+    {
+        r.depthClear = ResolveDepthClearValue(res);
+        m_context->ClearDepthStencilView(r.depthDsv.Get(), D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, r.depthClear, UINT8(res.depthClear & 0xFF));
+    }
     r.lastRegs = nullptr; // texture bindings may now point at a new resolve
 }
 
@@ -572,8 +604,9 @@ void D3D11Renderer::Present(const Frame& frame)
         DrawResources& r = *m_draw;
         // shortcut: cleared every frame; guest clears (resolve with clear) are not emulated yet.
         m_context->ClearRenderTargetView(r.targetRtv.Get(), frame.draws.empty() ? idle : black);
+        m_context->ClearDepthStencilView(r.depthDsv.Get(), D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, r.depthClear, 0);
         ID3D11RenderTargetView* rtv = r.targetRtv.Get();
-        m_context->OMSetRenderTargets(1, &rtv, nullptr);
+        m_context->OMSetRenderTargets(1, &rtv, r.depthDsv.Get());
         D3D11_VIEWPORT vp{ 0, 0, float(kTargetWidth), float(kTargetHeight), 0, 1 };
         m_context->RSSetViewports(1, &vp);
         m_context->RSSetState(r.rasterizer.Get());

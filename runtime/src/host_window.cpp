@@ -102,10 +102,10 @@ static void RenderThread(DisplaySettings s)
         if ((long long)frame.stats.frame == traceFrame)
         {
             for (auto& d : frame.draws)
-                RuntimeLog("[frame] draw prim %u src %u idx32 %d count %u base 0x%08X vs %016llx ps %016llx rt 0x%08X/0x%08X mode %u\n",
+                RuntimeLog("[frame] draw prim %u src %u idx32 %d count %u base 0x%08X vs %016llx ps %016llx rt 0x%08X/0x%08X mode %u zctl 0x%08X zinfo 0x%08X\n",
                     d.primType, uint32_t(d.source), d.index32, d.indexCount, d.indexBase,
                     (unsigned long long)(d.vs ? d.vs->hash : 0), (unsigned long long)(d.ps ? d.ps->hash : 0),
-                    (*d.regs)[kRegRbSurfaceInfo], (*d.regs)[kRegRbColorInfo], (*d.regs)[kRegRbModeControl] & 7);
+                    (*d.regs)[kRegRbSurfaceInfo], (*d.regs)[kRegRbColorInfo], (*d.regs)[kRegRbModeControl] & 7, (*d.regs)[0x2200], (*d.regs)[kRegRbDepthInfo]);
             for (auto& d : frame.draws)
             {
                 const RegisterFile& r = *d.regs;
@@ -133,8 +133,8 @@ static void RenderThread(DisplaySettings s)
                 }
             }
             for (auto& r : frame.resolves)
-                RuntimeLog("[frame] resolve @draw %u ctrl 0x%08X dest 0x%08X pitch 0x%08X info 0x%08X surf 0x%08X color 0x%08X depth 0x%08X clear 0x%08X\n",
-                    r.drawIndex, r.copyControl, r.destBase, r.destPitch, r.destInfo, r.surfaceInfo, r.colorInfo, r.depthInfo, r.colorClear);
+                RuntimeLog("[frame] resolve @draw %u ctrl 0x%08X dest 0x%08X pitch 0x%08X info 0x%08X surf 0x%08X color 0x%08X depth 0x%08X clear 0x%08X zclear 0x%08X\n",
+                    r.drawIndex, r.copyControl, r.destBase, r.destPitch, r.destInfo, r.surfaceInfo, r.colorInfo, r.depthInfo, r.colorClear, r.depthClear);
             RuntimeLog("[frame] frontbuffer 0x%08X\n", frame.frontbuffer);
         }
         // SCDA_DUMP_FRAME=<n>[,<n>...] (ascending): write the presented image of the first frame at or

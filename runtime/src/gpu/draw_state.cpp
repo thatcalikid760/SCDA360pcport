@@ -342,6 +342,20 @@ HostSampler DecodeSampler(const RegisterFile& r, uint32_t slot)
     return s;
 }
 
+HostDepthStencil DecodeDepthStencil(const RegisterFile& r)
+{
+    HostDepthStencil d;
+    const uint32_t c = r[0x2200];
+    d.stencilEnable = c & 1;
+    if (c & 2)
+    {
+        d.depthEnable = true;
+        d.depthWrite = (c >> 2) & 1;
+        d.depthFunc = ((c >> 4) & 7) + 1;
+    }
+    return d;
+}
+
 uint32_t HostCullMode(const RegisterFile& r)
 {
     switch (r[0x2205] & 3)

@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cmath>
 #include <gpu/draw.h>
 
 static DrawCall FromInitiator(uint32_t init)
@@ -44,5 +45,15 @@ bool IsResolve(const RegisterFile& regs) { return (regs[kRegRbModeControl] & 7) 
 Resolve DecodeResolve(const RegisterFile& r)
 {
     return { r[kRegRbCopyControl], r[kRegRbCopyDestBase], r[kRegRbCopyDestPitch], r[kRegRbCopyDestInfo],
-             r[kRegRbSurfaceInfo], r[kRegRbColorInfo], r[kRegRbDepthInfo], r[kRegRbColorClear] };
+             r[kRegRbSurfaceInfo], r[kRegRbColorInfo], r[kRegRbDepthInfo], r[kRegRbColorClear], r[kRegRbDepthClear] };
+}
+
+float ResolveDepthClearValue(const Resolve& r)
+{
+    const uint32_t v = r.depthClear >> 8;
+    if (!((r.depthInfo >> 16) & 1))
+        return float(v) / float(0xFFFFFF);
+    // 20e4: 4-bit exponent (bias 15), 20-bit mantissa; exponent 0 = denormal.
+    const uint32_t e = v >> 20, m = v & 0xFFFFF;
+    return e ? std::ldexp(1.0f + float(m) / float(1 << 20), int(e) - 15) : std::ldexp(float(m), -34);
 }
