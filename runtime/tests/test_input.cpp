@@ -1,7 +1,19 @@
 #include "check.h"
 #include "guest_memory.h"
+#include <cstring>
+#include <filesystem>
 #include <input.h>
 #include <runtime.h>
+
+extern std::string g_profileDir;
+
+static void FreshProfileDir()
+{
+    auto dir = std::filesystem::temp_directory_path() / "scda profile (test)";
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+    g_profileDir = dir.string();
+}
 
 // Guest X_INPUT_STATE: packet @0, buttons @4, triggers @6/@7, thumbs @8-@15, all big-endian.
 TEST(input_state_layout_is_big_endian)
@@ -72,6 +84,7 @@ TEST(local_profile_signed_in_slot_0)
 TEST(read_profile_settings_two_calls)
 {
     TestGuestBase();
+    FreshProfileDir();
     const uint32_t ids = 0x40700400, size = 0x40700420, buf = 0x40701000, stack = 0x40702000;
     GuestStore32(ids, 0x10040003);     // XPROFILE_OPTION_CONTROLLER_VIBRATION (int32)
     GuestStore32(ids + 4, 0x63E83FFF); // XPROFILE_TITLE_SPECIFIC1 (binary, nothing saved)
@@ -97,5 +110,52 @@ TEST(read_profile_settings_two_calls)
     CHECK_EQ(GuestLoad32(s1 + 0x10), 0x63E83FFFu);
     CHECK_EQ(g_base[s1 + 0x18], 6);            // binary
     CHECK_EQ(GuestLoad32(s1 + 0x20), 0u);      // size 0
-    CHECK_EQ(GuestLoad32(s1 + 0x24), buf + 8 + 80); // its room after the settings
+    // No data pointer: the title (sub_8279B678) then uses a zeroed 1000-byte blob. A pointer with
+    // size 0 left it a 0-byte blob and saving failed ("storage device is unavailable").
+    CHECK_EQ(GuestLoad32(s1 + 0x24), 0u);
+}
+
+// XamUserWriteProfileSettings(TitleId, User, Count, Settings, Overlapped) stores each setting; a later
+// read (also after a restart: the files stay) returns it with source 2 (title).
+TEST(written_profile_settings_persist)
+{
+    TestGuestBase();
+    FreshProfileDir();
+    const uint32_t settings = 0x40700800, blob = 0x40703000;
+    memset(GuestPtr(settings), 0, 80);
+    GuestStore32(settings + 0x10, 0x63E83FFF); // TITLE_SPECIFIC1, 1000-byte binary
+    g_base[settings + 0x18] = 0; // the title leaves the type byte 0; the id says binary
+    GuestStore32(settings + 0x20, 1000);
+    GuestStore32(settings + 0x24, blob);
+    for (uint32_t i = 0; i < 1000; i++)
+        g_base[blob + i] = uint8_t(i * 7);
+    GuestStore32(settings + 40 + 0x10, 0x10040003); // int32
+    g_base[settings + 40 + 0x18] = 1;
+    GuestStore32(settings + 40 + 0x20, 0x12345678);
+    PPCContext w{};
+    w.r5.u64 = 2; w.r6.u64 = settings;
+    __imp__XamUserWriteProfileSettings(w, g_base);
+    CHECK_EQ(w.r3.u32, 0u);
+    memset(GuestPtr(blob), 0, 1000);
+
+    const uint32_t ids = 0x40700400, size = 0x40700420, buf = 0x40704000, stack = 0x40702000;
+    GuestStore32(ids, 0x63E83FFF);
+    GuestStore32(ids + 4, 0x10040003);
+    GuestStore32(ids + 8, 0x63E83FFE); // never written
+    GuestStore32(stack + 0x54, 0);
+    GuestStore32(size, 0x2000);
+    PPCContext c{};
+    c.r7.u64 = 3; c.r8.u64 = ids; c.r9.u64 = size; c.r10.u64 = buf; c.r1.u64 = stack;
+    __imp__XamUserReadProfileSettings(c, g_base);
+    CHECK_EQ(c.r3.u32, 0u);
+    const uint32_t s0 = buf + 8, s1 = s0 + 40, s2 = s1 + 40;
+    CHECK_EQ(GuestLoad32(s0), 2u);
+    CHECK_EQ(GuestLoad32(s0 + 0x20), 1000u);
+    const uint32_t data = GuestLoad32(s0 + 0x24);
+    CHECK(data >= buf + 8 + 120 && data + 1000 <= buf + GuestLoad32(size));
+    CHECK_EQ(uint32_t(g_base[data + 999]), uint32_t(uint8_t(999 * 7)));
+    CHECK_EQ(GuestLoad32(s1), 2u);
+    CHECK_EQ(GuestLoad32(s1 + 0x20), 0x12345678u);
+    CHECK_EQ(GuestLoad32(s2), 0u);
+    CHECK_EQ(GuestLoad32(s2 + 0x24), 0u);
 }

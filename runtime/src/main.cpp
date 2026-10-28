@@ -32,6 +32,7 @@ uint8_t* g_base;
 void InitDataImports();
 extern std::string g_gameDir;
 extern std::string g_contentDir;
+extern std::string g_profileDir;
 
 static FILE* g_log;
 
@@ -323,6 +324,7 @@ int main(int argc, char** argv)
     // Saves: %LOCALAPPDATA%\SCDARecomp\content (falls back to <exe dir>\content).
     const char* localAppData = getenv("LOCALAPPDATA");
     g_contentDir = (localAppData ? std::string(localAppData) + "\\SCDARecomp" : std::string(exeDir)) + "\\content";
+    g_profileDir = (localAppData ? std::string(localAppData) + "\\SCDARecomp" : std::string(exeDir)) + "\\profile";
     g_log = fopen((std::string(exeDir) + "\\scda.log").c_str(), "w");
     AddVectoredExceptionHandler(1, CrashHandler);
 

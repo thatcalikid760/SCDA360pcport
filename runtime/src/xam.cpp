@@ -3,9 +3,11 @@
 // their items; any other enumeration returns none.
 #include <windows.h>
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <deque>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -141,10 +143,48 @@ SCDA_IMPORT(XMsgInProcessCall)
 // ---- Profile settings ----
 
 // Setting ids: bits 28-31 data type (4 wide string, 6 binary), bits 16-27 maximum size in bytes.
-static uint32_t SettingRoom(uint32_t id)
+static uint32_t SettingMax(uint32_t id)
 {
     uint32_t type = id >> 28;
-    return type == 4 || type == 6 ? (((id >> 16) & 0xFFF) + 3) & ~3u : 0;
+    return type == 4 || type == 6 ? (id >> 16) & 0xFFF : 0;
+}
+static uint32_t SettingRoom(uint32_t id) { return (SettingMax(id) + 3) & ~3u; }
+
+// Written settings persist as g_profileDir\<id 8-hex>.bin: the 16-byte guest X_USER_DATA (u8 type
+// @0, value @8), then a string's or blob's bytes. One local profile, so no per-user folders.
+std::string g_profileDir; // set by main: %LOCALAPPDATA%\SCDARecomp\profile
+static std::mutex g_profileMutex;
+
+static std::string SettingPath(uint32_t id)
+{
+    char name[16];
+    snprintf(name, sizeof(name), "\\%08X.bin", id);
+    return g_profileDir + name;
+}
+
+static bool LoadSetting(uint32_t id, std::vector<uint8_t>& data)
+{
+    std::lock_guard lock(g_profileMutex);
+    FILE* f = fopen(SettingPath(id).c_str(), "rb");
+    if (!f)
+        return false;
+    uint8_t chunk[4096];
+    data.clear();
+    for (size_t n; (n = fread(chunk, 1, sizeof(chunk), f)) > 0;)
+        data.insert(data.end(), chunk, chunk + n);
+    fclose(f);
+    return data.size() >= 16 && data[0] == uint8_t(id >> 28) && data.size() - 16 <= SettingMax(id);
+}
+
+static void StoreSetting(uint32_t id, const std::vector<uint8_t>& data)
+{
+    std::lock_guard lock(g_profileMutex);
+    CreateDirectoryA(g_profileDir.c_str(), nullptr);
+    if (FILE* f = fopen(SettingPath(id).c_str(), "wb"))
+    {
+        fwrite(data.data(), 1, data.size(), f);
+        fclose(f);
+    }
 }
 
 // XamUserReadProfileSettings(TitleId, UserIndex, XuidCount, Xuids, SettingCount, SettingIds,
@@ -152,7 +192,9 @@ static uint32_t SettingRoom(uint32_t id)
 // ERROR_INSUFFICIENT_BUFFER and the size; the second {u32 count, u32 settings} and one 40-byte
 // X_USER_PROFILE_SETTING per player and setting (+0 source, +8 user index / xuid, +0x10 id,
 // +0x18 X_USER_DATA: u8 type, +0x20 value or {size, pointer}), then the strings' and blobs' room.
-// shortcut: nothing is stored, so every setting has source 0 (the game uses its defaults).
+// A written setting has source 2 (title) and its stored value. An unwritten one has source 0 and a
+// zeroed value, like Xenia: a string or blob gets size 0 and no pointer, so the title fills its own
+// default (sub_8279B678: a zeroed 1000-byte TITLE_SPECIFIC blob, which saving needs).
 SCDA_IMPORT(XamUserReadProfileSettings)
 {
     constexpr uint32_t kErrorInsufficientBuffer = 122, kErrorInvalidParameter = 0x57;
@@ -177,6 +219,7 @@ SCDA_IMPORT(XamUserReadProfileSettings)
     GuestStore32(buffer, entries);
     GuestStore32(buffer + 4, buffer + 8);
     uint32_t room = buffer + 8 + entries * 40;
+    std::vector<uint8_t> stored;
     for (uint32_t p = 0; p < players; p++)
         for (uint32_t i = 0; i < count; i++)
         {
@@ -187,11 +230,21 @@ SCDA_IMPORT(XamUserReadProfileSettings)
                 GuestStore32(e + 8, user);
             GuestStore32(e + 0x10, id);
             g_base[e + 0x18] = uint8_t(id >> 28);
-            if (uint32_t n = SettingRoom(id))
-            {
-                GuestStore32(e + 0x24, room); // size 0: empty
-                room += n;
-            }
+            if (p == 0 || !xuidCount) // shortcut: only the local profile has stored settings
+                if (LoadSetting(id, stored))
+                {
+                    GuestStore32(e, 2); // XUSER_PROFILE_SETTING_SOURCE_TITLE
+                    if (SettingMax(id))
+                    {
+                        uint32_t size = uint32_t(stored.size() - 16);
+                        memcpy(g_base + room, stored.data() + 16, size);
+                        GuestStore32(e + 0x20, size);
+                        GuestStore32(e + 0x24, room);
+                    }
+                    else
+                        memcpy(g_base + e + 0x20, stored.data() + 8, 8);
+                }
+            room += SettingRoom(id);
         }
     if (ov)
     {
@@ -202,10 +255,26 @@ SCDA_IMPORT(XamUserReadProfileSettings)
     ctx.r3.u64 = kErrorSuccess;
 }
 
-// XamUserWriteProfileSettings(TitleId, UserIndex, SettingCount, Settings, Overlapped)
-// shortcut: accepted and dropped; options saved to the profile do not persist yet.
+// XamUserWriteProfileSettings(TitleId, UserIndex, SettingCount, Settings, Overlapped): Settings are
+// X_USER_PROFILE_SETTINGs as read returns them; each one is stored (see LoadSetting).
 SCDA_IMPORT(XamUserWriteProfileSettings)
 {
+    const uint32_t count = ctx.r5.u32, settings = ctx.r6.u32;
+    for (uint32_t i = 0; i < count && i < 64 && settings; i++)
+    {
+        const uint32_t e = settings + i * 40, id = GuestLoad32(e + 0x10);
+        // The title leaves the X_USER_DATA type byte 0 (TITLE_SPECIFIC writes): the id gives the type.
+        std::vector<uint8_t> data(g_base + e + 0x18, g_base + e + 0x28);
+        data[0] = uint8_t(id >> 28);
+        if (SettingMax(id))
+        {
+            uint32_t size = std::min(GuestLoad32(e + 0x20), SettingMax(id)), ptr = GuestLoad32(e + 0x24);
+            if (ptr)
+                data.insert(data.end(), g_base + ptr, g_base + ptr + size);
+        }
+        StoreSetting(id, data);
+        RuntimeLog("[xam] WriteProfileSettings id %08X (%zu bytes)\n", id, data.size() - 16);
+    }
     if (uint32_t ov = ctx.r7.u32)
     {
         CompleteOverlapped(ov, kErrorSuccess, 0);
