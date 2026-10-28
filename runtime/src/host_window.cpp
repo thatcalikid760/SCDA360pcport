@@ -113,8 +113,8 @@ static void RenderThread(DisplaySettings s)
             for (auto& d : frame.draws)
             {
                 const RegisterFile& r = *d.regs;
-                RuntimeLog("[frame]  vte 0x%08X vp %08X %08X %08X %08X %08X %08X winoff 0x%08X scis 0x%08X 0x%08X\n",
-                    r[0x2206], r[0x210F], r[0x2110], r[0x2111], r[0x2112], r[0x2113], r[0x2114], r[0x2080], r[0x2081], r[0x2082]);
+                RuntimeLog("[frame]  vte 0x%08X vp %08X %08X %08X %08X %08X %08X winoff 0x%08X scis 0x%08X 0x%08X blend 0x%08X mask 0x%08X\n",
+                    r[0x2206], r[0x210F], r[0x2110], r[0x2111], r[0x2112], r[0x2113], r[0x2114], r[0x2080], r[0x2081], r[0x2082], r[0x2201], r[0x2104]);
                 for (uint32_t i = 0; i < 18; i += 6) // fetch dwords 0-17: texture slots 0-2 / vertex slots 0-8
                     RuntimeLog("[frame]  fetch %2u: %08X %08X %08X %08X %08X %08X\n", i, r[0x4800 + i], r[0x4801 + i], r[0x4802 + i],
                         r[0x4803 + i], r[0x4804 + i], r[0x4805 + i]);
