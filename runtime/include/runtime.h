@@ -15,13 +15,15 @@ inline void GuestStore16(uint32_t addr, uint16_t v) { *(uint16_t*)(g_base + addr
 inline void GuestStore64(uint32_t addr, uint64_t v) { *(uint64_t*)(g_base + addr) = __builtin_bswap64(v); }
 inline void* GuestPtr(uint32_t addr) { return g_base + addr; }
 
-// Bump allocators. Virtual: 0x40000000-0x7EFFFFFF. Physical: 0xA0000000-0xBFFFFFFF.
+// Guest heaps (guest_heap.h). Virtual: 0x40000000-0x7EFFFFFF. Physical: 0xA0000000-0xBFFFFFFF.
 // Service: 0x7F000000-0x7FBFFFFF, for runtime threads that outlive a title (never reset on relaunch).
-// shortcut: no free; replace with a real heap once the title boots past init.
+// Free returns a released allocation's range (the caller drops it from GuestAllocations()).
 uint32_t GuestAllocVirtual(uint32_t size, uint32_t align = 0x1000);
 uint32_t GuestAllocPhysical(uint32_t size, uint32_t align = 0x1000);
 uint32_t GuestAllocService(uint32_t size, uint32_t align = 0x1000);
-// Bytes the title's virtual + physical allocators handed out since the last reset.
+void GuestFreeVirtual(uint32_t base, uint32_t size);
+void GuestFreePhysical(uint32_t base, uint32_t size);
+// Bytes of the title's live virtual + physical allocations (freed ones excluded).
 uint32_t GuestTitleAllocatedBytes();
 
 void RuntimeLog(const char* fmt, ...);

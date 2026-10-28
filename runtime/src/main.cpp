@@ -15,6 +15,7 @@
 #include <gpu/d3d11_renderer.h>
 #include <gpu/draw_state.h>
 #include <gpu/frame_queue.h>
+#include <guest_heap.h>
 #include <host_window.h>
 #include <image_loader.h>
 #include <module.h>
@@ -50,33 +51,36 @@ void RuntimeLog(const char* fmt, ...)
     }
 }
 
-static uint32_t BumpAlloc(uint32_t& cursor, uint32_t limit, uint32_t size, uint32_t align)
+static uint32_t TitleHeapAlloc(GuestHeap& heap, uint32_t size, uint32_t align)
 {
-    static std::mutex m;
-    std::lock_guard lock(m);
     if (align < 16)
         align = 16;
-    uint32_t addr = (cursor + align - 1) & ~(align - 1);
-    if (uint64_t(addr) + size > limit)
+    // Zero-size requests still take space: two allocations never share a base.
+    uint32_t addr = heap.Alloc(size ? size : 16, align);
+    if (!addr)
     {
         RuntimeLog("[mem] out of guest memory (size 0x%X)\n", size);
         return 0;
     }
-    cursor = addr + size;
     memset(g_base + addr, 0, size);
     GuestAllocations().Add(addr, size);
     return addr;
 }
 
-static uint32_t g_virtualCursor = 0x40000000;
-static uint32_t g_physicalCursor = 0xA0000000;
-static uint32_t g_serviceCursor = 0x7F000000;
-
-uint32_t GuestAllocVirtual(uint32_t size, uint32_t align) { return BumpAlloc(g_virtualCursor, 0x7F000000, size, align); }
-uint32_t GuestAllocPhysical(uint32_t size, uint32_t align) { return BumpAlloc(g_physicalCursor, 0xC0000000, size, align); }
+static GuestHeap g_virtualHeap(0x40000000, 0x7F000000);
+static GuestHeap g_physicalHeap(0xA0000000, 0xC0000000);
 // Stops below the GPU register block at 0x7FC80000 (kGpuRegBase).
-uint32_t GuestAllocService(uint32_t size, uint32_t align) { return BumpAlloc(g_serviceCursor, 0x7FC00000, size, align); }
-uint32_t GuestTitleAllocatedBytes() { return (g_virtualCursor - 0x40000000u) + (g_physicalCursor - 0xA0000000u); }
+static GuestHeap g_serviceHeap(0x7F000000, 0x7FC00000);
+
+uint32_t GuestAllocVirtual(uint32_t size, uint32_t align) { return TitleHeapAlloc(g_virtualHeap, size, align); }
+uint32_t GuestAllocPhysical(uint32_t size, uint32_t align) { return TitleHeapAlloc(g_physicalHeap, size, align); }
+uint32_t GuestAllocService(uint32_t size, uint32_t align) { return TitleHeapAlloc(g_serviceHeap, size, align); }
+void GuestFreeVirtual(uint32_t base, uint32_t size) { g_virtualHeap.Free(base, size ? size : 16); }
+void GuestFreePhysical(uint32_t base, uint32_t size) { g_physicalHeap.Free(base, size ? size : 16); }
+uint32_t GuestTitleAllocatedBytes()
+{
+    return uint32_t(GuestAllocations().BytesIn(0x40000000, 0x7F000000) + GuestAllocations().BytesIn(0xA0000000, 0xC0000000));
+}
 
 // Every function-table slot without a recompiled function lands here.
 static PPC_FUNC(UnmappedCall)
@@ -231,13 +235,13 @@ static bool ResetTitle(const char* imagePath)
     FsReset();
     TlsReset();
     XamReset();
-    // Title heaps: stack guard pages back to read/write (BumpAlloc zeroes what it hands out).
+    // Title heaps: stack guard pages back to read/write (TitleHeapAlloc zeroes what it hands out).
     DWORD old;
-    VirtualProtect(g_base + 0x40000000u, g_virtualCursor - 0x40000000u, PAGE_READWRITE, &old);
+    VirtualProtect(g_base + 0x40000000u, g_virtualHeap.Top() - 0x40000000u, PAGE_READWRITE, &old);
     GuestAllocations().RemoveRange(0x40000000u, 0x7F000000u);
     GuestAllocations().RemoveRange(0xA0000000u, 0xC0000000u);
-    g_virtualCursor = 0x40000000;
-    g_physicalCursor = 0xA0000000;
+    g_virtualHeap.Reset();
+    g_physicalHeap.Reset();
     g_xexHeader = 0;
     // Code is never written; this restores .data and zeroes .bss.
     std::string sha;

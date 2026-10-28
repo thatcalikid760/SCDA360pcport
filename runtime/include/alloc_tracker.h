@@ -39,6 +39,16 @@ public:
         return uint64_t(addr) < uint64_t(it->first) + it->second ? it->first : 0;
     }
 
+    // Total size of the allocations based in [lo, hi).
+    uint64_t BytesIn(uint32_t lo, uint32_t hi) const
+    {
+        std::lock_guard lock(m_mutex);
+        uint64_t total = 0;
+        for (auto it = m_sizes.lower_bound(lo); it != m_sizes.end() && it->first < hi; ++it)
+            total += it->second;
+        return total;
+    }
+
     // Forgets every allocation based in [lo, hi) (title relaunch).
     void RemoveRange(uint32_t lo, uint64_t hi)
     {

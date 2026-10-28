@@ -41,6 +41,15 @@ SCDA_IMPORT(NtAllocateVirtualMemory)
     ctx.r3.u64 = 0;
 }
 
+// Back to the heap the range came from (service allocations are never freed).
+static void FreeGuestRange(uint32_t base, uint32_t size)
+{
+    if (base >= 0x40000000 && base < 0x7F000000)
+        GuestFreeVirtual(base, size);
+    else if (base >= 0xA0000000 && base < 0xC0000000)
+        GuestFreePhysical(base, size);
+}
+
 // NtFreeVirtualMemory(u32* BaseAddress, u32* RegionSize, FreeType). Freed and decommitted pages
 // are zeroed now: the next commit must return zero-filled memory (the game's heap relies on it).
 SCDA_IMPORT(NtFreeVirtualMemory)
@@ -73,6 +82,8 @@ SCDA_IMPORT(NtFreeVirtualMemory)
         RuntimeLog("[mem] free 0x%08X-0x%08X type 0x%X\n", region, end, type);
     if (type & (kMemRelease | kMemDecommit))
         memset(GuestPtr(region), 0, end - region);
+    if (type & kMemRelease)
+        FreeGuestRange(allocBase, allocSize);
     GuestStore32(ctx.r3.u32, region);
     GuestStore32(ctx.r4.u32, end - region);
     ctx.r3.u64 = 0;
@@ -85,7 +96,16 @@ SCDA_IMPORT(MmAllocatePhysicalMemoryEx)
     ctx.r3.u64 = GuestAllocPhysical(size, align);
 }
 
-SCDA_IMPORT(MmFreePhysicalMemory) {}
+// MmFreePhysicalMemory(Type, BaseAddress): only an allocation's own base frees it.
+SCDA_IMPORT(MmFreePhysicalMemory)
+{
+    uint32_t addr = ctx.r4.u32;
+    if (GuestAllocations().BaseOf(addr) != addr)
+        return;
+    uint32_t size = GuestAllocations().SizeOf(addr);
+    GuestAllocations().Remove(addr);
+    FreeGuestRange(addr, size);
+}
 
 // MmQueryAllocationSize(BaseAddress): size of the allocation holding the address.
 SCDA_IMPORT(MmQueryAllocationSize) { ctx.r3.u64 = GuestAllocations().SizeOf(ctx.r3.u32); }
@@ -93,7 +113,7 @@ SCDA_IMPORT(MmGetPhysicalAddress) { ctx.r3.u64 = ctx.r3.u32 & 0x1FFFFFFF; }
 SCDA_IMPORT(MmQueryAddressProtect) { ctx.r3.u64 = PAGE_READWRITE; }
 
 // MmQueryStatistics(MM_STATISTICS*): 26 big-endian u32, Length (104) first. The title's
-// GlobalMemoryStatus (821E2DA8) reads total/available physical pages and title virtual bytes.
+// GlobalMemoryStatus (821E2DB0) reads total/available physical pages and title virtual bytes.
 SCDA_IMPORT(MmQueryStatistics)
 {
     uint32_t s = ctx.r3.u32;
@@ -116,6 +136,8 @@ SCDA_IMPORT(MmQueryStatistics)
     GuestStore32(s + 24, kTotalPages - kKernelPages - avail);
     GuestStore32(s + 36, kImagePages);
     GuestStore32(s + 100, kTotalPages - 1);           // highest physical page
+    if (getenv("SCDA_TRACE_MEM"))
+        RuntimeLog("[mem] statistics used %u avail %u pages\n", used, avail);
     ctx.r3.u64 = 0;
 }
 
