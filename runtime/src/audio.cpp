@@ -6,6 +6,7 @@
 #include <atomic>
 #include <runtime.h>
 #include <thread_context.h>
+#include <title.h>
 #include <watchdog.h>
 
 
@@ -15,11 +16,21 @@ constexpr uint32_t kAudioThreadId = 0x101;
 static std::atomic<uint32_t> g_callback, g_callbackArg;
 static std::atomic<bool> g_pumpStarted;
 
+// A title thread (title.h): it stops with the title; the next instance's client registration
+// starts it again on the same guest context (service region, allocated once).
 static DWORD WINAPI AudioPump(void*)
 {
-    auto* ctx = new PPCContext{};
-    InitThreadContext(*ctx, 0, kAudioThreadId, 0, true);
+    static PPCContext* ctx;
+    static PPCContext initial;
+    if (!ctx)
+    {
+        ctx = new PPCContext{};
+        InitThreadContext(*ctx, 0, kAudioThreadId, 0, true);
+        initial = *ctx;
+    }
+    *ctx = initial;
     WatchdogRegisterThread(kAudioThreadId, ctx);
+    TitleThreadRegister(kAudioThreadId);
     LARGE_INTEGER freq, next, now;
     QueryPerformanceFrequency(&freq);
     QueryPerformanceCounter(&next);
@@ -29,7 +40,7 @@ static DWORD WINAPI AudioPump(void*)
         QueryPerformanceCounter(&now);
         if (now.QuadPart < next.QuadPart)
         {
-            Sleep(1);
+            TitleSleep(1);
             continue;
         }
         next.QuadPart += period;
@@ -41,6 +52,13 @@ static DWORD WINAPI AudioPump(void*)
             (PPC_LOOKUP_FUNC(g_base, cb))(*ctx, g_base);
         }
     }
+}
+
+// Title relaunch (the pump has stopped with the title): the new instance registers its own client.
+void AudioReset()
+{
+    g_callback = 0;
+    g_pumpStarted = false;
 }
 
 // XAudioRegisterRenderDriverClient(Callback* {u32 function, u32 argument}, u32* Driver)

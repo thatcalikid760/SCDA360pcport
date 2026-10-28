@@ -13,6 +13,7 @@
 #include <unordered_map>
 #include <runtime.h>
 #include <thread_context.h>
+#include <title.h>
 #include <watchdog.h>
 
 constexpr uint32_t X_STATUS_SUCCESS = 0;
@@ -128,6 +129,7 @@ static DWORD WINAPI GuestThreadMain(void* p)
     auto* ctx = new PPCContext{};
     InitThreadContext(*ctx, s.cpu, s.id, s.stackSize);
     WatchdogRegisterThread(s.id, ctx);
+    TitleThreadRegister(s.id);
     // XAPI threads start in the startup thunk: startup(entry, context).
     uint32_t target = s.startup ? s.startup : s.entry;
     ctx->r3.u64 = s.startup ? s.entry : s.context;
@@ -137,6 +139,7 @@ static DWORD WINAPI GuestThreadMain(void* p)
     (PPC_LOOKUP_FUNC(g_base, target))(*ctx, g_base);
     RuntimeLog("[thread] %u exit\n", s.id);
     WatchdogUnregisterThread(s.id);
+    TitleThreadUnregister();
     return 0;
 }
 
@@ -148,18 +151,23 @@ SCDA_IMPORT(ExCreateThread)
     // CreationFlags bits 24-31: processor affinity mask; the PCR reports its lowest processor.
     // shortcut: host threads are not pinned, and KeSetAffinityThread does not move a thread.
     uint32_t affinity = flags >> 24;
-    auto* s = new ThreadStart{ ctx.r6.u32, ctx.r7.u32, ctx.r8.u32, nextId++, ctx.r4.u32,
+    const uint32_t id = nextId++;
+    auto* s = new ThreadStart{ ctx.r6.u32, ctx.r7.u32, ctx.r8.u32, id, ctx.r4.u32,
                                affinity ? uint32_t(std::countr_zero(affinity)) : 0 };
     DWORD hostId;
-    HANDLE t = CreateThread(nullptr, 16 * 1024 * 1024, GuestThreadMain, s, (flags & 1) ? CREATE_SUSPENDED : 0, &hostId);
+    // Always created suspended: registered for relaunch stops before it can run (s is the thread's).
+    HANDLE t = CreateThread(nullptr, 16 * 1024 * 1024, GuestThreadMain, s, CREATE_SUSPENDED, &hostId);
+    TitleThreadAdopt(t, id);
+    if (!(flags & 1))
+        ResumeThread(t);
     uint32_t h = AddHandle(t);
     TraceSync("create-thread", ctx, h);
     if (pHandle) GuestStore32(pHandle, h);
-    if (pId) GuestStore32(pId, s->id);
+    if (pId) GuestStore32(pId, id);
     ctx.r3.u64 = X_STATUS_SUCCESS;
 }
 
-SCDA_IMPORT(ExTerminateThread) { ExitThread(0); }
+SCDA_IMPORT(ExTerminateThread) { TitleThreadExit(); }
 
 // NtResumeThread(Handle, u32* SuspendCount)
 SCDA_IMPORT(NtResumeThread)
@@ -227,7 +235,7 @@ SCDA_IMPORT(KeDelayExecutionThread)
     if (ms == 0)
         SwitchToThread();
     else
-        Sleep(ms);
+        TitleSleep(ms);
     ctx.r3.u64 = X_STATUS_SUCCESS;
 }
 
@@ -323,7 +331,7 @@ SCDA_IMPORT(NtWaitForSingleObjectEx)
     TraceSync("wait", ctx, ctx.r3.u32);
     WatchdogBlockScope watch("NtWaitForSingleObjectEx");
     HANDLE h = HostHandle(ctx.r3.u32);
-    ctx.r3.u64 = h ? WaitResult(WaitForSingleObjectEx(h, TimeoutMs(ctx.r6.u32), ctx.r5.u32 != 0)) : X_STATUS_INVALID_HANDLE;
+    ctx.r3.u64 = h ? WaitResult(TitleWait(1, &h, false, TimeoutMs(ctx.r6.u32), ctx.r5.u32 != 0)) : X_STATUS_INVALID_HANDLE;
 }
 
 // NtWaitForMultipleObjectsEx(Count, Handles*, WaitType (0 all, 1 any), WaitMode, Alertable, Timeout*)
@@ -334,7 +342,7 @@ SCDA_IMPORT(NtWaitForMultipleObjectsEx)
     HANDLE hs[64];
     for (uint32_t i = 0; i < count && i < 64; i++)
         hs[i] = HostHandle(GuestLoad32(ctx.r4.u32 + i * 4));
-    ctx.r3.u64 = WaitResult(WaitForMultipleObjectsEx(count, hs, ctx.r5.u32 == 0, TimeoutMs(ctx.r8.u32), ctx.r7.u32 != 0));
+    ctx.r3.u64 = WaitResult(TitleWait(count, hs, ctx.r5.u32 == 0, TimeoutMs(ctx.r8.u32), ctx.r7.u32 != 0));
 }
 
 // ---- Ke dispatcher objects (guest structs) ----
@@ -381,7 +389,8 @@ SCDA_IMPORT(KeWaitForSingleObject)
 {
     TraceSync("kewait", ctx, ctx.r3.u32);
     WatchdogBlockScope watch("KeWaitForSingleObject");
-    ctx.r3.u64 = WaitResult(WaitForSingleObjectEx(DispatcherObject(ctx.r3.u32), TimeoutMs(ctx.r7.u32), ctx.r6.u32 != 0));
+    HANDLE h = DispatcherObject(ctx.r3.u32);
+    ctx.r3.u64 = WaitResult(TitleWait(1, &h, false, TimeoutMs(ctx.r7.u32), ctx.r6.u32 != 0));
 }
 
 // KeWaitForMultipleObjects(Count, Objects*, WaitType, WaitReason, WaitMode, Alertable, Timeout*, WaitBlocks*)
@@ -397,7 +406,7 @@ SCDA_IMPORT(KeWaitForMultipleObjects)
         TraceSync("  type", ctx, g_base[object]);
         hs[i] = DispatcherObject(object);
     }
-    ctx.r3.u64 = WaitResult(WaitForMultipleObjectsEx(count, hs, ctx.r5.u32 == 0, TimeoutMs(ctx.r9.u32), ctx.r8.u32 != 0));
+    ctx.r3.u64 = WaitResult(TitleWait(count, hs, ctx.r5.u32 == 0, TimeoutMs(ctx.r9.u32), ctx.r8.u32 != 0));
 }
 
 // ---- String conversion ----

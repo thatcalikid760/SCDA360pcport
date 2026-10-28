@@ -7,6 +7,7 @@
 #include <interrupts.h>
 #include <runtime.h>
 #include <thread_context.h>
+#include <title.h>
 #include <watchdog.h>
 
 
@@ -57,11 +58,21 @@ static bool Vsync(PPCContext& ctx)
 
 bool VsyncForTest(PPCContext& ctx) { return Vsync(ctx); }
 
+// A title thread (title.h): it stops with the title and InterruptsStart runs it again for the next
+// instance, on the same guest context (service region, allocated once).
 static DWORD WINAPI InterruptThread(void*)
 {
-    auto* ctx = new PPCContext{};
-    InitThreadContext(*ctx, 0, kInterruptThreadId, 0, true);
+    static PPCContext* ctx;
+    static PPCContext initial;
+    if (!ctx)
+    {
+        ctx = new PPCContext{};
+        InitThreadContext(*ctx, 0, kInterruptThreadId, 0, true);
+        initial = *ctx;
+    }
+    *ctx = initial;
     WatchdogRegisterThread(kInterruptThreadId, ctx);
+    TitleThreadRegister(kInterruptThreadId);
     LARGE_INTEGER freq, next, now;
     QueryPerformanceFrequency(&freq);
     QueryPerformanceCounter(&next);
@@ -70,7 +81,7 @@ static DWORD WINAPI InterruptThread(void*)
     {
         if (g_paused)
         {
-            Sleep(1);
+            TitleSleep(1);
             continue;
         }
         std::vector<std::pair<uint32_t, uint32_t>> pending;
@@ -89,17 +100,22 @@ static DWORD WINAPI InterruptThread(void*)
                 next.QuadPart = now.QuadPart + period; // fell far behind: do not burst
             Vsync(*ctx);
         }
-        Sleep(1);
+        TitleSleep(1);
     }
 }
 
 void InterruptsStart()
 {
-    static bool started = false;
-    if (started)
-        return;
-    started = true;
+    static HANDLE thread;
+    if (thread && WaitForSingleObject(thread, 0) == WAIT_TIMEOUT)
+        return; // still running
+    if (thread)
+        CloseHandle(thread);
+    {
+        std::lock_guard lock(g_queueMutex);
+        g_queue.clear(); // interrupts of a stopped title instance
+    }
     CommandProcessorSetInterruptSink([](uint32_t source, uint32_t cpu) { InterruptsQueue(source, cpu); });
     // Guest ISR/DPC chains run deep: same 16 MiB host stack as guest threads.
-    CloseHandle(CreateThread(nullptr, 16 * 1024 * 1024, InterruptThread, nullptr, 0, nullptr));
+    thread = CreateThread(nullptr, 16 * 1024 * 1024, InterruptThread, nullptr, 0, nullptr);
 }

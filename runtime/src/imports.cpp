@@ -11,6 +11,7 @@
 #include <guest_time.h>
 #include <module.h>
 #include <alloc_tracker.h>
+#include <title.h>
 #include <watchdog.h>
 
 // ---- Data imports (tools/list_imports.py -> import_vars.inc) ----
@@ -86,7 +87,9 @@ SCDA_IMPORT(RtlEnterCriticalSection)
             GuestStore32(cs + 0x14, GuestLoad32(cs + 0x14) + 1);
             return;
         }
-        owner.wait(prev);
+        // Timed so a title thread being stopped for a relaunch can leave (the owner may be gone).
+        WaitOnAddress(GuestPtr(cs + 0x18), &prev, 4, 50);
+        TitleCheckExit();
     }
 }
 
@@ -133,7 +136,10 @@ SCDA_IMPORT(KfAcquireSpinLock)
     auto lock = std::atomic_ref<uint32_t>(*(uint32_t*)GuestPtr(ctx.r3.u32));
     uint32_t expected = 0;
     while (!lock.compare_exchange_weak(expected, ctx.r13.u32))
+    {
         expected = 0;
+        TitleCheckExit(); // the owner may have left at a relaunch stop
+    }
     ctx.r3.u64 = 0; // old IRQL
 }
 

@@ -25,8 +25,21 @@ uint32_t GuestAllocService(uint32_t size, uint32_t align = 0x1000);
 void RuntimeLog(const char* fmt, ...);
 
 // Defines the host side of an imported guest function (name matches ppc_recomp_shared.h).
-// C++ linkage: generated code declares imports with PPC_EXTERN_FUNC.
-#define SCDA_IMPORT(name) PPC_FUNC(__imp__##name)
+// C++ linkage: generated code declares imports with PPC_EXTERN_FUNC. The body runs inside a
+// TitleImportScope (title.h): a title thread being stopped for a relaunch exits at entry.
+struct TitleImportScope
+{
+    TitleImportScope();
+    ~TitleImportScope();
+};
+#define SCDA_IMPORT(name)                                                       \
+    static void scda_import_##name(PPCContext& __restrict ctx, uint8_t* base); \
+    PPC_FUNC(__imp__##name)                                                     \
+    {                                                                           \
+        TitleImportScope scope;                                                 \
+        scda_import_##name(ctx, base);                                          \
+    }                                                                           \
+    static void scda_import_##name([[maybe_unused]] PPCContext& __restrict ctx, [[maybe_unused]] uint8_t* base)
 
 // Logs the call (name + r3-r6) and returns 0. Used by generated stubs and as a fallback.
 void ImportStub(const char* name, PPCContext& ctx);

@@ -12,6 +12,7 @@
 #include <alloc_tracker.h>
 #include <command_processor.h>
 #include <gpu/draw_state.h>
+#include <gpu/frame_queue.h>
 #include <host_window.h>
 #include <image_loader.h>
 #include <module.h>
@@ -20,6 +21,7 @@
 #include <launch.h>
 #include <runtime.h>
 #include <thread_context.h>
+#include <title.h>
 #include <watchdog.h>
 
 uint8_t* g_base;
@@ -238,10 +240,30 @@ static DWORD WINAPI TitleThread(void*)
     }
     InitThreadContext(*ctx, 0, 1, mainStack);
     WatchdogRegisterThread(1, ctx);
+    TitleThreadRegister(1);
     RuntimeLog("[thread] 1 (main) host %lu\n", GetCurrentThreadId());
     RuntimeLog("[boot] calling _xstart (r1=0x%08X r13=0x%08X)\n", ctx->r1.u32, ctx->r13.u32);
     _xstart(*ctx, g_base);
     RuntimeLog("[boot] _xstart returned r3=0x%08X\n", ctx->r3.u32);
+    WatchdogUnregisterThread(1);
+    TitleThreadUnregister();
+    return 0;
+}
+
+// SCDA_FORCE_RELAUNCH=<frame>[,<frame>...] (ascending): request a relaunch at each frame, as
+// XamLoaderLaunchTitle would (tests the stop/reset path without driving the menus).
+static DWORD WINAPI ForceRelaunchThread(void* list)
+{
+    for (const char* p = (const char*)list; *p; p += strcspn(p, ",") + (p[strcspn(p, ",")] ? 1 : 0))
+    {
+        uint64_t frame = strtoull(p, nullptr, 10);
+        while (Frames().FramesEnded() < frame)
+            Sleep(10);
+        RuntimeLog("[title] SCDA_FORCE_RELAUNCH at frame %llu\n", (unsigned long long)frame);
+        TitleForceRelaunch();
+        while (TitleStopping())
+            Sleep(10);
+    }
     return 0;
 }
 
@@ -279,7 +301,6 @@ int main(int argc, char** argv)
     CommandProcessorStart();
     if (!getenv("SCDA_HEADLESS"))
         HostWindowStart(LoadDisplaySettings(SettingsPath()));
-    InterruptsStart();
     ProfilerStart();
     if (const char* w = getenv("SCDA_WATCHDOG"))
         WatchdogStart((unsigned)atoi(w));
@@ -294,9 +315,24 @@ int main(int argc, char** argv)
             RuntimeLog("[boot] launch data: %zu bytes from %s\n", data.size(), path);
         }
 
+    if (const char* force = getenv("SCDA_FORCE_RELAUNCH"))
+        CloseHandle(CreateThread(nullptr, 0, ForceRelaunchThread, (void*)force, 0, nullptr));
+
     // The title runs on its own host thread (64 MB like /STACK: the main guest thread recurses
-    // deeply on the host stack); this one waits for it.
-    HANDLE title = CreateThread(nullptr, 64 * 1024 * 1024, TitleThread, nullptr, STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr);
-    WaitForSingleObject(title, INFINITE);
-    return 0;
+    // deeply on the host stack); this one waits for it to return or to request a relaunch.
+    for (uint32_t instance = 1;; instance++)
+    {
+        InterruptsStart();
+        HANDLE title = CreateThread(nullptr, 64 * 1024 * 1024, TitleThread, nullptr, STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr);
+        HANDLE waits[2] = { TitleRelaunchEvent(), title }; // a relaunch wins over the exit it causes
+        DWORD r = WaitForMultipleObjects(2, waits, FALSE, INFINITE);
+        CloseHandle(title);
+        if (r != WAIT_OBJECT_0)
+            return 0;
+        RuntimeLog("[title] relaunch: stopping instance %u\n", instance);
+        TitleStopAll();
+        // shortcut (slice 2): no reset yet; the process ends after the stop.
+        RuntimeLog("[title] stop complete; reset not implemented, exiting\n");
+        return 0;
+    }
 }
