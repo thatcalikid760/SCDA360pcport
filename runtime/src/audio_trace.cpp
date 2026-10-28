@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <map>
 #include <mutex>
+#include <vector>
 #include <runtime.h>
 
 extern "C" PPC_FUNC(__imp__sub_82581A78);
@@ -300,6 +301,95 @@ PPC_FUNC(sub_82A66D68)
     __imp__sub_82A66D68(ctx, base);
 }
 
+// Debug: UObject name of a guest object. Finds the FName table once by scanning committed guest heap
+// for the "None" entry (name index 0) and a pointer array whose first element points at it;
+// UObject+0x20 is assumed to be the FName index (UE2 layout), +0x24 the class.
+namespace
+{
+uint32_t g_names; // guest address of FName::Names data, 0 = not found
+
+template <class F> void ForCommitted(uint8_t* base, uint32_t lo, uint32_t hi, F&& fn)
+{
+    for (uint32_t a = lo; a < hi;)
+    {
+        MEMORY_BASIC_INFORMATION mbi{};
+        if (!VirtualQuery(base + a, &mbi, sizeof(mbi)))
+            break;
+        const uint32_t end = std::min<uint64_t>(hi, uint64_t((uint8_t*)mbi.BaseAddress - base) + mbi.RegionSize);
+        if (mbi.State == MEM_COMMIT && !(mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
+            fn(a, end);
+        a = end;
+    }
+}
+
+void FindNames(uint8_t* base)
+{
+    std::vector<uint32_t> entries;
+    ForCommitted(base, 0x40000000, 0x60000000, [&](uint32_t a, uint32_t end) {
+        for (uint32_t p = a; p + 8 <= end; p += 4)
+            if (!memcmp(base + p, "None\0", 5))
+                for (uint32_t k : {8u, 12u, 16u})
+                    entries.push_back(p - k);
+    });
+    fprintf(stderr, "[dare] names: %zu \"None\" candidates\n", entries.size());
+    if (entries.empty())
+        return;
+    ForCommitted(base, 0x40000000, 0x60000000, [&](uint32_t a, uint32_t end) {
+        for (uint32_t p = a; !g_names && p + 8 <= end; p += 4)
+        {
+            const uint32_t v = PPC_LOAD_U32(p);
+            for (uint32_t i = 0; i < entries.size(); i++)
+                if (v == entries[i])
+                {
+                    // FNameEntry starts with its own index: entries 1 and 2 must say 1 and 2.
+                    const uint32_t e1 = PPC_LOAD_U32(p + 4), e2 = PPC_LOAD_U32(p + 8);
+                    if (PPC_LOAD_U32(v) == 0 && e1 >= 0x40000000 && e1 < 0x60000000 && e2 >= 0x40000000 &&
+                        e2 < 0x60000000 && PPC_LOAD_U32(e1) == 1 && PPC_LOAD_U32(e2) == 2)
+                    {
+                        g_names = p;
+                        fprintf(stderr, "[dare] names: table %08X entry0 %08X entry1 %08X\n", p, v, e1);
+                        break;
+                    }
+                }
+        }
+    });
+}
+
+const char* NameOf(uint8_t* base, uint32_t obj, char* buf, size_t size)
+{
+    static bool s_tried;
+    if (!s_tried)
+    {
+        s_tried = true;
+        FindNames(base);
+    }
+    if (!g_names || !obj)
+        return "?";
+    const uint32_t entry0 = PPC_LOAD_U32(g_names);
+    uint32_t off = 0;
+    for (uint32_t k : {8u, 12u, 16u})
+        if (!memcmp(base + entry0 + k, "None", 4))
+            off = k;
+    const uint32_t index = PPC_LOAD_U32(obj + 0x20), entry = PPC_LOAD_U32(g_names + 4 * index);
+    if (index > 0x100000 || entry < 0x40000000 || entry >= 0x60000000)
+        return "?";
+    snprintf(buf, size, "%.60s", (const char*)(base + entry + off));
+    return buf;
+}
+
+void LogObject(uint8_t* base, const char* tag, uint32_t obj)
+{
+    char a[64], b[64];
+    const uint32_t cls = obj ? PPC_LOAD_U32(obj + 0x24) : 0;
+    fprintf(stderr, "[dare] %s words", tag);
+    for (uint32_t i = 0; obj && i < 16; i++)
+        fprintf(stderr, " %08X", PPC_LOAD_U32(obj + 4 * i));
+    fprintf(stderr, "\n");
+    fprintf(stderr, "[dare] %s %08X name '%s' class %08X '%s'\n", tag, obj, NameOf(base, obj, a, sizeof(a)), cls,
+            cls >= 0x40000000 && cls < 0x60000000 ? NameOf(base, cls, b, sizeof(b)) : "?");
+}
+} // namespace
+
 // sub_82A67A00(obj, dt): advances the mix ramps {start, end, duration, elapsed} at mix+1688/+1704/
 // +1736 (mix = obj+560) by dt and rebuilds the category layers.
 extern "C" PPC_FUNC(__imp__sub_82A67A00);
@@ -330,6 +420,19 @@ PPC_FUNC(sub_82A67A00)
             }
             fprintf(stderr, " ] 1540 %08X 1544 %08X 1548 %08X", PPC_LOAD_U32(mix + 1540), PPC_LOAD_U32(mix + 1544),
                     PPC_LOAD_U32(mix + 1548));
+        }
+        static bool s_named;
+        if (mix && !s_named)
+        {
+            s_named = true;
+            LogObject(base, "mix-obj", ctx.r3.u32);
+            LogObject(base, "mix", mix);
+            for (uint32_t r : {1540u, 1544u, 1548u, 1552u})
+            {
+                char tag[16];
+                snprintf(tag, sizeof(tag), "mix+%u", r);
+                LogObject(base, tag, PPC_LOAD_U32(mix + r));
+            }
         }
         if (mix)
             fprintf(stderr, " | 1468 %g 1516 %g 1528 %g flags %08X\n", f(mix + 1468), f(mix + 1516), f(mix + 1528),
@@ -803,3 +906,58 @@ PPC_FUNC(sub_82A68F48)
             o, f(o + 564), l, f(l + 932), f(l + 936), f(l + 940), z, f(z + 932), f(z + 936), f(z + 940), f(z + 340),
             f(z + 356), PPC_LOAD_U32(z + 228), PPC_LOAD_U32(z + 1444), PPC_LOAD_U32(z + 1304), f(out));
 }
+
+// sub_82A66FC0(obj): music zone selection. Zones = mix+1604 list (mix = obj+560), candidates =
+// obj+888 (12-byte {zone index, ?, score}, count obj+892), listener = (obj+216)+4320. A zone is
+// skipped unless +228 has 0x200 and +1304 bit 31 is clear; best score below obj+564 -> mix+1420.
+extern "C" PPC_FUNC(__imp__sub_82A66FC0);
+PPC_FUNC(sub_82A66FC0)
+{
+    static DWORD s_last;
+    const uint32_t o = ctx.r3.u32, mix = PPC_LOAD_U32(o + 560);
+    if (Enabled() && mix && PPC_LOAD_U32(o + 888) && GetTickCount() - s_last > 5000)
+    {
+        s_last = GetTickCount();
+        auto f = [&](uint32_t a) {
+            union { uint32_t u; float f; } v{PPC_LOAD_U32(a)};
+            return v.f;
+        };
+        const uint32_t l = PPC_LOAD_U32(PPC_LOAD_U32(o + 216) + 4320);
+        fprintf(stderr, "[dare] zones obj %08X thr %g listener %08X (%g %g %g) candidates %d\n", o, f(o + 564), l,
+                f(l + 932), f(l + 936), f(l + 940), int32_t(PPC_LOAD_U32(o + 892)));
+        // One-shot: actors referenced by the listener and their +932 positions (looking for the pawn).
+        static bool s_dumped;
+        if (!s_dumped && l)
+        {
+            s_dumped = true;
+            for (uint32_t off = 0; off < 0x1400; off += 4)
+            {
+                const uint32_t p = PPC_LOAD_U32(l + off);
+                if (p < 0x40000000 || p >= 0x60000000 || (p & 3))
+                    continue;
+                const float x = f(p + 932), y = f(p + 936), zz = f(p + 940);
+                if (x == x && x > -300000 && x < 300000 && (x != 0 || y != 0) && y > -300000 && y < 300000)
+                    fprintf(stderr, "[dare]  listener+%X -> %08X vt %08X (%g %g %g)\n", off, p, PPC_LOAD_U32(p), x, y, zz);
+            }
+        }
+        const uint32_t zones = PPC_LOAD_U32(mix + 1604), count = PPC_LOAD_U32(mix + 1608);
+        for (uint32_t i = 0; zones && i < count && i < 64; i++)
+        {
+            const uint32_t z = PPC_LOAD_U32(zones + 4 * i);
+            if (!z)
+                continue;
+            fprintf(stderr,
+                    "[dare]  zone %2u %08X (%g %g %g) r %g/%g 228 %08X 212 %08X 1304 %08X 1444 %08X 1196 %g 1200 %d "
+                    "60 %u\n",
+                    i, z, f(z + 932), f(z + 936), f(z + 940), f(z + 340), f(z + 356), PPC_LOAD_U32(z + 228),
+                    PPC_LOAD_U32(z + 212), PPC_LOAD_U32(z + 1304), PPC_LOAD_U32(z + 1444), f(z + 1196),
+                    int32_t(PPC_LOAD_U32(z + 1200)), PPC_LOAD_U8(z + 60));
+        }
+        const uint32_t c = PPC_LOAD_U32(o + 888);
+        for (int32_t i = 0; i < int32_t(PPC_LOAD_U32(o + 892)) && i < 64; i++)
+            fprintf(stderr, "[dare]  cand %d zone %d %08X score %g thr %g\n", i, int32_t(PPC_LOAD_U32(c + 12 * i)),
+                    PPC_LOAD_U32(c + 12 * i + 4), f(c + 12 * i + 8), f(c + 12 * i + 16));
+    }
+    __imp__sub_82A66FC0(ctx, base);
+}
+
