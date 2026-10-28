@@ -60,7 +60,7 @@ bool VsyncForTest(PPCContext& ctx) { return Vsync(ctx); }
 static DWORD WINAPI InterruptThread(void*)
 {
     auto* ctx = new PPCContext{};
-    InitThreadContext(*ctx, 0, kInterruptThreadId);
+    InitThreadContext(*ctx, 0, kInterruptThreadId, 0, true);
     WatchdogRegisterThread(kInterruptThreadId, ctx);
     LARGE_INTEGER freq, next, now;
     QueryPerformanceFrequency(&freq);

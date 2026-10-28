@@ -18,7 +18,7 @@ static std::atomic<bool> g_pumpStarted;
 static DWORD WINAPI AudioPump(void*)
 {
     auto* ctx = new PPCContext{};
-    InitThreadContext(*ctx, 0, kAudioThreadId);
+    InitThreadContext(*ctx, 0, kAudioThreadId, 0, true);
     WatchdogRegisterThread(kAudioThreadId, ctx);
     LARGE_INTEGER freq, next, now;
     QueryPerformanceFrequency(&freq);

@@ -7,12 +7,13 @@ constexpr uint32_t PCR_SIZE = 0xAB0;
 constexpr uint32_t TLS_SIZE = 0x100;
 constexpr uint32_t TEB_SIZE = 0x2E0;
 
-void InitThreadContext(PPCContext& ctx, uint32_t cpu, uint32_t threadId, uint32_t stackSize)
+void InitThreadContext(PPCContext& ctx, uint32_t cpu, uint32_t threadId, uint32_t stackSize, bool service)
 {
     if (!stackSize)
         stackSize = kDefaultStackSize;
     stackSize = (stackSize + 0xFFFF) & ~0xFFFFu;
-    uint32_t block = GuestAllocVirtual(kGuardSize + stackSize + PCR_SIZE + TLS_SIZE + TEB_SIZE, 0x10000);
+    const uint32_t size = kGuardSize + stackSize + PCR_SIZE + TLS_SIZE + TEB_SIZE;
+    uint32_t block = service ? GuestAllocService(size, 0x10000) : GuestAllocVirtual(size, 0x10000);
     // A stack overflow faults here instead of silently overwriting the PCR (or another allocation).
     DWORD old;
     VirtualProtect(g_base + block, kGuardSize, PAGE_NOACCESS, &old);

@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <intrin.h>
 #include <timeapi.h>
+#include <atomic>
 #include <thread>
 #include <guest_time.h>
 #include <runtime.h>
@@ -44,15 +45,19 @@ uint64_t TimebaseFrequency()
 
 void GuestTimeStart(uint32_t bundle)
 {
+    // Called again by each title instance (relaunch): re-points the one updater thread.
+    static std::atomic<uint32_t> current;
     StartQpc();
     UpdateTimeStampBundle(bundle);
-    std::thread([bundle]
+    if (current.exchange(bundle))
+        return;
+    std::thread([]
     {
         timeBeginPeriod(1);
         for (;;)
         {
             Sleep(1);
-            UpdateTimeStampBundle(bundle);
+            UpdateTimeStampBundle(current.load());
         }
     }).detach();
 }

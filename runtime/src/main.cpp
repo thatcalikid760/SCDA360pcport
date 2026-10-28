@@ -66,10 +66,12 @@ static uint32_t BumpAlloc(uint32_t& cursor, uint32_t limit, uint32_t size, uint3
 
 static uint32_t g_virtualCursor = 0x40000000;
 static uint32_t g_physicalCursor = 0xA0000000;
+static uint32_t g_serviceCursor = 0x7F000000;
 
-// Stops below the GPU register block at 0x7FC80000 (kGpuRegBase).
-uint32_t GuestAllocVirtual(uint32_t size, uint32_t align) { return BumpAlloc(g_virtualCursor, 0x7FC00000, size, align); }
+uint32_t GuestAllocVirtual(uint32_t size, uint32_t align) { return BumpAlloc(g_virtualCursor, 0x7F000000, size, align); }
 uint32_t GuestAllocPhysical(uint32_t size, uint32_t align) { return BumpAlloc(g_physicalCursor, 0xC0000000, size, align); }
+// Stops below the GPU register block at 0x7FC80000 (kGpuRegBase).
+uint32_t GuestAllocService(uint32_t size, uint32_t align) { return BumpAlloc(g_serviceCursor, 0x7FC00000, size, align); }
 
 // Every function-table slot without a recompiled function lands here.
 static PPC_FUNC(UnmappedCall)
@@ -204,6 +206,45 @@ static LONG WINAPI CrashHandler(EXCEPTION_POINTERS* e)
 
 void ProfilerStart();
 
+// One title instance: XEX header, data imports, main thread context, _xstart. Every guest
+// allocation of the instance starts here, so each boot lays out guest memory the same way.
+static DWORD WINAPI TitleThread(void*)
+{
+    // XEX header (installer/xex_dump --out-header) for the module entry and RtlImageXexHeaderField.
+    std::ifstream hdr(g_gameDir + "/SC4_Offline.xexhdr", std::ios::binary | std::ios::ate);
+    if (hdr)
+    {
+        uint32_t size = uint32_t(hdr.tellg());
+        g_xexHeader = GuestAllocVirtual(size, 0x1000);
+        hdr.seekg(0);
+        hdr.read((char*)GuestPtr(g_xexHeader), size);
+        RuntimeLog("[loader] XEX header 0x%X bytes at 0x%08X\n", size, g_xexHeader);
+    }
+    else
+        RuntimeLog("[loader] WARNING: SC4_Offline.xexhdr missing next to the image\n");
+    InitDataImports();
+
+    auto* ctx = new PPCContext{};
+    // Main thread stack: XEX_HEADER_DEFAULT_STACK_SIZE (0x20200), 2 MB for this title.
+    uint32_t mainStack = 0x200000;
+    if (g_xexHeader)
+    {
+        PPCContext q{};
+        q.r3.u64 = g_xexHeader;
+        q.r4.u64 = 0x00020200;
+        __imp__RtlImageXexHeaderField(q, g_base);
+        if (q.r3.u32)
+            mainStack = q.r3.u32;
+    }
+    InitThreadContext(*ctx, 0, 1, mainStack);
+    WatchdogRegisterThread(1, ctx);
+    RuntimeLog("[thread] 1 (main) host %lu\n", GetCurrentThreadId());
+    RuntimeLog("[boot] calling _xstart (r1=0x%08X r13=0x%08X)\n", ctx->r1.u32, ctx->r13.u32);
+    _xstart(*ctx, g_base);
+    RuntimeLog("[boot] _xstart returned r3=0x%08X\n", ctx->r3.u32);
+    return 0;
+}
+
 int main(int argc, char** argv)
 {
     // Installer layout: <dir>\scda.exe + <dir>\game\ (extracted disc).
@@ -235,41 +276,10 @@ int main(int argc, char** argv)
     }
     RuntimeLog("[loader] %s: sha256 %s\n", imagePath, sha.c_str());
 
-    // XEX header (installer/xex_dump --out-header) for the module entry and RtlImageXexHeaderField.
-    {
-        std::ifstream hdr(g_gameDir + "/SC4_Offline.xexhdr", std::ios::binary | std::ios::ate);
-        if (hdr)
-        {
-            uint32_t size = uint32_t(hdr.tellg());
-            g_xexHeader = GuestAllocVirtual(size, 0x1000);
-            hdr.seekg(0);
-            hdr.read((char*)GuestPtr(g_xexHeader), size);
-            RuntimeLog("[loader] XEX header 0x%X bytes at 0x%08X\n", size, g_xexHeader);
-        }
-        else
-            RuntimeLog("[loader] WARNING: SC4_Offline.xexhdr missing next to the image\n");
-    }
-    InitDataImports();
     CommandProcessorStart();
     if (!getenv("SCDA_HEADLESS"))
         HostWindowStart(LoadDisplaySettings(SettingsPath()));
     InterruptsStart();
-
-    static PPCContext ctx{};
-    // Main thread stack: XEX_HEADER_DEFAULT_STACK_SIZE (0x20200), 2 MB for this title.
-    uint32_t mainStack = 0x200000;
-    if (g_xexHeader)
-    {
-        PPCContext q{};
-        q.r3.u64 = g_xexHeader;
-        q.r4.u64 = 0x00020200;
-        __imp__RtlImageXexHeaderField(q, g_base);
-        if (q.r3.u32)
-            mainStack = q.r3.u32;
-    }
-    InitThreadContext(ctx, 0, 1, mainStack);
-    WatchdogRegisterThread(1, &ctx);
-    RuntimeLog("[thread] 1 (main) host %lu\n", GetCurrentThreadId());
     ProfilerStart();
     if (const char* w = getenv("SCDA_WATCHDOG"))
         WatchdogStart((unsigned)atoi(w));
@@ -283,8 +293,10 @@ int main(int argc, char** argv)
             LaunchDataSet(data.data(), uint32_t(data.size()));
             RuntimeLog("[boot] launch data: %zu bytes from %s\n", data.size(), path);
         }
-    RuntimeLog("[boot] calling _xstart (r1=0x%08X r13=0x%08X)\n", ctx.r1.u32, ctx.r13.u32);
-    _xstart(ctx, g_base);
-    RuntimeLog("[boot] _xstart returned r3=0x%08X\n", ctx.r3.u32);
+
+    // The title runs on its own host thread (64 MB like /STACK: the main guest thread recurses
+    // deeply on the host stack); this one waits for it.
+    HANDLE title = CreateThread(nullptr, 64 * 1024 * 1024, TitleThread, nullptr, STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr);
+    WaitForSingleObject(title, INFINITE);
     return 0;
 }
