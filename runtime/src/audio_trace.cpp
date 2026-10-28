@@ -456,13 +456,23 @@ PPC_FUNC(sub_8254F380)
         const uint32_t dB = PPC_LOAD_U32(p + 4), old = PPC_LOAD_U32(s + 132);
         if (voice && PPC_LOAD_U32(voice + 24) == 2 && dB != old)
         {
-            fprintf(stderr, "[dare] params %08X voice %08X dB %08X -> %08X flags %08X +0 %08X lr %08X stack", s, voice,
+            fprintf(stderr, "[dare] params %08X voice %08X dB %08X -> %08X flags %08X +0 %08X lr %08X", s, voice,
                     old, dB, PPC_LOAD_U32(p + 36), PPC_LOAD_U32(p), uint32_t(ctx.lr));
+            const uint32_t owner = PPC_LOAD_U32(s + 0);
+            fprintf(stderr, " owner %08X", owner);
+            for (uint32_t off : {20u, 24u, 48u, 52u, 72u, 76u, 80u})
+                fprintf(stderr, " +%u %08X", off, PPC_LOAD_U32(s + off));
+            fprintf(stderr, " stack");
             for (uint32_t fr = PPC_LOAD_U32(ctx.r1.u32), d = 0; fr && d < 12; fr = PPC_LOAD_U32(fr), d++)
                 fprintf(stderr, " %08X", PPC_LOAD_U32(fr - 8));
             fprintf(stderr, "\n");
         }
     }
+    // SCDA_FORCE_BUS=1: stereo voices always get 0 dB (tests the path below the bus voice).
+    static const bool force = getenv("SCDA_FORCE_BUS") != nullptr;
+    const uint32_t voice = PPC_LOAD_U32(ctx.r3.u32 + 104);
+    if (force && voice && PPC_LOAD_U32(voice + 24) == 2)
+        PPC_STORE_U32(ctx.r4.u32 + 4, 0);
     __imp__sub_8254F380(ctx, base);
 }
 
@@ -482,4 +492,130 @@ PPC_FUNC(sub_8253FC10)
         fprintf(stderr, "\n");
     }
     __imp__sub_8253FC10(ctx, base);
+}
+
+// AActor::execSetVolumeLineValue (82769E70) / execChangeSoundVolume (82769918): UnrealScript
+// natives (this, FFrame&, result). Logs each call; the set-line value reaches a vtable slot 55
+// (offset 220) as (line r4, value f1), hooked below via the slot's target when known.
+extern "C" PPC_FUNC(__imp__sub_82769E70);
+PPC_FUNC(sub_82769E70)
+{
+    if (Enabled())
+        fprintf(stderr, "[dare] script SetVolumeLineValue this %08X code %08X\n", ctx.r3.u32,
+                PPC_LOAD_U32(ctx.r4.u32 + 12));
+    __imp__sub_82769E70(ctx, base);
+}
+extern "C" PPC_FUNC(__imp__sub_82769918);
+PPC_FUNC(sub_82769918)
+{
+    if (Enabled())
+        fprintf(stderr, "[dare] script ChangeSoundVolume this %08X\n", ctx.r3.u32);
+    __imp__sub_82769918(ctx, base);
+}
+
+// sub_82A58570(audio, line, value): SetVolumeLine; value x k -> dB per group (+304/+308/+312),
+// pushed to DARE type handles +316/+320/+324 via 8252F8B0.
+extern "C" PPC_FUNC(__imp__sub_82A58570);
+PPC_FUNC(sub_82A58570)
+{
+    if (Enabled())
+        fprintf(stderr, "[dare] SetVolumeLine %08X line %u value %g lr %08X\n", ctx.r3.u32, ctx.r4.u32 & 0xFF, ctx.f1.f64,
+                uint32_t(ctx.lr));
+    __imp__sub_82A58570(ctx, base);
+}
+
+// sub_8252F8B0(typeHandle, dB float): DARE ChangeVolumeForType (music/sfx/voice groups).
+extern "C" PPC_FUNC(__imp__sub_8252F8B0);
+PPC_FUNC(sub_8252F8B0)
+{
+    if (Enabled())
+        fprintf(stderr, "[dare] ChangeVolumeForType %08X dB %g lr %08X\n", ctx.r3.u32, ctx.f1.f64, uint32_t(ctx.lr));
+    __imp__sub_8252F8B0(ctx, base);
+}
+
+// sub_8254DD38(t 16.16 in [0,1], curve, from dB, to dB) -> dB 16.16: fade curve.
+extern "C" PPC_FUNC(__imp__sub_8254DD38);
+PPC_FUNC(sub_8254DD38)
+{
+    if (!Enabled())
+        return __imp__sub_8254DD38(ctx, base);
+    const int32_t t = ctx.r3.s32, curve = ctx.r4.s32, from = ctx.r5.s32, to = ctx.r6.s32;
+    const uint32_t lr = uint32_t(ctx.lr);
+    __imp__sub_8254DD38(ctx, base);
+    static uint32_t s_calls;
+    if (s_calls++ % 20 == 0)
+        fprintf(stderr, "[dare] curve t %.4f type %d from %.3f to %.3f -> %.3f lr %08X\n", t / 65536.0, curve,
+                from / 65536.0, to / 65536.0, ctx.r3.s32 / 65536.0, lr);
+}
+
+// sub_82A5E810(audio, ..., f1 volume dB, f2 ...): Unreal -> DARE sound request.
+extern "C" PPC_FUNC(__imp__sub_82A5E810);
+PPC_FUNC(sub_82A5E810)
+{
+    if (Enabled())
+    {
+        const uint32_t f1 = PPC_LOAD_U32(ctx.r1.u32);
+        fprintf(stderr, "[dare] request f1 %g f2 %g r4 %08X r5 %08X r6 %08X lr %08X %08X\n", ctx.f1.f64, ctx.f2.f64,
+                ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, uint32_t(ctx.lr), f1 ? PPC_LOAD_U32(f1 - 8) : 0);
+    }
+    __imp__sub_82A5E810(ctx, base);
+}
+
+// sub_825349C8(&sound, fadeTime, ?): stop with fade-out (sound+24 state, +76 fade time).
+extern "C" PPC_FUNC(__imp__sub_825349C8);
+PPC_FUNC(sub_825349C8)
+{
+    if (Enabled())
+    {
+        const uint32_t s = PPC_LOAD_U32(ctx.r3.u32);
+        fprintf(stderr, "[dare] stop sound %08X voice %08X def %08X state %u time %d r5 %08X lr %08X stack", s,
+                s ? PPC_LOAD_U32(s + 104) : 0,
+                s ? PPC_LOAD_U32(s + 4) : 0, s ? PPC_LOAD_U32(s + 24) : 0, ctx.r4.s32, ctx.r5.u32, uint32_t(ctx.lr));
+        for (uint32_t fr = PPC_LOAD_U32(ctx.r1.u32), n = 0; fr && n < 10; fr = PPC_LOAD_U32(fr), n++)
+            fprintf(stderr, " %08X", PPC_LOAD_U32(fr - 8));
+        fprintf(stderr, "\n");
+    }
+    __imp__sub_825349C8(ctx, base);
+}
+
+// sub_825355D8(&inst, params): while inst->state (+24) == 1 fades params dB toward -96 over
+// +76 (timer +72, start +80), then stops the instance.
+extern "C" PPC_FUNC(__imp__sub_825355D8);
+PPC_FUNC(sub_825355D8)
+{
+    if (Enabled())
+    {
+        const uint32_t inst = PPC_LOAD_U32(ctx.r3.u32);
+        static std::map<uint32_t, uint32_t> s_seen;
+        static std::mutex s_lock;
+        std::lock_guard lock(s_lock);
+        if (inst && PPC_LOAD_U32(inst + 24) == 1 && int32_t(PPC_LOAD_U32(inst + 72)) != -2 && s_seen[inst]++ == 0)
+        {
+            fprintf(stderr, "[dare] fadeout inst %08X", inst);
+            for (uint32_t off = 0; off < 112; off += 4)
+                fprintf(stderr, " %08X", PPC_LOAD_U32(inst + off));
+            fprintf(stderr, " stack");
+            for (uint32_t fr = PPC_LOAD_U32(ctx.r1.u32), n = 0; fr && n < 8; fr = PPC_LOAD_U32(fr), n++)
+                fprintf(stderr, " %08X", PPC_LOAD_U32(fr - 8));
+            fprintf(stderr, "\n");
+        }
+    }
+    __imp__sub_825355D8(ctx, base);
+}
+
+// sub_8254D848(frac 16.16, curve) -> dB 16.16 offset (fade curve: 0 -> -96 dB, 1 -> 0 dB).
+extern "C" PPC_FUNC(__imp__sub_8254D848);
+PPC_FUNC(sub_8254D848)
+{
+    if (!Enabled())
+        return __imp__sub_8254D848(ctx, base);
+    const int32_t frac = ctx.r3.s32, curve = ctx.r4.s32;
+    const uint32_t lr = uint32_t(ctx.lr);
+    __imp__sub_8254D848(ctx, base);
+    static std::map<uint32_t, uint32_t> s_seen;
+    static std::mutex s_lock;
+    std::lock_guard lock(s_lock);
+    if (s_seen[lr]++ < 40)
+        fprintf(stderr, "[dare] fadecurve frac %.4f curve %d -> %.3f dB lr %08X\n", frac / 65536.0, curve,
+                ctx.r3.s32 / 65536.0, lr);
 }

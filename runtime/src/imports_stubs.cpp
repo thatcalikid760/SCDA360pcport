@@ -50,7 +50,6 @@ SCDA_IMPORT(RtlInitUnicodeString) { ImportStub("RtlInitUnicodeString", ctx); }
 SCDA_IMPORT(__C_specific_handler) { ImportStub("__C_specific_handler", ctx); }
 SCDA_IMPORT(NtQueryVolumeInformationFile) { ImportStub("NtQueryVolumeInformationFile", ctx); }
 SCDA_IMPORT(HalReturnToFirmware) { ImportStub("HalReturnToFirmware", ctx); }
-SCDA_IMPORT(RtlFillMemoryUlong) { ImportStub("RtlFillMemoryUlong", ctx); }
 SCDA_IMPORT(KeBugCheckEx) { ImportStub("KeBugCheckEx", ctx); }
 SCDA_IMPORT(RtlCompareMemoryUlong) { ImportStub("RtlCompareMemoryUlong", ctx); }
 SCDA_IMPORT(RtlRaiseException) { ImportStub("RtlRaiseException", ctx); }

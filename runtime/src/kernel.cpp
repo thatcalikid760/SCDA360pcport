@@ -440,6 +440,13 @@ SCDA_IMPORT(KeWaitForMultipleObjects)
     ctx.r3.u64 = WaitResult(TitleWait(count, hs, ctx.r5.u32 == 0, TimeoutMs(ctx.r9.u32), ctx.r8.u32 != 0));
 }
 
+// RtlFillMemoryUlong(Destination, Length in bytes, Pattern): Length / 4 big-endian ulongs.
+SCDA_IMPORT(RtlFillMemoryUlong)
+{
+    for (uint32_t i = 0; i < ctx.r4.u32 / 4; i++)
+        GuestStore32(ctx.r3.u32 + i * 4, ctx.r5.u32);
+}
+
 // ---- String conversion ----
 
 // RtlUnicodeToMultiByteN(MbString, MbSize, u32* ResultSize, UnicodeString (BE UTF-16), UnicodeSize in bytes)
