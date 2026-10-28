@@ -97,9 +97,13 @@ static void RenderThread(DisplaySettings s)
             Sleep(1);
             continue;
         }
-        // SCDA_TRACE_FRAME=<n>: log every draw and resolve of frame n (renderer development).
+        // SCDA_TRACE_FRAME=<n>: log every draw and resolve of the first frame >= n (renderer development).
         static const long long traceFrame = getenv("SCDA_TRACE_FRAME") ? atoll(getenv("SCDA_TRACE_FRAME")) : -1;
-        if ((long long)frame.stats.frame == traceFrame)
+        // First frame at or after n: the renderer may drop frame n itself.
+        static bool traced = false;
+        const bool tracing = !traced && traceFrame >= 0 && (long long)frame.stats.frame >= traceFrame;
+        traced |= tracing;
+        if (tracing)
         {
             for (auto& d : frame.draws)
                 RuntimeLog("[frame] draw prim %u src %u idx32 %d count %u base 0x%08X vs %016llx ps %016llx rt 0x%08X/0x%08X mode %u zctl 0x%08X zinfo 0x%08X\n",
@@ -155,7 +159,7 @@ static void RenderThread(DisplaySettings s)
                 nextDump++;
         }
         renderer.Present(frame);
-        if (dumping || (long long)frame.stats.frame == traceFrame)
+        if (dumping || tracing)
             RuntimeLog("[frame] %llu: drawn %u skipped %u resolved %u presented %s\n", (unsigned long long)frame.stats.frame, renderer.LastDrawn(),
                 renderer.LastSkipped(), renderer.LastResolved(), renderer.LastPresentedFrontbuffer() ? "frontbuffer" : "target");
         if (GetTickCount() - lastTitle > 500)
