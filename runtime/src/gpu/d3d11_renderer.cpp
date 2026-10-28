@@ -852,6 +852,16 @@ void D3D11Renderer::Present(const Frame& frame)
                 ExecuteResolve(frame.resolves[next]);
             if (i < std::min(frame.draws.size(), drawLimit))
                 ExecuteDraw(frame.draws[i], frame);
+            // SCDA_DUMP_DRAWS=<dir>,<step>: on a SCDA_DUMP_FRAME frame, RT0 after every step-th draw
+            // (bisecting which draw writes what in one run).
+            static const char* dumpDraws = getenv("SCDA_DUMP_DRAWS");
+            static const size_t step = dumpDraws && strchr(dumpDraws, ',') ? std::max(1ll, atoll(strchr(dumpDraws, ',') + 1)) : 1;
+            if (dumpDraws && !m_dumpPath.empty() && r.last && i % step == 0)
+            {
+                char name[64];
+                snprintf(name, sizeof(name), "/draw_%04zu.bmp", i);
+                Dump(std::string(dumpDraws, strcspn(dumpDraws, ",")) + name, r.last->texture.Get());
+            }
         }
         r.uploaded.clear();
         r.textures.clear();
