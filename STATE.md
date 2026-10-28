@@ -39,7 +39,7 @@
 
 ## Next
 1. Done (aa09e97): input (XInput + keyboard + `SCDA_AUTOPRESS="40:A"`), local profile, XNotify, XamShowSigninUI, profile settings (not persisted). A on "Sign in" reaches LOAD GAME menu.
-2. Next: drive menus to a mission (launch-data relaunch path), renderer perf (~14 fps: texture cache across frames), points/rect lists, depth, persist profile settings.
+2. NOW: in-process relaunch. Menu path (frames, 30 fps): `SCDA_AUTOPRESS=320:A,460:DOWN,480:A,580:A,700:A` = sign in, LOAD GAME>Mission, Normal, "Iceland - Geothermal Plant" -> XamLoaderSetLaunchData(0x4021B720, 0x3FC) + XamLoaderLaunchTitle(0x820058C8, 0) -> stub returns -> crash. 0ce3f02: menu 14->30 fps (VirtualQuery fast path); `SCDA_PROFILE`, `SCDA_PEEK`.
 3. Kernel/XAM HLE: XAM content/profile, XNotify, ExGetXConfigSetting, RtlImageXexHeaderField; launch-data intercept (capture in-process, restart title loop, never exit).
 4. Audio (XMA/XAudio). Installer must write `game\SC4_Offline.img` + `.xexhdr` (does not yet).
 
