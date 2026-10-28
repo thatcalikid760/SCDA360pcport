@@ -9,6 +9,7 @@
 #include <mutex>
 #include <launch.h>
 #include <runtime.h>
+#include <title.h>
 
 constexpr uint32_t kErrorSuccess = 0, kErrorNotFound = 0x490, kErrorInvalidParameter = 0x57;
 
@@ -49,6 +50,16 @@ SCDA_IMPORT(XamLoaderSetLaunchData)
             fclose(f);
         }
     ctx.r3.u64 = kErrorSuccess;
+}
+
+// XamLoaderLaunchTitle(Path, Flags): this title relaunches itself ("SC4_Offline.xex") with the
+// launch data it just set; the runtime restarts it in-process (title.h). Never returns.
+SCDA_IMPORT(XamLoaderLaunchTitle)
+{
+    const char* path = ctx.r3.u32 ? (const char*)GuestPtr(ctx.r3.u32) : "(null)";
+    RuntimeLog("[launch] LaunchTitle \"%s\" flags 0x%X, launch data %s\n", path, ctx.r4.u32, LaunchDataPresent() ? "set" : "none");
+    // shortcut: any other image path (or none: back to the dashboard) relaunches this title too.
+    TitleRequestRelaunch();
 }
 
 // XamLoaderGetLaunchDataSize(u32* Size)

@@ -29,7 +29,6 @@ SCDA_IMPORT(XamContentCreateEnumerator) { ImportStub("XamContentCreateEnumerator
 SCDA_IMPORT(XamContentGetDeviceState) { ImportStub("XamContentGetDeviceState", ctx); }
 SCDA_IMPORT(XamContentGetDeviceData) { ImportStub("XamContentGetDeviceData", ctx); }
 SCDA_IMPORT(XGetGameRegion) { ImportStub("XGetGameRegion", ctx); }
-SCDA_IMPORT(XamLoaderLaunchTitle) { ImportStub("XamLoaderLaunchTitle", ctx); }
 SCDA_IMPORT(XamShowMessageBoxUIEx) { ImportStub("XamShowMessageBoxUIEx", ctx); }
 SCDA_IMPORT(XGetLanguage) { ImportStub("XGetLanguage", ctx); }
 SCDA_IMPORT(XGetAVPack) { ImportStub("XGetAVPack", ctx); }
