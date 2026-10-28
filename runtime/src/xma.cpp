@@ -7,7 +7,8 @@
 // output ring (256-byte blocks of 16-bit big-endian PCM) until the ring is full (output buffer
 // valid cleared) or the input runs out (each consumed buffer's valid bit cleared, then the
 // other buffer). Disable waits for a running pass, so the title can then rewrite the context.
-// shortcut: loop fields (count, start/end) are ignored: a looping stream plays once.
+// shortcut: loops run at packet granularity (loop end's packet plays whole, loop start restarts
+// at its packet's first frame); subframe end/skip are ignored.
 // shortcut: a read offset set mid-packet restarts at that packet's start.
 // The statically linked XAudio drives its own contexts without the XMA* exports beyond create /
 // release: it reads the array address from register 0x7FEA1800 and kicks / locks contexts with
@@ -125,6 +126,18 @@ bool DecodePacket(uint32_t c, Decode& d)
                 d.pcm.push_back(uint8_t(samples[i]));
             }
             packet++;
+            // Loop: the packet holding loop end is played whole, then decoding restarts at loop
+            // start's packet with a fresh stream. Count 255 loops forever.
+            const uint32_t loops = Get(c, kLoopCount), loopEnd = Get(c, kLoopEnd);
+            const uint32_t loopStart = Get(c, kLoopStart) / kPacketBits;
+            if (loops && loopEnd && packet * kPacketBits >= loopEnd && loopStart < count)
+            {
+                if (loops != 255)
+                    Set(c, kLoopCount, loops - 1);
+                Set(c, kReadOffset, loopStart * kPacketBits + kPacketHeaderBits);
+                scda_xma_reset(d.stream);
+                return true;
+            }
         }
         if (packet < count)
             Set(c, kReadOffset, packet * kPacketBits + kPacketHeaderBits);
@@ -199,10 +212,12 @@ void Trace(const char* what, uint32_t c, uint32_t lr)
     static int lines;
     if (!on || lines++ > 20000)
         return;
-    RuntimeLog("[xma] %-22s #%d en=%d in0 %d/%u in1 %d/%u rd=%u out %d blk=%u w=%u r=%u lr=0x%08X\n", what,
-        Index(c), Index(c) >= 0 && g_enabled[Index(c)], Get(c, kIn0Valid), Get(c, kIn0Count), Get(c, kIn1Valid),
-        Get(c, kIn1Count), Get(c, kReadOffset), Get(c, kOutValid), Get(c, kOutBlocks), Get(c, kOutWrite),
-        Get(c, kOutRead), lr);
+    RuntimeLog("[xma] %-22s #%d en=%d in0 %d/%u in1 %d/%u rd=%u out %d blk=%u w=%u r=%u loop %u [%u,%u) "
+               "sub %u/%u lr=0x%08X\n",
+        what, Index(c), Index(c) >= 0 && g_enabled[Index(c)], Get(c, kIn0Valid), Get(c, kIn0Count),
+        Get(c, kIn1Valid), Get(c, kIn1Count), Get(c, kReadOffset), Get(c, kOutValid), Get(c, kOutBlocks),
+        Get(c, kOutWrite), Get(c, kOutRead), Get(c, kLoopCount), Get(c, kLoopStart), Get(c, kLoopEnd),
+        Get(c, kLoopSubEnd), Get(c, kLoopSubSkip), lr);
 }
 }
 
@@ -270,7 +285,7 @@ SCDA_IMPORT(XMAReleaseContext)
 SCDA_IMPORT(XMAInitializeContext)
 {
     uint32_t c = ctx.r3.u32, init = ctx.r4.u32;
-    // The first inits, and every one that asks for a loop (shortcut: loops are not played).
+    // The first inits, and every one that asks for a loop.
     static int dumps;
     if (dumps++ < 8 || GuestLoad32(init + 48) || g_base[init + 52])
     {

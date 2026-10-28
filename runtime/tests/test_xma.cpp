@@ -89,6 +89,36 @@ TEST(xma_decoder_fills_output_and_returns_input_buffers)
     XmaCall(__imp__XMAReleaseContext, c);
 }
 
+// Loop [packet 1, inside packet 2) x 2: packets 0 1 2 1 2 1 2, then the buffer is handed back.
+TEST(xma_decoder_loops_packets)
+{
+    TestGuestBase();
+    const uint32_t out = 0x40700200, init = 0x40700210;
+    const uint32_t in0 = 0xA3004000, pcm = 0xA3006000;
+    g_base[in0 + 1] = 0x11;
+    g_base[in0 + 2048 + 1] = 0x22;
+    g_base[in0 + 4096 + 1] = 0x33;
+    CHECK_EQ(XmaCall(__imp__XMACreateContext, out), 0u);
+    uint32_t c = GuestLoad32(out);
+    const uint32_t fields[] = {in0, 3, 0, 0, 32, pcm, 30, 0, 2, 0, 3, 16384 + 32, 2 * 16384 + 100, 0x02000000};
+    for (int i = 0; i < 14; i++)
+        GuestStore32(init + i * 4, fields[i]);
+    XmaCall(__imp__XMAInitializeContext, c, init);
+    XmaCall(__imp__XMASetInputBuffer0Valid, c);
+    XmaCall(__imp__XMASetOutputBufferValid, c);
+    XmaCall(__imp__XMAEnableContext, c);
+    for (int i = 0; i < 200 && XmaCall(__imp__XMAIsInputBuffer0Valid, c); i++)
+        Sleep(2);
+    XmaCall(__imp__XMADisableContext, c);
+    CHECK_EQ(XmaCall(__imp__XMAIsInputBuffer0Valid, c), 0u);
+    CHECK_EQ(XmaCall(__imp__XMAGetOutputBufferWriteOffset, c), 28u);
+    CHECK_EQ((GuestLoad32(c) >> 12) & 0xFF, 0u); // loop count used up
+    const uint8_t expect[] = {0x11, 0x22, 0x33, 0x22, 0x33, 0x22, 0x33};
+    for (int p = 0; p < 7; p++)
+        CHECK_EQ(GuestLoad16(pcm + p * 4 * 256), expect[p]);
+    XmaCall(__imp__XMAReleaseContext, c);
+}
+
 void XmaEnsureArray();
 void XmaKickVoiceSet(uint32_t set);
 void XmaLockVoiceSet(uint32_t set);
