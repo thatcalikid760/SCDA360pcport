@@ -1020,7 +1020,7 @@ PPC_FUNC(sub_8255F690)
             return x.f;
         };
         const uint32_t m = PPC_LOAD_U32(v + 132);
-        fprintf(stderr, "[dare] 3d voice %08X spk %d inst %08X %08X matrix", v, int32_t(PPC_LOAD_U32(v + 304)),
+        fprintf(stderr, "[dare] 3d voice %08X xa %08X spk %d inst %08X %08X matrix", v, PPC_LOAD_U32(v + 4), int32_t(PPC_LOAD_U32(v + 304)),
                 PPC_LOAD_U32(0x82D420CC), PPC_LOAD_U32(0x82D420D0));
         for (uint32_t i = 0; m && i < 6; i++)
             fprintf(stderr, " %.3f", f(m + 4 * i));
@@ -1030,36 +1030,6 @@ PPC_FUNC(sub_8255F690)
         fprintf(stderr, " dB %g pos (%g %g %g) listener (%g %g %g)\n", f(v + 128), f(v + 208), f(v + 212),
                 f(v + 216), f(l + 24), f(l + 28), f(l + 32));
     }
-}
-
-// SCDA_SKIP_3DFX=1: skip the 3D voices' environment sends (8255E598) and FX params (8255F558).
-namespace
-{
-bool Skip3dFx()
-{
-    static const bool on = getenv("SCDA_SKIP_3DFX") != nullptr;
-    return on;
-}
-} // namespace
-extern "C" PPC_FUNC(__imp__sub_8255E598);
-PPC_FUNC(sub_8255E598)
-{
-    if (Skip3dFx())
-    {
-        ctx.r3.u64 = 1;
-        return;
-    }
-    __imp__sub_8255E598(ctx, base);
-}
-extern "C" PPC_FUNC(__imp__sub_8255F558);
-PPC_FUNC(sub_8255F558)
-{
-    if (Skip3dFx())
-    {
-        ctx.r3.u64 = 1;
-        return;
-    }
-    __imp__sub_8255F558(ctx, base);
 }
 
 // sub_8255E310(voice, dB, 0, 1): pushes gain * *(voice+132) matrix to the XAudio voice (823FCD50).
@@ -1073,18 +1043,6 @@ PPC_FUNC(sub_8255E310)
         for (uint32_t i = 0; i < 6; i++)
             PPC_STORE_U32(m + 4 * i, 0);
     __imp__sub_8255E310(ctx, base);
-}
-
-// sub_823FD1F0(xa, ratio): IXAudioSourceVoice frequency ratio (vtable +96 on *(xa+76)).
-extern "C" PPC_FUNC(__imp__sub_823FD1F0);
-PPC_FUNC(sub_823FD1F0)
-{
-    static uint32_t s_calls;
-    if (Enabled() && s_calls++ % 100 == 0)
-        fprintf(stderr, "[dare] freq xa %08X ratio %g lr %08X\n", ctx.r3.u32, ctx.f1.f64, uint32_t(ctx.lr));
-    __imp__sub_823FD1F0(ctx, base);
-    if (Enabled() && int32_t(ctx.r3.u32) < 0)
-        fprintf(stderr, "[dare] freq FAILED %08X\n", ctx.r3.u32);
 }
 
 // sub_825632A0(fmt, ...): game error log after failed XAudio calls; printed with its guest string.
@@ -1102,4 +1060,66 @@ PPC_FUNC(sub_825632A0)
         fprintf(stderr, "[dare] error \"%s\" r4 %08X lr %08X\n", GuestString(base, ctx.r3.u32), ctx.r4.u32,
                 uint32_t(ctx.lr));
     __imp__sub_825632A0(ctx, base);
+}
+
+// XAudio voice wrappers sub_823FCAB0..823FD178 (xa, ...): call a vtable slot of *xa or *(xa+76). Counts calls
+// and failures per (wrapper, xa); summary every 5 s.
+namespace
+{
+std::map<std::pair<uint32_t, uint32_t>, std::pair<uint32_t, uint32_t>> g_xaCalls;
+DWORD g_xaLast;
+
+void XaCall(PPCContext& ctx, uint8_t* base, uint32_t fn, void (*impl)(PPCContext&, uint8_t*))
+{
+    if (!Enabled())
+        return impl(ctx, base);
+    const uint32_t xa = ctx.r3.u32;
+    impl(ctx, base);
+    std::lock_guard lock(g_lock);
+    auto& c = g_xaCalls[{xa, fn}];
+    c.first++;
+    c.second += int32_t(ctx.r3.u32) < 0;
+    const DWORD now = GetTickCount();
+    if (now - g_xaLast < 5000)
+        return;
+    g_xaLast = now;
+    for (const auto& [k, v] : g_xaCalls)
+        fprintf(stderr, "[dare] xa %08X fn %08X calls %u failed %u\n", k.first, k.second, v.first, v.second);
+    g_xaCalls.clear();
+}
+} // namespace
+#define SCDA_XA(addr)                                                                                        \
+    extern "C" PPC_FUNC(__imp__sub_##addr);                                                                  \
+    PPC_FUNC(sub_##addr) { XaCall(ctx, base, 0x##addr, __imp__sub_##addr); }
+SCDA_XA(823FCAB0)
+SCDA_XA(823FCB58)
+SCDA_XA(823FCBC0)
+SCDA_XA(823FCC28)
+SCDA_XA(823FCC88)
+SCDA_XA(823FCCF8)
+SCDA_XA(823FCD50)
+SCDA_XA(823FCDA8)
+
+SCDA_XA(823FCF58)
+SCDA_XA(823FCFB0)
+SCDA_XA(823FD018)
+SCDA_XA(823FD070)
+SCDA_XA(823FD0C8)
+SCDA_XA(823FD120)
+SCDA_XA(823FD178)
+
+// sub_823FCE58(xa, packet, flag): wrapper slot 28, the submit (Bink calls it with {data, size, ..}).
+extern "C" PPC_FUNC(__imp__sub_823FCE58);
+PPC_FUNC(sub_823FCE58)
+{
+    const uint32_t xa = ctx.r3.u32, p = ctx.r4.u32, flag = ctx.r5.u32, lr = uint32_t(ctx.lr);
+    if (Enabled() && p)
+    {
+        fprintf(stderr, "[dare] submit xa %08X flag %u lr %08X pkt", xa, flag, lr);
+        for (uint32_t i = 0; i < 8; i++)
+            fprintf(stderr, " %08X", PPC_LOAD_U32(p + 4 * i));
+        const uint32_t data = PPC_LOAD_U32(p), size = PPC_LOAD_U32(p + 4);
+        fprintf(stderr, " peak %u\n", data && size && size < 0x1000000 ? Peak(base, data, size) : 0);
+    }
+    XaCall(ctx, base, 0x823FCE58, __imp__sub_823FCE58);
 }

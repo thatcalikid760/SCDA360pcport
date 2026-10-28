@@ -88,3 +88,47 @@ TEST(xma_decoder_fills_output_and_returns_input_buffers)
     CHECK_EQ(XmaCall(__imp__XMAGetOutputBufferWriteOffset, c), 14u);
     XmaCall(__imp__XMAReleaseContext, c);
 }
+
+void XmaEnsureArray();
+void XmaKickVoiceSet(uint32_t set);
+void XmaLockVoiceSet(uint32_t set);
+
+// XAudio's own contexts: register 0x7FEA1800 holds the array (little-endian), a kick of its voice
+// set decodes without XMAInitializeContext / XMAEnableContext, a lock stops decoding.
+TEST(xma_xaudio_voice_set_kick_and_lock)
+{
+    TestGuestBase();
+    XmaEnsureArray();
+    const uint32_t out = 0x40700200, set = 0x40700210, entries = 0x40700300;
+    const uint32_t in0 = 0xA3010000, pcm = 0xA3012000;
+    g_base[in0 + 1] = 0x44;
+    CHECK_EQ(XmaCall(__imp__XMACreateContext, out), 0u);
+    const uint32_t c = GuestLoad32(out);
+    uint32_t reg;
+    memcpy(&reg, g_base + 0x7FEA1800, 4);
+    CHECK_EQ(c & 0x3F, 0u);
+    CHECK(c >= reg && (c - reg) % 64 == 0);
+    // Context written directly: in0 1 packet valid, read offset 32, mono 48 kHz, out 8 blocks valid.
+    GuestStore32(c + 0, 1 | (1u << 20) | (8u << 22));
+    GuestStore32(c + 4, (3u << 27) | (1u << 31));
+    GuestStore32(c + 8, 32);
+    GuestStore32(c + 20, in0 & 0x1FFFFFFF);
+    GuestStore32(c + 28, pcm & 0x1FFFFFFF);
+    GuestStore32(set, 1);
+    GuestStore32(set + 4, 0);
+    GuestStore32(set + 8, entries);
+    GuestStore32(entries + 64, c);
+    XmaKickVoiceSet(set);
+    for (int i = 0; i < 200 && XmaCall(__imp__XMAGetOutputBufferWriteOffset, c) != 4; i++)
+        Sleep(2);
+    XmaLockVoiceSet(set);
+    CHECK_EQ(XmaCall(__imp__XMAGetOutputBufferWriteOffset, c), 4u); // 512 mono samples = 4 blocks
+    CHECK_EQ(XmaCall(__imp__XMAIsInputBuffer0Valid, c), 0u);
+    CHECK_EQ(GuestLoad16(pcm), 0x44u);
+    // Locked: new input stays undecoded.
+    GuestStore32(c + 0, GuestLoad32(c + 0) | (1u << 20));
+    GuestStore32(c + 8, 32);
+    Sleep(20);
+    CHECK_EQ(XmaCall(__imp__XMAIsInputBuffer0Valid, c), 1u);
+    XmaCall(__imp__XMAReleaseContext, c);
+}

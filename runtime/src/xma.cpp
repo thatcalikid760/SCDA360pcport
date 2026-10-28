@@ -9,6 +9,9 @@
 // other buffer). Disable waits for a running pass, so the title can then rewrite the context.
 // shortcut: loop fields (count, start/end) are ignored: a looping stream plays once.
 // shortcut: a read offset set mid-packet restarts at that packet's start.
+// The statically linked XAudio drives its own contexts without the XMA* exports beyond create /
+// release: it reads the array address from register 0x7FEA1800 and kicks / locks contexts with
+// one bit per context in registers 0x7FEA1940 / 0x7FEA1A40 (xma_xaudio.cpp).
 // SCDA_TRACE_XMA=1 logs every call with the context's state.
 #include <windows.h>
 #include <cstdlib>
@@ -44,6 +47,7 @@ bool g_used[kContexts], g_enabled[kContexts];
 struct Decode
 {
     ScdaXmaStream* stream;
+    int channels, rate; // format the stream was opened with (XAudio contexts)
     std::vector<uint8_t> pcm;
     size_t pcmRead;
     FILE* dump; // SCDA_DUMP_XMA=<dir>: every packet fed to the decoder
@@ -214,9 +218,10 @@ void XmaReset()
 }
 
 // XMACreateContext(u32* Context) -> status
-SCDA_IMPORT(XMACreateContext)
+// Decoder thread and context array (g_lock held). The array address is also register 0x7FEA1800
+// (read byte-reversed, so stored little-endian).
+static void EnsureArray()
 {
-    std::lock_guard lock(g_lock);
     if (!g_kick)
     {
         g_kick = CreateEventW(nullptr, FALSE, FALSE, nullptr);
@@ -224,6 +229,13 @@ SCDA_IMPORT(XMACreateContext)
     }
     if (!g_array)
         g_array = GuestAllocPhysical(kContexts * kContextSize, 0x100);
+    memcpy(GuestPtr(0x7FEA1800), &g_array, 4);
+}
+
+SCDA_IMPORT(XMACreateContext)
+{
+    std::lock_guard lock(g_lock);
+    EnsureArray();
     for (uint32_t i = 0; i < kContexts; i++)
         if (!g_used[i])
         {
@@ -349,3 +361,55 @@ SCDA_IMPORT(XMASetInputBuffer1Valid) { SetField(ctx, "set-in1-valid", kIn1Valid,
 SCDA_IMPORT(XMASetOutputBufferValid) { SetField(ctx, "set-out-valid", kOutValid, 1); }
 // XMASetOutputBufferReadOffset(Context, Offset in 256-byte blocks)
 SCDA_IMPORT(XMASetOutputBufferReadOffset) { SetField(ctx, "set-out-read", kOutRead, ctx.r4.u32); }
+
+// XAudio's XMA voice set: {u32 count, u32 flags, entries (96 bytes: +0 48-byte context image,
+// +64 hardware context, +80 u16 context index)}. xma_xaudio.cpp calls these after XAudio's kick
+// and lock loops: a kick enables every context of the set (opening a decoder for its channel count
+// and rate), a lock disables them.
+// shortcut: a context reused for a new sound keeps its decoder (and any partial block) unless the
+// format changes.
+namespace
+{
+template <class F> void ForEachVoiceContext(uint32_t set, F&& fn)
+{
+    const uint32_t count = GuestLoad32(set), entries = GuestLoad32(set + 8);
+    for (uint32_t e = 0; e < count; e++)
+        if (int i = Index(GuestLoad32(entries + e * 96 + 64)); i >= 0)
+            fn(uint32_t(i), g_array + uint32_t(i) * kContextSize);
+}
+} // namespace
+
+void XmaEnsureArray()
+{
+    std::lock_guard lock(g_lock);
+    EnsureArray();
+}
+
+void XmaKickVoiceSet(uint32_t set)
+{
+    std::lock_guard lock(g_lock);
+    ForEachVoiceContext(set, [](uint32_t i, uint32_t c) {
+        static const uint32_t kRates[] = {24000, 32000, 44100, 48000};
+        const int channels = Get(c, kStereo) ? 2 : 1, rate = int(kRates[Get(c, kSampleRate)]);
+        Decode& d = g_decode[i];
+        if (!d.stream || d.channels != channels || d.rate != rate)
+        {
+            CloseDecode(d);
+            d.stream = scda_xma_open(channels, rate);
+            d.channels = channels;
+            d.rate = rate;
+        }
+        g_enabled[i] = true;
+        Trace("kick", c, 0);
+    });
+    Kick();
+}
+
+void XmaLockVoiceSet(uint32_t set)
+{
+    std::lock_guard lock(g_lock);
+    ForEachVoiceContext(set, [](uint32_t i, uint32_t c) {
+        g_enabled[i] = false;
+        Trace("lock", c, 0);
+    });
+}
