@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <atomic>
 #include <map>
+#include <cstring>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -39,8 +40,15 @@ enum : uint32_t
 constexpr int kMaxIndirectDepth = 4;
 
 static uint32_t g_read, g_lastBase;
+// Per nesting depth: IB stalled on a wait and the dword to resume at (the ring retries the IB packet).
+struct IbResume
+{
+    uint32_t guest, index;
+};
+static IbResume g_resume[kMaxIndirectDepth + 1];
 static std::atomic<uint64_t> g_opcodeCounts[128]; // unhandled type-3 opcodes (SCDA_TRACE_CP)
-static std::function<void(uint32_t)> g_interruptSink;
+static std::function<void(uint32_t, uint32_t)> g_interruptSink;
+static std::atomic<uint32_t> g_stalledWait[4]; // last unsatisfied WAIT_REG_MEM: info, poll, ref, mask
 static ULONGLONG g_waitSince;                                     // CP thread: current stalled WAIT_REG_MEM
 static std::mutex g_waitMutex;
 static std::map<uint64_t, std::pair<uint64_t, uint64_t>> g_waitStats; // (memory flag, address) -> (waits, ms)
@@ -58,6 +66,10 @@ static void SetGpuRegister(uint32_t index, uint32_t v)
     GuestStore32(kGpuRegBase + index * 4, v);
     g_shadow.Set(index, v);
     g_regsDirty = true;
+    // SCRATCH_REG0-7: mirrored to SCRATCH_ADDR + 4*i for SCRATCH_UMSK bits (D3D polls that memory).
+    uint32_t scratch = index - kRegScratch0;
+    if (scratch < 8 && (GpuRegister(kRegScratchUmsk) >> scratch & 1))
+        GuestStore32(GuestPhysical(GpuRegister(kRegScratchAddr) + scratch * 4), v);
 }
 
 FrameQueue& Frames()
@@ -123,9 +135,13 @@ void CommandProcessorReset()
 {
     g_read = 0;
     g_lastBase = 0;
+    memset(g_resume, 0, sizeof(g_resume));
+    // Display registers D3D reads over MMIO (Xenia's values): 1280x720 viewport, V counter.
+    GuestStore32(kGpuRegBase + 0x194C * 4, 0x000002D0);
+    GuestStore32(kGpuRegBase + 0x1961 * 4, 0x050002D0);
 }
 
-void CommandProcessorSetInterruptSink(std::function<void(uint32_t)> sink)
+void CommandProcessorSetInterruptSink(std::function<void(uint32_t, uint32_t)> sink)
 {
     std::lock_guard lock(g_sinkMutex);
     g_interruptSink = std::move(sink);
@@ -158,17 +174,26 @@ static bool Committed(uint32_t guest, uint32_t bytes) { return GuestRangeReadabl
 
 static bool Execute(uint32_t h, const Pm4Payload& p, int depth, CpStats& st);
 
-static void WalkIndirect(uint32_t guest, uint32_t dwords, int depth, CpStats& st)
+// False = stalled on a wait: the caller stops too, and the next walk of this IB resumes there.
+static bool WalkIndirect(uint32_t guest, uint32_t dwords, int depth, CpStats& st)
 {
-    for (uint32_t i = 0; i < dwords;)
+    IbResume& r = g_resume[depth];
+    uint32_t i = r.guest == guest ? r.index : 0;
+    r = {};
+    while (i < dwords)
     {
         uint32_t h = GuestLoad32(guest + i * 4), size = Pm4PacketDwords(h);
         if (i + size > dwords)
             break;
         uint32_t start = i;
-        Execute(h, [&](uint32_t k) { return GuestLoad32(guest + (start + 1 + k) * 4); }, depth, st);
+        if (!Execute(h, [&](uint32_t k) { return GuestLoad32(guest + (start + 1 + k) * 4); }, depth, st))
+        {
+            r = { guest, i };
+            return false;
+        }
         i += size;
     }
+    return true;
 }
 
 // Shared by WAIT_REG_MEM and COND_WRITE: wait_info bits 0-2 = function, bit 4 = poll memory.
@@ -309,6 +334,9 @@ static bool ExecutePacket(uint32_t h, const Pm4Payload& p, int depth, CpStats& s
         ULONGLONG now = GetTickCount64();
         if (!done && !g_waitSince)
             g_waitSince = now;
+        if (!done)
+            for (int i = 0; i < 4; i++)
+                g_stalledWait[i] = p(i);
         if (done && g_waitSince)
         {
             std::lock_guard lock(g_waitMutex);
@@ -334,8 +362,10 @@ static bool ExecutePacket(uint32_t h, const Pm4Payload& p, int depth, CpStats& s
     {
         st.interrupts++;
         std::lock_guard lock(g_sinkMutex);
-        if (g_interruptSink)
-            g_interruptSink(1);
+        // p0 = CPU mask: one delivery per CPU (Xenia), each runs as that processor.
+        for (uint32_t cpu = 0; cpu < 6; cpu++)
+            if (g_interruptSink && (p(0) >> cpu & 1))
+                g_interruptSink(1, cpu);
         return true;
     }
     case kOpIndirectBuffer:
@@ -344,12 +374,15 @@ static bool ExecutePacket(uint32_t h, const Pm4Payload& p, int depth, CpStats& s
         uint32_t guest = GuestPhysical(p(0) & ~3u), dwords = p(1) & 0xFFFFF;
         if (depth >= kMaxIndirectDepth || !Committed(guest, dwords * 4))
         {
+            static std::atomic<int> logged;
+            if (logged++ < 16)
+                RuntimeLog("[cp] skipped IB 0x%08X (%u dwords, depth %d, raw 0x%08X)\n", guest, dwords, depth, p(0));
             st.skipped++;
             return true;
         }
-        st.indirect++;
-        WalkIndirect(guest, dwords, depth + 1, st);
-        return true;
+        if (g_resume[depth + 1].guest != guest)
+            st.indirect++;
+        return WalkIndirect(guest, dwords, depth + 1, st);
     }
     default:
         st.skipped++;
@@ -380,6 +413,7 @@ bool CommandProcessorTick(CpStats* stats)
 
 void CommandProcessorStart()
 {
+    CommandProcessorReset();
     std::thread([]
     {
         CpStats st{};
@@ -406,6 +440,9 @@ void CommandProcessorStart()
                         RuntimeLog("[cp] wait %s 0x%08X: %llu waits, %llu ms stalled\n", (key >> 32) ? "mem" : "reg",
                             uint32_t(key), (unsigned long long)w.first, (unsigned long long)w.second);
                 }
+                if (g_waitSince)
+                    RuntimeLog("[cp] stalled %llu ms on wait info 0x%X poll 0x%08X ref 0x%X mask 0x%X\n", (unsigned long long)(GetTickCount64() - g_waitSince),
+                        g_stalledWait[0].load(), g_stalledWait[1].load(), g_stalledWait[2].load(), g_stalledWait[3].load());
                 RuntimeLog("[cp] packets %llu fences %llu ib %llu irq %llu unhandled:%s\n",
                     (unsigned long long)st.packets, (unsigned long long)st.fences, (unsigned long long)st.indirect,
                     (unsigned long long)st.interrupts, line.c_str());

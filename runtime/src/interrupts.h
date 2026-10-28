@@ -9,8 +9,8 @@ struct PPCContext;
 constexpr uint32_t kVblankSource = 0;
 constexpr uint32_t kCpInterruptSource = 1;
 
-void InterruptsQueue(uint32_t source);
-void InterruptsDeliverForTest(PPCContext& ctx, uint32_t source);
+void InterruptsQueue(uint32_t source, uint32_t cpu);
+void InterruptsDeliverForTest(PPCContext& ctx, uint32_t source, uint32_t cpu);
 // Host thread with its own guest context: queued interrupts, then a vsync every 1/60 s.
 void InterruptsStart();
 

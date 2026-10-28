@@ -14,5 +14,5 @@ struct CpStats
 bool CommandProcessorTick(CpStats* stats);
 void CommandProcessorReset();
 void CommandProcessorStart();
-void CommandProcessorSetInterruptSink(std::function<void(uint32_t source)> sink);
+void CommandProcessorSetInterruptSink(std::function<void(uint32_t source, uint32_t cpu)> sink);
 uint32_t GpuRegister(uint32_t index);

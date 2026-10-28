@@ -1,4 +1,5 @@
 #include "check.h"
+#include <vector>
 #include "guest_memory.h"
 #include <command_processor.h>
 #include <gpu_state.h>
@@ -22,6 +23,17 @@ static void Emit(uint32_t v) { GuestStore32(kRing + g_w++ * 4, v); }
 static void Publish() { GuestStore32(kGpuRegBase + kRegCpRbWptr * 4, g_w); }
 
 // Review Focus: no ring yet (early boot) -> idle, nothing touched.
+// Review Focus: display registers D3D reads over MMIO have their Xenia values after reset
+// (D3D divides by the viewport height in 0x1961).
+TEST(cp_reset_seeds_display_registers)
+{
+    TestGuestBase();
+    GuestStore32(kGpuRegBase + 0x1961 * 4, 0);
+    CommandProcessorReset();
+    CHECK_EQ(GpuRegister(0x1961), 0x050002D0u);
+    CHECK_EQ(GpuRegister(0x194C), 0x2D0u);
+}
+
 TEST(cp_idle_without_ring)
 {
     TestGuestBase();
@@ -104,6 +116,55 @@ TEST(cp_indirect_nesting_limited)
     CHECK(st.skipped >= 1ull);
 }
 
+// Review Focus: a wait inside an IB stalls the ring too (D3D: SCRATCH callback, WAIT, INTERRUPT,
+// WAIT, SCRATCH reset), and the IB resumes after the wait without re-running earlier packets.
+TEST(cp_wait_inside_indirect_buffer_stalls_and_resumes)
+{
+    SetupRing();
+    GuestStore32(0xA0681700, 0);
+    const uint32_t ib = 0xA0050000;
+    uint32_t k = 0;
+    auto ibEmit = [&](uint32_t v) { GuestStore32(ib + k++ * 4, v); };
+    ibEmit(0xC0005400); ibEmit(4);                                                        // INTERRUPT
+    ibEmit(0xC0043C00); ibEmit(0x13); ibEmit(0x00681702); ibEmit(5); ibEmit(0xFFFFFFFF); ibEmit(10); // WAIT mem == 5
+    ibEmit(0xC0025800); ibEmit(4); ibEmit(0x0068170E); ibEmit(0x99);                      // EVENT_WRITE_SHD
+    g_w = 0;
+    Emit(0xC0013F00); Emit(0x00050000); Emit(k);
+    Publish();
+    CpStats st{};
+    CommandProcessorTick(&st);
+    CHECK_EQ(GuestLoad32(kRptr), 0u);
+    CHECK_EQ(GuestLoad32(0xA068170C), 0u);
+    CommandProcessorTick(&st);
+    CHECK_EQ(GuestLoad32(0xA068170C), 0u);
+    GuestStore32(0xA0681700, 5);
+    CommandProcessorTick(&st);
+    CHECK_EQ(GuestLoad32(0xA068170C), 0x99u);
+    CHECK_EQ(GuestLoad32(kRptr), 3u);
+    CHECK_EQ(st.interrupts, 1ull);
+}
+
+// Review Focus: SCRATCH_REG0-7 writes are mirrored big-endian to SCRATCH_ADDR + 4*i when the
+// SCRATCH_UMSK bit is set (D3D waits on that memory); masked-off registers are not.
+TEST(cp_scratch_register_writeback)
+{
+    SetupRing();
+    GuestStore32(kGpuRegBase + 0x1DC * 4, 0x3);        // SCRATCH_UMSK: regs 0, 1
+    GuestStore32(kGpuRegBase + 0x1DD * 4, 0x00681360); // SCRATCH_ADDR (physical)
+    GuestStore32(0xA0681368, 0);
+    g_w = 0;
+    Emit(0x00000579); Emit(1);          // SCRATCH_REG1 = 1
+    Emit(0x0000057A); Emit(7);          // SCRATCH_REG2 = 7 (masked off)
+    Emit(0xC0043C00); Emit(0x13); Emit(0x00681366); Emit(1); Emit(0xFFFFFFFF); Emit(10); // WAIT mem == 1
+    Emit(0xC0025800); Emit(4); Emit(0x0068170E); Emit(0x42);
+    Publish();
+    CpStats st{};
+    CommandProcessorTick(&st);
+    CHECK_EQ(GuestLoad32(0xA0681364), 1u);
+    CHECK_EQ(GuestLoad32(0xA0681368), 0u);
+    CHECK_EQ(GuestLoad32(0xA068170C), 0x42u);
+}
+
 TEST(cp_wait_reg_mem_blocks_until_satisfied)
 {
     SetupRing();
@@ -126,14 +187,17 @@ TEST(cp_wait_reg_mem_blocks_until_satisfied)
 TEST(cp_interrupt_packet_reaches_sink)
 {
     SetupRing();
-    uint32_t got = 0xFFFFFFFF;
-    CommandProcessorSetInterruptSink([&](uint32_t source) { got = source; });
+    // One delivery per CPU in the mask (the D3D handler clears its own CPU's bit in scratch 0).
+    std::vector<uint32_t> got;
+    CommandProcessorSetInterruptSink([&](uint32_t source, uint32_t cpu) { got.push_back(source << 8 | cpu); });
     g_w = 0;
-    Emit(0xC0005400); Emit(1); // CP_INTERRUPT, cpu mask
+    Emit(0xC0005400); Emit(0x5); // CP_INTERRUPT, cpu mask: cpus 0 and 2
     Publish();
     CpStats st{};
     CommandProcessorTick(&st);
-    CHECK_EQ(got, 1u);
+    CHECK_EQ(got.size(), size_t(2));
+    CHECK_EQ(got[0], 0x100u);
+    CHECK_EQ(got[1], 0x102u);
     CommandProcessorSetInterruptSink(nullptr);
 }
 
