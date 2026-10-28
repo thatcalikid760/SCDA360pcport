@@ -44,5 +44,5 @@ bool IsResolve(const RegisterFile& regs) { return (regs[kRegRbModeControl] & 7) 
 Resolve DecodeResolve(const RegisterFile& r)
 {
     return { r[kRegRbCopyControl], r[kRegRbCopyDestBase], r[kRegRbCopyDestPitch], r[kRegRbCopyDestInfo],
-             r[kRegRbSurfaceInfo], r[kRegRbColorInfo], r[kRegRbDepthInfo] };
+             r[kRegRbSurfaceInfo], r[kRegRbColorInfo], r[kRegRbDepthInfo], r[kRegRbColorClear] };
 }

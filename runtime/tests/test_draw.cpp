@@ -51,6 +51,16 @@ TEST(resolve_detected_and_decoded)
     CHECK_EQ(r.destPitch, 1280u | (720u << 16));
     CHECK_EQ(r.destInfo, 0x86u);
     CHECK_EQ(r.surfaceInfo, 1280u);
+    CHECK(ResolveCopies(r));
+    CHECK(ResolveClearsColor(r));
+    CHECK_EQ(ResolveWidth(r), 1280u);
+    CHECK_EQ(ResolveHeight(r), 720u);
+    regs->Set(0x231E, 0x80FF0000);
+    regs->Set(0x2318, 0x300000); // copy_command 3: clear only
+    r = DecodeResolve(*regs);
+    CHECK_EQ(r.colorClear, 0x80FF0000u);
+    CHECK(!ResolveCopies(r));
+    CHECK(!ResolveClearsColor(r));
     regs->Set(0x2208, 4);
     CHECK(!IsResolve(*regs));
 }

@@ -103,10 +103,12 @@ SCDA_IMPORT(VdGetSystemCommandBuffer)
 
 // VdSwap(BufferPtr, ...): the game reserved 64 ring dwords at BufferPtr for the kernel's swap
 // packet. Fill them with one NOP carrying kSwapMarker so the command processor flags the swap
-// when it reaches this point in the stream.
+// when it reaches this point in the stream. r4 points at the frontbuffer's texture fetch
+// constant; its base address (dword 1) follows the marker.
 SCDA_IMPORT(VdSwap)
 {
     uint32_t buffer = ctx.r3.u32;
+    uint32_t frontbuffer = ctx.r4.u32 ? GuestLoad32(ctx.r4.u32 + 4) & 0xFFFFF000 : 0;
     // Frame pacing: at most 2 swaps in flight ahead of vsync, as the hardware queue allows.
     // Bounded wait so a stopped interrupt thread can never deadlock the caller.
     for (int i = 0; i < 100 && Gpu().swapsSubmitted.load() > Gpu().swapsSeen.load() + 2; i++)
@@ -114,7 +116,8 @@ SCDA_IMPORT(VdSwap)
     Gpu().swapsSubmitted++;
     GuestStore32(buffer, 0xC0000000u | (62u << 16) | (0x10u << 8)); // type 3 NOP, 63 payload dwords
     GuestStore32(buffer + 4, kSwapMarker);
-    for (uint32_t i = 2; i < 64; i++)
+    GuestStore32(buffer + 8, frontbuffer);
+    for (uint32_t i = 3; i < 64; i++)
         GuestStore32(buffer + i * 4, 0);
     ctx.r3.u64 = 0;
 }

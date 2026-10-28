@@ -253,7 +253,7 @@ static bool ExecutePacket(uint32_t h, const Pm4Payload& p, int depth, CpStats& s
         {
             Gpu().swapCounter++;
             Gpu().pendingSwaps++;
-            Frames().EndFrame();
+            Frames().EndFrame(count >= 2 ? p(1) & 0x1FFFFFFF : 0); // VdSwap: frontbuffer address
         }
         return true;
     case kOpSetConstant:

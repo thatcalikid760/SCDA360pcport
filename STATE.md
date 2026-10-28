@@ -29,14 +29,16 @@
 - Phase 2b-1: window + D3D11 present (settings.ini Scale/Mode/VSync); CP decodes draws/resolves/IM_LOAD. Menu frame 1000: 27 auto-index draws (24x point list, 2x tri strip, 1x rect list), 8 shaders (5 VS/3 PS, 36-108 B), 1 resolve -> phys 0x00682000 1280x720 info 0x01000300 surf 0x14000500 (frontbuffer).
 - Phase 2b-2 (34a9e40, f660c4b): raw Xenos ucode -> SM5 HLSL (`gpu/xenos/translate.cpp`, XenosRecomp fork) + cache `gpu/shader_compiler.cpp` (memory + `%LOCALAPPDATA%\SCDARecomp\shadercache\*.v1.dxbc`). Menu: compiled 7 failed 0 (8 blobs, 1 unused by draws). `SCDA_DUMP_HLSL=<dir>`.
 - Phase 2b-3a (993bc71 + follow-up): FIRST IMAGE. Loading screen renders (frame 1200: drawn 2, skipped 25). `gpu/draw_state.*` (constants, fetch/texture decode, tiling), renderer: one 1280x720 target, VS/PS + b0-b2, t96 guest-memory raw buffer, k_8/k_8_8_8_8 textures, DMA indices. Vertex+index ranges snapshotted on CP thread (`Frame::vertexData`). Translator v3 (`XenosViewport` epilogue).
+- Phase 2b-3b part 1: resolves run in stream order (`Resolve::drawIndex`), copy target -> persistent host texture by destBase (sampled instead of guest memory), colour clear (copy_command `0x2318`>>20&3, 3 = clear only; bit 8; value `0x231E`, red low byte). VdSwap r4 fetch const -> frontbuffer in marker dword 2 -> `Frame::frontbuffer`; presented + dumped. Menu: 1 resolve @draw 27 to 0x00682000 (copy+clear 0).
+- Run: `_install\scda_dev.exe` with NO args (argv[1] = image path; extra args break the load).
 - Debug aids: `SCDA_WATCHDOG=<s>`, `SCDA_TRACE_MEM=1`, `SCDA_DUMP_SHADERS`, `SCDA_TRACE_FRAME=<n>`, `SCDA_DUMP_FRAME=<n>` (BMP of target; convert with `.venv` Pillow), `SCDA_D3D_DEBUG=1` (layer not installed here: falls back), `SCDA_TRAP_ALIAS=1`; crash log = symbol + generated line + guest regs + all guest stacks (scda.pdb).
 
 ## Current blocker
-- 2b-3 rest: no resolves/EDRAM (target cleared each frame, draws/resolves unordered in `Frame`), skipped: points, rect lists (clears), fans/quads, immediate indices; textures only k_8/k_8_8_8_8 (spinner = DXT4_5 fmt 20 -> white). Fixed sampler/raster/blend state.
+- 2b-3 rest: resolve = full rect from target origin, all RGBA8, no depth; target still force-cleared black each frame. Skipped: points, rect lists (clears), fans/quads, immediate indices; textures only k_8/k_8_8_8_8 (spinner = DXT4_5 fmt 20 -> white). Fixed sampler/raster/blend state.
 - Run new builds from `_install\` (needs `game\` next to the exe): copy `runtime\build\scda.exe` -> `_install\scda_dev.exe`.
 
 ## Next
-1. 2b-3b: draw/resolve order (draw index in `Resolve`), resolve copies target -> texture by destBase, present frontbuffer resolve; rect lists (GS or CPU expand); DXT1/DXT4_5; blend/cull/depth from regs; mini-vfetch stride (VS 10e10ea9: stride 0 on 2nd fetch) before points.
+1. 2b-3b rest: rect lists (GS or CPU expand); DXT1/DXT4_5; blend/cull/depth from regs; mini-vfetch stride (VS 10e10ea9: stride 0 on 2nd fetch) before points.
 2. Input: XamInputGetState -> XInput.
 3. Kernel/XAM HLE: XAM content/profile, XNotify, ExGetXConfigSetting, RtlImageXexHeaderField; launch-data intercept (capture in-process, restart title loop, never exit).
 4. Audio (XMA/XAudio). Installer must write `game\SC4_Offline.img` + `.xexhdr` (does not yet).

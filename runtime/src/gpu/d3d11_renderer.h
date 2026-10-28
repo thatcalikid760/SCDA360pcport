@@ -26,7 +26,12 @@ public:
     // Draws executed / skipped (unsupported primitive, index source or shader) in the last frame.
     uint32_t LastDrawn() const { return m_lastDrawn; }
     uint32_t LastSkipped() const { return m_lastSkipped; }
-    // Writes the render target as a 32-bit BMP after the next frame (SCDA_DUMP_FRAME, tests).
+    // Resolves that copied the target in the last frame; whether it presented the swap's frontbuffer
+    // resolve (else the render target itself).
+    uint32_t LastResolved() const { return m_lastResolved; }
+    bool LastPresentedFrontbuffer() const { return m_lastFrontbuffer; }
+    // Writes the presented image (frontbuffer resolve, else the render target) as a 32-bit BMP
+    // after the next frame (SCDA_DUMP_FRAME, tests).
     void DumpNextFrame(std::string path) { m_dumpPath = std::move(path); }
     // Reads one RGBA8 texel of the render target (tests); 0 when unavailable.
     uint32_t ReadTargetTexel(uint32_t x, uint32_t y);
@@ -36,10 +41,11 @@ private:
     void ReleaseAll();
     bool CreateDrawResources();
     void ExecuteDraw(const DrawCall& d, const Frame& frame);
+    void ExecuteResolve(const Resolve& r);
     void BindRegisterState(const RegisterFile& regs);
     void UploadVertexMemory(const RegisterFile& regs, const std::bitset<96>& slots, const Frame& frame);
-    void Blit();
-    void Dump(const std::string& path);
+    void Blit(ID3D11ShaderResourceView* source);
+    void Dump(const std::string& path, ID3D11Texture2D* source);
     HWND m_hwnd = nullptr;
     uint32_t m_width = 0, m_height = 0;
     ID3D11Device* m_device = nullptr;
@@ -49,6 +55,7 @@ private:
     std::unique_ptr<DrawResources> m_draw;
     bool m_vsync = true;
     uint64_t m_presented = 0;
-    uint32_t m_lastDrawn = 0, m_lastSkipped = 0;
+    uint32_t m_lastDrawn = 0, m_lastSkipped = 0, m_lastResolved = 0;
+    bool m_lastFrontbuffer = false;
     std::string m_dumpPath;
 };

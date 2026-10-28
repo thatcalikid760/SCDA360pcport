@@ -15,7 +15,8 @@ struct FrameStats
 struct Frame
 {
     std::vector<DrawCall> draws;
-    std::vector<Resolve> resolves;
+    std::vector<Resolve> resolves; // in stream order; Resolve::drawIndex places each among draws
+    uint32_t frontbuffer = 0;      // guest physical address of the surface this frame's swap shows
     // Guest vertex and DMA index ranges the draws read, copied when the draw was submitted
     // (MemoryRangeKey -> bytes as in guest memory): the CPU reuses its rings long before the
     // renderer gets here. shortcut: first copy of a (range, size) wins within a frame.
@@ -51,12 +52,15 @@ public:
     void AddResolve(Resolve r)
     {
         std::lock_guard lock(m_mutex);
+        r.drawIndex = uint32_t(m_open.draws.size());
         m_open.resolves.push_back(r);
     }
-    // Closes the current frame (called at the swap marker, in stream order).
-    void EndFrame()
+    // Closes the current frame (called at the swap marker, in stream order); frontbuffer is the
+    // guest physical address VdSwap presents (0 = unknown).
+    void EndFrame(uint32_t frontbuffer = 0)
     {
         std::lock_guard lock(m_mutex);
+        m_open.frontbuffer = frontbuffer;
         m_open.stats.draws = uint32_t(m_open.draws.size());
         m_open.stats.resolves = uint32_t(m_open.resolves.size());
         m_open.stats.shaders = uint32_t(ShaderCacheSize());

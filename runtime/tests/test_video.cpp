@@ -64,3 +64,17 @@ TEST(hsio_training_reports_success)
     __imp__VdIsHSIOTrainingSucceeded(ctx, g_base);
     CHECK_EQ(ctx.r3.u64, 1ull);
 }
+
+// VdSwap's marker carries the frontbuffer address from the texture fetch constant at r4.
+TEST(swap_marker_carries_frontbuffer)
+{
+    TestGuestBase();
+    PPCContext ctx{};
+    GuestStore32(0x40003004, 0x00682000 | 0x86); // fetch dword1: base address | format/endian
+    ctx.r3.u64 = 0x40004000;
+    ctx.r4.u64 = 0x40003000;
+    __imp__VdSwap(ctx, g_base);
+    CHECK_EQ(GuestLoad32(0x40004004), kSwapMarker);
+    CHECK_EQ(GuestLoad32(0x40004008), 0x00682000u);
+    Gpu().swapsSubmitted = 0;
+}

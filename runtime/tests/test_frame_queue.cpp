@@ -72,7 +72,7 @@ TEST(cp_draws_and_swap_form_a_frame)
     uint32_t w = 0;
     auto E = [&](uint32_t v) { GuestStore32(ring + w++ * 4, v); };
     E(0xC0012200); E(0); E(4 | (2 << 6) | (6u << 16));                      // DRAW_INDX auto, 6 indices
-    E(0xC03E1000); E(kSwapMarker); for (int i = 0; i < 62; i++) E(0);         // VdSwap slot
+    E(0xC03E1000); E(kSwapMarker); E(0x00682000); for (int i = 0; i < 61; i++) E(0); // VdSwap slot
     GuestStore32(kGpuRegBase + kRegCpRbWptr * 4, w);
     CpStats st{};
     CommandProcessorTick(&st);
@@ -81,6 +81,7 @@ TEST(cp_draws_and_swap_form_a_frame)
     CHECK_EQ(f.stats.draws, 1u);
     CHECK_EQ(f.draws[0].indexCount, 6u);
     CHECK(f.draws[0].regs != nullptr);
+    CHECK_EQ(f.frontbuffer, 0x00682000u);
     Gpu().pendingSwaps = 0;
 }
 
@@ -95,4 +96,19 @@ TEST(open_frame_draws_are_capped)
     CHECK(q.PopFrame(f));
     CHECK_EQ(f.draws.size(), FrameQueue::kMaxDrawsPerFrame);
     CHECK_EQ(q.DroppedDraws(), 10ull);
+}
+
+// Resolves keep their place in the draw stream; the swap carries the frontbuffer address.
+TEST(resolve_records_draw_index_and_frontbuffer)
+{
+    FrameQueue q(3);
+    q.AddResolve(Resolve{});
+    q.AddDraw(DrawCall{});
+    q.AddResolve(Resolve{});
+    q.EndFrame(0x00682000);
+    Frame f;
+    CHECK(q.PopFrame(f));
+    CHECK_EQ(f.resolves[0].drawIndex, 0u);
+    CHECK_EQ(f.resolves[1].drawIndex, 1u);
+    CHECK_EQ(f.frontbuffer, 0x00682000u);
 }

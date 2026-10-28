@@ -59,6 +59,15 @@ struct DrawResources
     std::unordered_set<uint64_t> uploaded;
     std::unordered_map<uint64_t, ComPtr<ID3D11ShaderResourceView>> textures;
     const RegisterFile* lastRegs = nullptr;
+    // Resolve copies of the target by guest physical destination; kept across frames (the
+    // frontbuffer and render-to-texture results are read after the frame that made them).
+    struct Resolved
+    {
+        ComPtr<ID3D11Texture2D> texture;
+        ComPtr<ID3D11ShaderResourceView> srv;
+        uint32_t width = 0, height = 0;
+    };
+    std::unordered_map<uint32_t, Resolved> resolved;
 };
 
 D3D11Renderer::D3D11Renderer() = default;
@@ -262,7 +271,15 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs)
     {
         srvs[slot] = r.white.Get();
         TextureFetch t = DecodeTextureFetch(regs, slot);
-        if (!t.valid || !TextureBytesPerTexel(t.format))
+        if (!t.valid)
+            continue;
+        // A resolve target: guest memory there does not hold the image, the host copy does.
+        if (auto res = r.resolved.find(t.physical); res != r.resolved.end())
+        {
+            srvs[slot] = res->second.srv.Get();
+            continue;
+        }
+        if (!TextureBytesPerTexel(t.format))
             continue;
         uint64_t key = 1469598103934665603ull;
         for (uint32_t i = 0; i < 6; i++)
@@ -365,7 +382,52 @@ void D3D11Renderer::ExecuteDraw(const DrawCall& d, const Frame& frame)
     m_lastDrawn++;
 }
 
-void D3D11Renderer::Blit()
+// EDRAM resolve: copy the target to the host texture for the destination, then clear it.
+void D3D11Renderer::ExecuteResolve(const Resolve& res)
+{
+    DrawResources& r = *m_draw;
+    if (ResolveCopies(res))
+    {
+        // shortcut: the whole destination from the target origin; the resolve draw's rect and the
+        // window offset are not applied, and every format is kept as RGBA8.
+        uint32_t w = std::min(ResolveWidth(res), kTargetWidth), h = std::min(ResolveHeight(res), kTargetHeight);
+        auto& dst = r.resolved[res.destBase & 0x1FFFF000];
+        if (w && h && (dst.width != w || dst.height != h))
+        {
+            D3D11_TEXTURE2D_DESC td{};
+            td.Width = w;
+            td.Height = h;
+            td.MipLevels = td.ArraySize = 1;
+            td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            td.SampleDesc.Count = 1;
+            td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            dst = {};
+            if (SUCCEEDED(m_device->CreateTexture2D(&td, nullptr, &dst.texture)) &&
+                SUCCEEDED(m_device->CreateShaderResourceView(dst.texture.Get(), nullptr, &dst.srv)))
+            {
+                dst.width = w;
+                dst.height = h;
+            }
+        }
+        if (!dst.srv)
+            r.resolved.erase(res.destBase & 0x1FFFF000);
+        else
+        {
+            D3D11_BOX box{ 0, 0, 0, w, h, 1 };
+            m_context->CopySubresourceRegion(dst.texture.Get(), 0, 0, 0, 0, r.target.Get(), 0, &box);
+            m_lastResolved++;
+        }
+    }
+    if (ResolveClearsColor(res))
+    {
+        const uint32_t c = res.colorClear;
+        const float color[4] = { (c & 0xFF) / 255.0f, ((c >> 8) & 0xFF) / 255.0f, ((c >> 16) & 0xFF) / 255.0f, (c >> 24) / 255.0f };
+        m_context->ClearRenderTargetView(r.targetRtv.Get(), color);
+    }
+    r.lastRegs = nullptr; // texture bindings may now point at a new resolve
+}
+
+void D3D11Renderer::Blit(ID3D11ShaderResourceView* source)
 {
     DrawResources& r = *m_draw;
     ID3D11ShaderResourceView* none = nullptr;
@@ -376,8 +438,7 @@ void D3D11Renderer::Blit()
     m_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_context->VSSetShader(r.blitVs.Get(), nullptr, 0);
     m_context->PSSetShader(r.blitPs.Get(), nullptr, 0);
-    ID3D11ShaderResourceView* src = r.targetSrv.Get();
-    m_context->PSSetShaderResources(0, 1, &src);
+    m_context->PSSetShaderResources(0, 1, &source);
     ID3D11SamplerState* s = r.sampler.Get();
     m_context->PSSetSamplers(0, 1, &s);
     m_context->Draw(3, 0);
@@ -393,7 +454,8 @@ void D3D11Renderer::Present(const Frame& frame)
         if (!m_hwnd || !Init(m_hwnd, m_width, m_height, m_vsync))
             return;
     }
-    m_lastDrawn = m_lastSkipped = 0;
+    m_lastDrawn = m_lastSkipped = m_lastResolved = 0;
+    m_lastFrontbuffer = false;
     // No draws: a dark colour that pulses with the frame number, so a running game is visibly
     // distinct from a hung one.
     float pulse = float(frame.stats.frame % 120) / 120.0f;
@@ -423,19 +485,28 @@ void D3D11Renderer::Present(const Frame& frame)
         m_context->VSSetConstantBuffers(0, 3, cbs);
         m_context->PSSetConstantBuffers(0, 3, cbs);
         r.lastRegs = nullptr;
-        for (auto& d : frame.draws)
-            ExecuteDraw(d, frame);
+        // Draws and resolves in stream order: resolve k runs before draw resolves[k].drawIndex.
+        size_t next = 0;
+        for (size_t i = 0; i <= frame.draws.size(); i++)
+        {
+            for (; next < frame.resolves.size() && frame.resolves[next].drawIndex <= i; next++)
+                ExecuteResolve(frame.resolves[next]);
+            if (i < frame.draws.size())
+                ExecuteDraw(frame.draws[i], frame);
+        }
         r.uploaded.clear();
         r.textures.clear();
         ID3D11ShaderResourceView* none[32] = {};
         m_context->VSSetShaderResources(0, 32, none);
         m_context->PSSetShaderResources(0, 32, none);
+        auto front = frame.frontbuffer ? r.resolved.find(frame.frontbuffer & 0x1FFFF000) : r.resolved.end();
+        m_lastFrontbuffer = front != r.resolved.end();
         if (!m_dumpPath.empty())
         {
-            Dump(m_dumpPath);
+            Dump(m_dumpPath, m_lastFrontbuffer ? front->second.texture.Get() : r.target.Get());
             m_dumpPath.clear();
         }
-        Blit();
+        Blit(m_lastFrontbuffer ? front->second.srv.Get() : r.targetSrv.Get());
     }
     HRESULT hr = m_swapChain->Present(m_vsync ? 1 : 0, 0);
     if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)
@@ -492,17 +563,19 @@ uint32_t D3D11Renderer::ReadTargetTexel(uint32_t x, uint32_t y)
     return texels.empty() ? 0 : texels[size_t(y) * kTargetWidth + x];
 }
 
-void D3D11Renderer::Dump(const std::string& path)
+void D3D11Renderer::Dump(const std::string& path, ID3D11Texture2D* source)
 {
-    std::vector<uint32_t> texels = ReadTarget(m_device, m_context, m_draw->target.Get());
+    D3D11_TEXTURE2D_DESC td;
+    source->GetDesc(&td);
+    std::vector<uint32_t> texels = ReadTarget(m_device, m_context, source);
     FILE* f = texels.empty() ? nullptr : fopen(path.c_str(), "wb");
     if (!f)
         return;
     BITMAPFILEHEADER fh{};
     BITMAPINFOHEADER ih{};
     ih.biSize = sizeof(ih);
-    ih.biWidth = kTargetWidth;
-    ih.biHeight = -int32_t(kTargetHeight); // top-down
+    ih.biWidth = td.Width;
+    ih.biHeight = -int32_t(td.Height); // top-down
     ih.biPlanes = 1;
     ih.biBitCount = 32;
     fh.bfType = 0x4D42;

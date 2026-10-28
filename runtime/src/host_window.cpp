@@ -111,8 +111,9 @@ static void RenderThread(DisplaySettings s)
                         r[0x4803 + i], r[0x4804 + i], r[0x4805 + i]);
             }
             for (auto& r : frame.resolves)
-                RuntimeLog("[frame] resolve ctrl 0x%08X dest 0x%08X pitch 0x%08X info 0x%08X surf 0x%08X color 0x%08X depth 0x%08X\n",
-                    r.copyControl, r.destBase, r.destPitch, r.destInfo, r.surfaceInfo, r.colorInfo, r.depthInfo);
+                RuntimeLog("[frame] resolve @draw %u ctrl 0x%08X dest 0x%08X pitch 0x%08X info 0x%08X surf 0x%08X color 0x%08X depth 0x%08X clear 0x%08X\n",
+                    r.drawIndex, r.copyControl, r.destBase, r.destPitch, r.destInfo, r.surfaceInfo, r.colorInfo, r.depthInfo, r.colorClear);
+            RuntimeLog("[frame] frontbuffer 0x%08X\n", frame.frontbuffer);
         }
         // SCDA_DUMP_FRAME=<n>: write frame n's render target to scda_frame_<n>.bmp.
         static const long long dumpFrame = getenv("SCDA_DUMP_FRAME") ? atoll(getenv("SCDA_DUMP_FRAME")) : -1;
@@ -120,7 +121,8 @@ static void RenderThread(DisplaySettings s)
             renderer.DumpNextFrame("scda_frame_" + std::to_string(dumpFrame) + ".bmp");
         renderer.Present(frame);
         if ((long long)frame.stats.frame == dumpFrame || (long long)frame.stats.frame == traceFrame)
-            RuntimeLog("[frame] %llu: drawn %u skipped %u\n", (unsigned long long)frame.stats.frame, renderer.LastDrawn(), renderer.LastSkipped());
+            RuntimeLog("[frame] %llu: drawn %u skipped %u resolved %u presented %s\n", (unsigned long long)frame.stats.frame, renderer.LastDrawn(),
+                renderer.LastSkipped(), renderer.LastResolved(), renderer.LastPresentedFrontbuffer() ? "frontbuffer" : "target");
         if (GetTickCount() - lastTitle > 500)
         {
             lastTitle = GetTickCount();
