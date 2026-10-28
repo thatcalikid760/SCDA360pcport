@@ -39,8 +39,8 @@
 
 ## Next
 1. Done (aa09e97): input (XInput + keyboard + `SCDA_AUTOPRESS="40:A"`), local profile, XNotify, XamShowSigninUI, profile settings (not persisted). A on "Sign in" reaches LOAD GAME menu.
-2. NOW: in-process relaunch. Menu path (frames, 30 fps): `SCDA_AUTOPRESS=320:A,460:DOWN,480:A,580:A,700:A` = sign in, LOAD GAME>Mission, Normal, "Iceland - Geothermal Plant" -> XamLoaderSetLaunchData(0x4021B720, 0x3FC) + XamLoaderLaunchTitle(0x820058C8, 0) -> stub returns -> crash. 0ce3f02: menu 14->30 fps (VirtualQuery fast path); `SCDA_PROFILE`, `SCDA_PEEK`.
-3. Kernel/XAM HLE: XAM content/profile, XNotify, ExGetXConfigSetting, RtlImageXexHeaderField; launch-data intercept (capture in-process, restart title loop, never exit).
+2. NOW: in-process relaunch (XamLoaderLaunchTitle still a stub -> crash after menu). Menu path: `SCDA_AUTOPRESS=320:A,460:DOWN,480:A,580:A,700:A` -> launch data `_run\iceland.launch` ("SCDA MAPNAME=01_Intro?...MISSIONDIFF=2 ... -ll -nolog", 0x3FC B; target path = SC4_Offline.xex). Plan (advisor): title on its own host thread; ExCreateThread threads exit at import entry + one "title exit" event in every HLE wait; services (irq 256, audio 257, time thread) pause, not die; suspend+terminate stragglers only outside imports; one reset (memory: unprotect stack guards, zero bump heaps, reload image, XEX hdr, InitDataImports; CP reset incl. g_shadow; GpuState; XAM listeners + g_startupNotified; fs/TLS/handles; renderer flush + resolve map); keep nextId, device, shaders, frame counter.
+3. BLOCKER for missions: `SCDA_LAUNCH_DATA=_run\iceland.launch` boots straight into 01_Intro (opens .lin/.tex/01_Intro.bik, Maps\01_intro.unr missing = normal?), then Bink (0x82C78900, thread 3) reads a byte stream past its end (lbz loop, r1+480 ptr) through decommitted heap into a stack guard at 0x40B80000. Data problem upstream (file read / decommit / decode). Investigate before relaunch is useful.
 4. Audio (XMA/XAudio). Installer must write `game\SC4_Offline.img` + `.xexhdr` (does not yet).
 
 ## Open questions / risks
