@@ -31,7 +31,15 @@ TEST(enumerator_private_structure_is_writable_and_per_handle)
     CHECK_EQ(r.r3.u32, 0u);
     uint32_t priv = GuestLoad32(0x40500004);
     CHECK(priv != 0);
-    GuestStore32(priv + 208, 0x1234); // whole 212 bytes usable
+    // X_KENUMERATOR header {app id, open msg, close msg, user index, item count, flags}, then the
+    // ExtraSize bytes: XTitleServerCreateEnumerator (sub_82C2B308) writes its 212 bytes at +24.
+    CHECK_EQ(GuestLoad32(priv + 0), 252u);
+    CHECK_EQ(GuestLoad32(priv + 4), 0x58039u);
+    CHECK_EQ(GuestLoad32(priv + 8), 0x5803Au);
+    CHECK_EQ(GuestLoad32(priv + 12), 0xFFFFFFFFu);
+    CHECK_EQ(GuestLoad32(priv + 16), 4u);
+    CHECK_EQ(GuestLoad32(priv + 20), 0u);
+    GuestStore32(priv + 24 + 208, 0x1234); // whole 212 extra bytes usable after the header
     Call5(__imp__XamGetPrivateEnumStructureFromHandle, h2, 0x40500008, 0, 0, 0);
     CHECK(GuestLoad32(0x40500008) != priv);
 }

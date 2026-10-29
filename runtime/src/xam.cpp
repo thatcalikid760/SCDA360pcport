@@ -41,7 +41,19 @@ void CompleteOverlapped(uint32_t ov, uint32_t result, uint32_t length)
 SCDA_IMPORT(XamCreateEnumeratorHandle)
 {
     uint32_t extra = ctx.r7.u32, out = ctx.r10.u32;
-    uint32_t priv = GuestAllocVirtual(extra ? extra : 4, 0x10);
+    // Private structure = 24-byte X_KENUMERATOR header {app id, open message, close message, user
+    // index, items per enumerate, flags} followed by ExtraSize bytes: the title's enumerator
+    // wrappers (XTitleServerCreateEnumerator sub_82C2B308) write their state at +24. Allocating
+    // only ExtraSize overran by 24 bytes (page fault at 0x40010000 after a Jail save).
+    constexpr uint32_t kHeader = 24;
+    uint32_t priv = GuestAllocVirtual(kHeader + extra, 0x10);
+    memset(g_base + priv, 0, kHeader + extra);
+    GuestStore32(priv + 0, ctx.r4.u32);
+    GuestStore32(priv + 4, ctx.r5.u32);
+    GuestStore32(priv + 8, ctx.r6.u32);
+    GuestStore32(priv + 12, ctx.r3.u32);
+    GuestStore32(priv + 16, ctx.r8.u32);
+    GuestStore32(priv + 20, ctx.r9.u32);
     uint32_t handle;
     {
         std::lock_guard lock(g_enumMutex);
