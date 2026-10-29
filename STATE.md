@@ -1,6 +1,6 @@
 # STATE — SCDA Xbox 360 static recomp (Title 555307D7)
 ## Root + inputs
-- `C:\SCDA-Recomp`, git branch `phase2-gpu`, GPL-3.0. Remote: github.com/thatcalikid760/SCDA360pcport (private). Tests: `python -I -m unittest discover -s tools/tests -t .` + `tools/test_runtime.bat`.
+- `C:\SCDA-Recomp`, git branch `phase2-gpu`, GPL-3.0. Remote: github.com/thatcalikid760/SCDA360pcport (PUBLIC, default branch main; phase2-gpu fast-forwards it). Tests: `python -I -m unittest discover -s tools/tests -t .` + `tools/test_runtime.bat`.
 - Input `assets/SC4_Offline.xex` (`SC4.pe`). Flat image `assets/SC4_Offline.img` (0x1300000, zero-padded) via `tools/xex_dump --patch`; sha256 01193b25...aea4e in `config/expected_image.txt`. TU3 NOT needed (header-only patch, identical image); `tools/stfs/tu_extract` -> `assets/tu3/` if ever needed. `SC4_Offline.bin` obsolete.
 - Runtime needs `game\SC4_Offline.img` + `game\SC4_Offline.xexhdr` (`xex_dump --out-header`). Launcher cmdline `MAPNAME=menu -ll -nolog` (enables .lin linker FM).
 - Toolchain: VS BuildTools 2022 (cmake 3.31.6, ninja) via `vcvars64.bat`; LLVM clang-cl 23.1.4; git 2.55; python 3.15. `external/XenonRecomp` @ ddd128b + `tools/patches/xenonrecomp_scda.patch` (`git apply` before build).
