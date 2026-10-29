@@ -75,6 +75,11 @@ void MouseToStick(int dx, int dy, float sensitivity, bool invertY, int16_t& rx, 
     ry = stick(invertY ? dy : -dy);
 }
 
+bool StickIdle(int16_t x, int16_t y, int deadzone)
+{
+    return int64_t(x) * x + int64_t(y) * y <= int64_t(deadzone) * deadzone;
+}
+
 std::vector<AutoPress> ParseAutoPress(const char* text)
 {
     static const struct { const char* name; uint16_t button; } kNames[] = {
@@ -205,9 +210,9 @@ SCDA_IMPORT(XamInputGetState)
         g.wButtons |= k.wButtons;
         g.bLeftTrigger |= k.bLeftTrigger;
         g.bRightTrigger |= k.bRightTrigger;
-        if (!connected || (!g.sThumbLX && !g.sThumbLY))
+        if (!connected || StickIdle(g.sThumbLX, g.sThumbLY, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE))
             g.sThumbLX = k.sThumbLX, g.sThumbLY = k.sThumbLY;
-        if (!connected || (!g.sThumbRX && !g.sThumbRY))
+        if (!connected || StickIdle(g.sThumbRX, g.sThumbRY, XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE))
         {
             int16_t rx = 0, ry = 0;
             if (mouse.mouseLook)
@@ -219,6 +224,12 @@ SCDA_IMPORT(XamInputGetState)
             g.wButtons |= wheel > 0 ? XINPUT_GAMEPAD_DPAD_UP : XINPUT_GAMEPAD_DPAD_DOWN;
     }
     AutoPressApply(script, uint32_t(Frames().FramesEnded()), g);
+    // SCDA_TRACE_INPUT=1: every poll (frame, host thread, mouse delta, foreground, sticks/buttons).
+    static const bool trace = getenv("SCDA_TRACE_INPUT") != nullptr;
+    if (trace)
+        RuntimeLog("[input] frame %llu tid %lu dx %d dy %d wheel %d fg %d btn %04x rx %d ry %d lx %d ly %d\n",
+            (unsigned long long)Frames().FramesEnded(), GetCurrentThreadId(), dx, dy, wheel, int(GameWindowFocused()),
+            g.wButtons, g.sThumbRX, g.sThumbRY, g.sThumbLX, g.sThumbLY);
     // The packet number changes whenever the state does.
     static std::mutex m;
     static XINPUT_GAMEPAD last{};

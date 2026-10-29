@@ -68,6 +68,16 @@ TEST(mouse_motion_maps_to_right_stick)
     CHECK(dx == 0 && dy == 0 && wheel == 0);
 }
 
+// A connected pad's resting drift must not lock out the keyboard and mouse.
+TEST(stick_drift_inside_deadzone_is_idle)
+{
+    CHECK(StickIdle(0, 0, XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE));
+    CHECK(StickIdle(1522, -1448, XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE));
+    CHECK(StickIdle(-32768, 0, 0) == false);
+    CHECK(StickIdle(7132, -5398, XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE) == false);
+    CHECK(StickIdle(-32768, -32768, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE) == false);
+}
+
 // SCDA_AUTOPRESS="<frame>:<button>,...": each button held for kAutoPressFrames frames.
 TEST(autopress_script_parses_and_presses)
 {
