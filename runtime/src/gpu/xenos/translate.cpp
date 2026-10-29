@@ -27,8 +27,27 @@ cbuffer SharedConstants : register(b2)
     float4 g_VpOffset;       // PA_CL_VPORT_X/Y/ZOFFSET, w unused
     float4 g_WindowToNdc;    // x, y: 2 / render target size; z, w: window offset in pixels
     uint g_ColorClamp;       // bit n: oCn goes to a 7e3 target (clamped like the EDRAM store)
+    uint g_AlphaFunc;        // RB_COLORCONTROL bits 0-2 (never, <, ==, <=, >, !=, >=, always)
 };
 uint g_SpecConstants() { return g_SpecConstantsValue; }
+// Alpha test against RB_ALPHA_REF: < 0 = kill (fed to clip()).
+float XenosAlphaTest(float a)
+{
+    float r = g_AlphaThreshold;
+    bool ok;
+    switch (g_AlphaFunc)
+    {
+    case 0: ok = false; break;
+    case 1: ok = a < r; break;
+    case 2: ok = a == r; break;
+    case 3: ok = a <= r; break;
+    case 4: ok = a > r; break;
+    case 5: ok = a != r; break;
+    case 6: ok = a >= r; break;
+    default: ok = true; break;
+    }
+    return ok ? 1.0 : -1.0;
+}
 
 // Xenos viewport transform (PA_CL_VTE_CNTL: bits 0-5 scale/offset enables, 8 xy not divided
 // by w, 9 z not divided, 10 exported w is W itself; clear = it already holds 1/W), then window

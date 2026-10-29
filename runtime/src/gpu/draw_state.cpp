@@ -19,12 +19,12 @@ SharedConstants BuildSharedConstants(const RegisterFile& r, uint32_t rtWidth, ui
         c.loops[i] = r[kRegLoopConstants + i];
     for (uint32_t i = 0; i < 192; i++)
         c.fetch[i] = r[kRegFetchConstants + i];
-    // RB_COLORCONTROL bit 3 = alpha test enable; RB_ALPHA_REF 0x210E.
-    // shortcut: every alpha function is treated as GREATER_EQUAL (the translator's clip()).
+    // RB_COLORCONTROL bit 3 = alpha test enable, bits 0-2 = function; RB_ALPHA_REF 0x210E.
     if (r[0x2202] & 8)
     {
         c.specConstants |= 2; // SPEC_CONSTANT_ALPHA_TEST
         c.alphaThreshold = AsFloat(r[0x210E]);
+        c.alphaFunc = r[0x2202] & 7;
     }
     // PA_SU_VTX_CNTL bit 0: pixel centers at 0.5 (OpenGL) vs 0.0 (D3D9); host centers are at 0.5.
     float half = (r[0x2302] & 1) ? 0.0f : 0.5f;

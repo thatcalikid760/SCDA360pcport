@@ -1933,7 +1933,7 @@ void ShaderRecompiler::recompileBody(const be<uint32_t>* code, uint32_t shaderSi
                     out += '{';
 
                     indent();
-                    out += "\tclip(oC0.w - g_AlphaThreshold);\n";
+                    out += "\tclip(XenosAlphaTest(oC0.w));\n";
 
                     indent();
                     out += "}";

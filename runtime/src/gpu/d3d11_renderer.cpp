@@ -795,10 +795,10 @@ void D3D11Renderer::ExecuteDraw(const DrawCall& d, const Frame& frame)
             if (count > 3)
                 used += " " + std::to_string(n);
         }
-        RuntimeLog("[rtrace] draw %u vs %016llx ps %016llx rt %08X/%08X mask %08X zctl %08X zinfo %08X vte %08X zs %08X zo %08X wo %08X sc %08X ib %08X n %u samples%s\n",
+        RuntimeLog("[rtrace] draw %u vs %016llx ps %016llx rt %08X/%08X mask %08X zctl %08X zinfo %08X vte %08X zs %08X zo %08X wo %08X sc %08X cc %08X aref %08X ib %08X n %u samples%s\n",
             m_lastDrawn + m_lastSkipped, (unsigned long long)d.vs->hash, (unsigned long long)d.ps->hash, r.regs[kRegRbSurfaceInfo],
             r.regs[kRegRbColorInfo], r.regs[0x2104], r.regs[0x2200], r.regs[kRegRbDepthInfo], r.regs[0x2206], r.regs[0x2113],
-            r.regs[0x2114], r.regs[0x2080], r.regs[0x2205], d.indexBase, d.indexCount, used.c_str());
+            r.regs[0x2114], r.regs[0x2080], r.regs[0x2205], r.regs[0x2202], r.regs[0x210E], d.indexBase, d.indexCount, used.c_str());
         // SCDA_TRACE_CONSTS=<index base hex>: draws with that index base also log their vertex/index
         // snapshot hashes, draw state, PS c0, bool and vertex fetch constants and VS c0-c255.
         static const uint32_t constsIb = getenv("SCDA_TRACE_CONSTS") ? strtoul(getenv("SCDA_TRACE_CONSTS"), nullptr, 16) : 0;
