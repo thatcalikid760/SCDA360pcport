@@ -26,6 +26,7 @@ cbuffer SharedConstants : register(b2)
     float3 g_VpScale;        // PA_CL_VPORT_X/Y/ZSCALE
     float4 g_VpOffset;       // PA_CL_VPORT_X/Y/ZOFFSET, w unused
     float4 g_WindowToNdc;    // x, y: 2 / render target size; z, w: window offset in pixels
+    uint g_ColorClamp;       // bit n: oCn goes to a 7e3 target (clamped like the EDRAM store)
 };
 uint g_SpecConstants() { return g_SpecConstantsValue; }
 
@@ -232,6 +233,24 @@ TranslateResult TranslateShader(const ShaderBlob& blob)
         return r;
     }
     r.hlsl = std::move(rec.out);
+    if (blob.type == ShaderType::Pixel)
+    {
+        // Wrap main: clamp outputs bound to 7e3 targets (the host target is FP16).
+        size_t at = r.hlsl.find("void main(");
+        if (at != std::string::npos)
+        {
+            r.hlsl.replace(at, 10, "void xenos_main(");
+            r.hlsl += R"HLSL(
+float4 Clamp7e3(float4 c, uint n) { return (g_ColorClamp >> n) & 1 ? float4(clamp(c.rgb, 0.0, 31.875), saturate(c.a)) : c; }
+void main(in float4 iPos : SV_Position, in float4 iT[16] : TEXCOORD0, in bool iFace : SV_IsFrontFace,
+    out float4 oC0 : SV_Target0, out float4 oC1 : SV_Target1, out float4 oC2 : SV_Target2, out float4 oC3 : SV_Target3)
+{
+    xenos_main(iPos, iT, iFace, oC0, oC1, oC2, oC3);
+    oC0 = Clamp7e3(oC0, 0); oC1 = Clamp7e3(oC1, 1); oC2 = Clamp7e3(oC2, 2); oC3 = Clamp7e3(oC3, 3);
+}
+)HLSL";
+        }
+    }
     r.ok = true;
     return r;
 }

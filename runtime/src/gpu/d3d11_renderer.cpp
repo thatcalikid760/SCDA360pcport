@@ -1182,6 +1182,15 @@ static uint32_t TexelToRgba8(DXGI_FORMAT format, const uint8_t* p)
     case DXGI_FORMAT_R32G32_FLOAT:
         memcpy(c, p, 8);
         break;
+    case DXGI_FORMAT_R10G10B10A2_UNORM:
+    {
+        uint32_t t;
+        memcpy(&t, p, 4);
+        for (int i = 0; i < 3; i++)
+            c[i] = ((t >> (10 * i)) & 0x3FF) / 1023.0f;
+        c[3] = (t >> 30) / 3.0f;
+        break;
+    }
     default: // RGBA8
     {
         uint32_t t;

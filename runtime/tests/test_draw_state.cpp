@@ -38,6 +38,13 @@ TEST(shared_constants_viewport_and_offsets)
     CHECK(c.windowToNdc[2] == -8.0f && c.windowToNdc[3] == 16.0f);
     CHECK_EQ(c.specConstants, 2u);
     CHECK(c.alphaThreshold == 0.5f);
+    CHECK_EQ(c.colorClamp, 0u);
+
+    r.Set(0x2001, 3u << 16);       // RT0 2_10_10_10_FLOAT
+    r.Set(0x2004, 0xCu << 16);     // RT2 2_10_10_10_FLOAT_AS_16_16_16_16
+    r.Set(0x2005, 2u << 16);       // RT3 2_10_10_10 (unorm target clamps itself)
+    c = BuildSharedConstants(r, 1280, 720);
+    CHECK_EQ(c.colorClamp, 5u);
 }
 
 TEST(alu_constants_per_stage)
@@ -202,6 +209,7 @@ TEST(topology_and_index_swap)
     CHECK(ExpandToTriangleList(5, { 7, 8, 9, 10 }) == std::vector<uint32_t>({ 7, 8, 9, 7, 9, 10 }));
     CHECK(ExpandToTriangleList(13, { 0, 1, 2, 3, 4 }) == std::vector<uint32_t>({ 0, 1, 2, 0, 2, 3 }));
     CHECK_EQ(HostColorFormat(0), 28u);  // RGBA8
+    CHECK_EQ(HostColorFormat(2), 24u);  // 2_10_10_10 -> R10G10B10A2
     CHECK_EQ(HostColorFormat(3), 10u);  // 2_10_10_10_FLOAT -> RGBA16F
     CHECK_EQ(HostColorFormat(14), 41u); // 32_FLOAT -> R32
     const uint8_t guest[6] = { 0x00, 0x01, 0x00, 0x02, 0x00, 0x03 };

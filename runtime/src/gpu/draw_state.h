@@ -27,8 +27,10 @@ struct SharedConstants
     float vpScale[3];
     float vpOffset[4];
     float windowToNdc[4];
+    uint32_t colorClamp; // bit n: RT n is 7e3 (clamp oCn)
+    uint32_t pad[3];
 };
-static_assert(sizeof(SharedConstants) == 992 && sizeof(SharedConstants) % 16 == 0);
+static_assert(sizeof(SharedConstants) == 1008 && sizeof(SharedConstants) % 16 == 0);
 static_assert(offsetof(SharedConstants, fetch) == 160 && offsetof(SharedConstants, specConstants) == 928);
 static_assert(offsetof(SharedConstants, vte) == 944 && offsetof(SharedConstants, vpOffset) == 960);
 
