@@ -231,6 +231,26 @@ TEST(texture_fetch_slots_from_hlsl)
 }
 
 // RB_BLENDCONTROL0 / RB_COLOR_MASK / RB_BLEND_* -> D3D11 blend enums; PA_SU_SC_MODE_CNTL -> cull.
+// RB_COLOR_CLEAR is packed in the target's format: C0000000 on a 7e3 target is alpha 1, not 0.75.
+TEST(color_clear_unpacks_per_format)
+{
+    float c[4];
+    ColorClearValue(0, 0x80FF0000, 0, c);
+    CHECK(c[0] == 0.0f && c[2] == 1.0f && c[3] == 128 / 255.0f);
+    ColorClearValue(3, 0xC0000000, 0, c);
+    CHECK(c[0] == 0.0f && c[1] == 0.0f && c[2] == 0.0f && c[3] == 1.0f);
+    ColorClearValue(12, 0x3FF, 0, c);
+    CHECK(std::fabs(c[0] - 31.875f) < 1e-4f); // max 7e3 (exp 7, mantissa 127)
+    CHECK_EQ(Float7e3(0x180), 1.0f);          // exp 3, mantissa 0
+    CHECK_EQ(Float7e3(0x40), 0.125f);         // denormal 0x40: 64/128 x 2^-2
+    ColorClearValue(2, 0x3FF | (3u << 30), 0, c);
+    CHECK(c[0] == 1.0f && c[1] == 0.0f && c[3] == 1.0f);
+    ColorClearValue(7, 0x3C000000, 0xBC000000, c); // halves: 0.0 R, 1.0 G | 0.0 B, -1.0 A
+    CHECK(c[0] == 0.0f && c[1] == 1.0f && c[2] == 0.0f && c[3] == -1.0f);
+    ColorClearValue(14, 0x3F000000, 0, c);
+    CHECK(c[0] == 0.5f);
+}
+
 TEST(blend_and_cull_from_registers)
 {
     RegisterFile r;

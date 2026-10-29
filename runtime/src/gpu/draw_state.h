@@ -129,5 +129,12 @@ std::vector<uint32_t> ExpandToTriangleList(uint32_t primType, const std::vector<
 // RGBA8, 32_FLOAT R32, 32_32_FLOAT R32G32, everything else (2_10_10_10 variants, 16-bit) RGBA16F.
 uint32_t HostColorFormat(uint32_t guestFormat);
 
+// RB_COLOR_CLEAR (+ _LO) unpacked for the target's RB_COLOR_INFO format (bits 16-19): 8_8_8_8 bytes,
+// 2_10_10_10 unorm, 2_10_10_10_FLOAT 7e3 floats + 2-bit alpha, 16-bit formats from the two
+// registers, 32_FLOAT the raw float. Unknown formats read as 8_8_8_8.
+void ColorClearValue(uint32_t guestFormat, uint32_t clear, uint32_t clearLo, float out[4]);
+// 7e3 float (bits 0-9: 7-bit mantissa, 3-bit exponent, no sign) -> float.
+float Float7e3(uint32_t bits);
+
 // Guest index buffer bytes -> host-order indices (GPU endian mode 0-3 per element).
 void SwapIndices(const uint8_t* guest, uint32_t bytes, uint32_t endian, uint8_t* out);

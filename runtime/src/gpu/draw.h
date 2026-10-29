@@ -39,7 +39,7 @@ enum : uint32_t
     kRegRbColor1Info = 0x2003, kRegRbColor2Info = 0x2004, kRegRbColor3Info = 0x2005,
     kRegRbColorMask = 0x2104, kRegRbModeControl = 0x2208,
     kRegRbCopyControl = 0x2318, kRegRbCopyDestBase = 0x2319, kRegRbCopyDestPitch = 0x231A, kRegRbCopyDestInfo = 0x231B,
-    kRegRbColorClear = 0x231E, kRegRbDepthClear = 0x231D,
+    kRegRbColorClear = 0x231E, kRegRbColorClearLo = 0x231F, kRegRbDepthClear = 0x231D,
 };
 
 enum class IndexSource : uint8_t { Dma = 0, Immediate = 1, Auto = 2 };
@@ -63,8 +63,9 @@ struct Resolve
 {
     // colorInfo: RB_COLOR<n>_INFO of the source render target (copy_src_select, bits 0-2, 0-3).
     uint32_t copyControl, destBase, destPitch, destInfo, surfaceInfo, colorInfo, depthInfo;
-    uint32_t colorClear;    // RB_COLOR_CLEAR: red in the low byte
+    uint32_t colorClear;    // RB_COLOR_CLEAR: the clear colour packed in the target's format (red low)
     uint32_t depthClear;    // RB_DEPTH_CLEAR: bits 8-31 depth, 0-7 stencil
+    uint32_t colorClearLo = 0; // RB_COLOR_CLEAR_LO: B and A of 64-bit formats
     uint32_t drawIndex = 0; // draws submitted before it in the frame (set by FrameQueue)
     // Source rect in surface pixels (x0, y0, x1, y1): the resolve draw's 3 rect-list vertices plus
     // PA_SC_WINDOW_OFFSET when enabled. hasRect false: the vertices were not readable.

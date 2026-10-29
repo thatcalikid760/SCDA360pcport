@@ -999,7 +999,8 @@ void D3D11Renderer::ExecuteResolve(const Resolve& res)
         const uint32_t c = res.colorClear;
         if (TraceResolveOnce((5ull << 60) | res.colorInfo | (uint64_t(c) << 20)))
             RuntimeLog("[resolve] clear src %08X surf %08X value %08X\n", res.colorInfo, res.surfaceInfo, c);
-        const float color[4] = { (c & 0xFF) / 255.0f, ((c >> 8) & 0xFF) / 255.0f, ((c >> 16) & 0xFF) / 255.0f, (c >> 24) / 255.0f };
+        float color[4];
+        ColorClearValue((res.colorInfo >> 16) & 0xF, c, res.colorClearLo, color);
         m_context->ClearRenderTargetView(source->rtv.Get(), color);
     }
     if (ResolveClearsDepth(res))

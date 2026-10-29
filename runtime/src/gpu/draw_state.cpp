@@ -508,6 +508,71 @@ uint32_t HostColorFormat(uint32_t guestFormat)
     }
 }
 
+float Float7e3(uint32_t bits)
+{
+    uint32_t mantissa = bits & 0x7F, exponent = (bits >> 7) & 7;
+    if (!exponent)
+        return mantissa / 128.0f * 0.25f; // denormal: 2^-2 x 0.m
+    return std::ldexp(1.0f + mantissa / 128.0f, int(exponent) - 3);
+}
+
+static float Half(uint32_t h)
+{
+    uint32_t sign = (h >> 15) & 1, exponent = (h >> 10) & 0x1F, mantissa = h & 0x3FF;
+    float v;
+    if (!exponent)
+        v = std::ldexp(float(mantissa), -24);
+    else if (exponent == 31)
+        v = mantissa ? std::nanf("") : INFINITY;
+    else
+        v = std::ldexp(1.0f + mantissa / 1024.0f, int(exponent) - 15);
+    return sign ? -v : v;
+}
+
+void ColorClearValue(uint32_t guestFormat, uint32_t clear, uint32_t clearLo, float out[4])
+{
+    switch (guestFormat)
+    {
+    case 2: case 10: // 2_10_10_10 (and the AS_16_16_16_16 view)
+        for (int i = 0; i < 3; i++)
+            out[i] = ((clear >> (10 * i)) & 0x3FF) / 1023.0f;
+        out[3] = (clear >> 30) / 3.0f;
+        return;
+    case 3: case 12: // 2_10_10_10_FLOAT (7e3)
+        for (int i = 0; i < 3; i++)
+            out[i] = Float7e3(clear >> (10 * i));
+        out[3] = (clear >> 30) / 3.0f;
+        return;
+    case 4: case 6: // 16_16, 16_16_FLOAT
+        out[0] = guestFormat == 6 ? Half(clear & 0xFFFF) : (clear & 0xFFFF) / 65535.0f;
+        out[1] = guestFormat == 6 ? Half(clear >> 16) : (clear >> 16) / 65535.0f;
+        out[2] = 0;
+        out[3] = 1;
+        return;
+    case 5: case 7: // 16_16_16_16, 16_16_16_16_FLOAT
+        out[0] = guestFormat == 7 ? Half(clear & 0xFFFF) : (clear & 0xFFFF) / 65535.0f;
+        out[1] = guestFormat == 7 ? Half(clear >> 16) : (clear >> 16) / 65535.0f;
+        out[2] = guestFormat == 7 ? Half(clearLo & 0xFFFF) : (clearLo & 0xFFFF) / 65535.0f;
+        out[3] = guestFormat == 7 ? Half(clearLo >> 16) : (clearLo >> 16) / 65535.0f;
+        return;
+    case 14: // 32_FLOAT
+        out[0] = std::bit_cast<float>(clear);
+        out[1] = out[2] = 0;
+        out[3] = 1;
+        return;
+    case 15: // 32_32_FLOAT
+        out[0] = std::bit_cast<float>(clear);
+        out[1] = std::bit_cast<float>(clearLo);
+        out[2] = 0;
+        out[3] = 1;
+        return;
+    default: // 8_8_8_8(_GAMMA)
+        for (int i = 0; i < 4; i++)
+            out[i] = ((clear >> (8 * i)) & 0xFF) / 255.0f;
+        return;
+    }
+}
+
 void SwapIndices(const uint8_t* guest, uint32_t bytes, uint32_t endian, uint8_t* out)
 {
     // Endian modes work on whole dwords (8-in-16 on 16-bit indices swaps each index).
