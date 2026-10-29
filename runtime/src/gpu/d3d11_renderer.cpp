@@ -582,7 +582,18 @@ void D3D11Renderer::ExecuteDraw(const DrawCall& d, const Frame& frame)
     DrawResources& r = *m_draw;
     uint32_t topology = HostTopology(d.primType);
     const bool rectList = d.primType == 8;
-    if (!topology || !d.vs || !d.ps || !d.regs || d.source == IndexSource::Immediate || (rectList && !r.rectListGs))
+    // SCDA_SKIP_SHADER=<hex hash>[,..]: skip draws using that VS or PS (finding which draw makes a glitch
+    // when draw order varies between runs).
+    static const std::vector<uint64_t> skipShaders = []
+    {
+        std::vector<uint64_t> v;
+        for (const char* p = getenv("SCDA_SKIP_SHADER"); p && *p; p += strcspn(p, ",") + (p[strcspn(p, ",")] ? 1 : 0))
+            v.push_back(strtoull(p, nullptr, 16));
+        return v;
+    }();
+    const bool skipped = d.vs && d.ps &&
+        std::find_if(skipShaders.begin(), skipShaders.end(), [&](uint64_t h) { return h == d.vs->hash || h == d.ps->hash; }) != skipShaders.end();
+    if (skipped || !topology || !d.vs || !d.ps || !d.regs || d.source == IndexSource::Immediate || (rectList && !r.rectListGs))
     {
         m_lastSkipped++;
         return;
@@ -852,11 +863,19 @@ void D3D11Renderer::Present(const Frame& frame)
                 ExecuteResolve(frame.resolves[next]);
             if (i < std::min(frame.draws.size(), drawLimit))
                 ExecuteDraw(frame.draws[i], frame);
-            // SCDA_DUMP_DRAWS=<dir>,<step>: on a SCDA_DUMP_FRAME frame, RT0 after every step-th draw
-            // (bisecting which draw writes what in one run).
+            // SCDA_DUMP_DRAWS=<dir>,<step>[,<first>,<last>]: on a SCDA_DUMP_FRAME frame, RT0 after every
+            // step-th draw in [first, last] (bisecting which draw writes what in one run).
             static const char* dumpDraws = getenv("SCDA_DUMP_DRAWS");
-            static const size_t step = dumpDraws && strchr(dumpDraws, ',') ? std::max(1ll, atoll(strchr(dumpDraws, ',') + 1)) : 1;
-            if (dumpDraws && !m_dumpPath.empty() && r.last && i % step == 0)
+            static size_t step = 1, first = 0, last = SIZE_MAX;
+            static const bool parsed = [&]
+            {
+                if (const char* c = dumpDraws ? strchr(dumpDraws, ',') : nullptr)
+                    sscanf(c + 1, "%zu,%zu,%zu", &step, &first, &last);
+                step = std::max<size_t>(step, 1);
+                return true;
+            }();
+            (void)parsed;
+            if (dumpDraws && !m_dumpPath.empty() && r.last && i % step == 0 && i >= first && i <= last)
             {
                 char name[64];
                 snprintf(name, sizeof(name), "/draw_%04zu.bmp", i);
