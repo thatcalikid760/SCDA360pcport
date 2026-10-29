@@ -121,8 +121,8 @@ TEST(resolve_rect_from_vertices)
     CHECK_EQ(r.rect[0], 16); CHECK_EQ(r.rect[1], -256); CHECK_EQ(r.rect[3], -32);
 }
 
-// Snapshots share pages; a write after a snapshot changes only the live file.
-TEST(register_file_copy_on_write)
+// A copy is independent of the live file; indices past the block read 0 and ignore writes.
+TEST(register_file_copy_is_independent)
 {
     RegisterFile live;
     live.Set(0x4000, 1);

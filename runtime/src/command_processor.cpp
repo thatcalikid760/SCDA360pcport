@@ -68,7 +68,7 @@ uint32_t GpuRegister(uint32_t index) { return GuestLoad32(kGpuRegBase + index * 
 // Assumes registers change through PM4 (the 360 D3D runtime does); direct guest MMIO stores
 // to 0x7FC80000 bypass the shadow.
 static RegisterFile g_shadow;
-static bool g_regsDirty = true;
+static std::vector<RegisterWrite> g_pendingWrites; // writes since the last draw (Frame::regWrites)
 // Bumped on every write the CPU can observe (see FrameQueue::SetEpoch).
 static uint64_t g_epoch = 1;
 static void BumpEpoch();
@@ -77,7 +77,7 @@ static void SetGpuRegister(uint32_t index, uint32_t v)
     index &= 0x7FFF;
     GuestStore32(kGpuRegBase + index * 4, v);
     g_shadow.Set(index, v);
-    g_regsDirty = true;
+    g_pendingWrites.push_back({ index, v });
     // SCRATCH_REG0-7: mirrored to SCRATCH_ADDR + 4*i for SCRATCH_UMSK bits (D3D polls that memory).
     uint32_t scratch = index - kRegScratch0;
     if (scratch < 8 && (GpuRegister(kRegScratchUmsk) >> scratch & 1))
@@ -121,18 +121,6 @@ static const ShaderBlob* LoadShader(ShaderType type, uint32_t guest, uint32_t dw
     return l.blob;
 }
 
-// Register snapshot shared by consecutive draws until a register changes.
-static std::shared_ptr<const RegisterFile> Snapshot()
-{
-    static std::shared_ptr<const RegisterFile> current;
-    if (g_regsDirty || !current)
-    {
-        current = std::make_shared<const RegisterFile>(g_shadow);
-        g_regsDirty = false;
-    }
-    return current;
-}
-
 // SET_CONSTANT / LOAD_ALU_CONSTANT offset_type: index bits 0-10, type bits 16-23.
 static uint32_t ConstantBase(uint32_t offsetType)
 {
@@ -143,22 +131,21 @@ static uint32_t ConstantBase(uint32_t offsetType)
 
 static void SubmitDraw(DrawCall d)
 {
-    d.regs = Snapshot();
     d.vs = CurrentShader(ShaderType::Vertex);
     d.ps = CurrentShader(ShaderType::Pixel);
-    if (IsResolve(*d.regs))
+    if (IsResolve(g_shadow))
     {
-        Resolve res = DecodeResolve(*d.regs);
+        Resolve res = DecodeResolve(g_shadow);
         MemoryRange range;
         if (d.vs)
         {
             std::bitset<96> slots = ShaderVertexFetchSlots(*d.vs);
             for (uint32_t slot = 0; slot < 96; slot++)
-                if (slots[slot] && VertexFetchRange(*d.regs, slot, range) && range.bytes >= 24)
+                if (slots[slot] && VertexFetchRange(g_shadow, slot, range) && range.bytes >= 24)
                 {
                     const uint8_t* p = (const uint8_t*)GuestPtr(GuestPhysical(range.physical));
                     if (GuestRangeReadable(p, 24))
-                        SetResolveRect(res, *d.regs, p, (*d.regs)[kRegFetchConstants + slot * 2 + 1] & 3);
+                        SetResolveRect(res, g_shadow, p, g_shadow[kRegFetchConstants + slot * 2 + 1] & 3);
                     break;
                 }
         }
@@ -172,7 +159,7 @@ static void SubmitDraw(DrawCall d)
         for (uint32_t slot = 0; slot < 96; slot++)
         {
             MemoryRange range;
-            if (!slots[slot] || !VertexFetchRange(*d.regs, slot, range) || range.bytes > (16u << 20))
+            if (!slots[slot] || !VertexFetchRange(g_shadow, slot, range) || range.bytes > (16u << 20))
                 continue;
             const uint8_t* p = (const uint8_t*)GuestPtr(GuestPhysical(range.physical));
             if (GuestRangeReadable(p, range.bytes))
@@ -185,7 +172,7 @@ static void SubmitDraw(DrawCall d)
         if (GuestRangeReadable(p, d.indexBytes))
             d.indexSnapshot = int32_t(Frames().AddVertexData(MemoryRangeKey({ d.indexBase & 0x1FFFFFFF, d.indexBytes }), p, d.indexBytes));
     }
-    Frames().AddDraw(std::move(d));
+    Frames().AddDraw(std::move(d), g_pendingWrites);
 }
 
 void CommandProcessorReset()
@@ -207,8 +194,9 @@ static std::atomic<bool> g_cpThreadRunning, g_relaunchReset;
 static void ResetForRelaunch()
 {
     memset(GuestPtr(kGpuRegBase), 0, 0x8000 * 4);
-    g_shadow = RegisterFile();
-    g_regsDirty = true;
+    g_shadow.Clear();
+    g_pendingWrites.clear();
+    g_pendingWrites.push_back({ kRegClearAll, 0 });
     for (auto& w : g_stalledWait)
         w = 0;
     g_waitSince = 0;

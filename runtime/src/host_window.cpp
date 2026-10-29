@@ -105,14 +105,31 @@ static void RenderThread(DisplaySettings s)
         traced |= tracing;
         if (tracing)
         {
+            // Register state per draw: the renderer's (end of the last frame) plus this frame's log.
+            RegisterFile regs = renderer.Registers();
+            size_t applied = 0;
+            auto replay = [&](uint32_t end)
+            {
+                for (; applied < end && applied < frame.regWrites.size(); applied++)
+                    if (frame.regWrites[applied].index == kRegClearAll)
+                        regs.Clear();
+                    else
+                        regs.Set(frame.regWrites[applied].index, frame.regWrites[applied].value);
+            };
             for (auto& d : frame.draws)
+            {
+                replay(d.regWritesEnd);
                 RuntimeLog("[frame] draw prim %u src %u idx32 %d count %u base 0x%08X vs %016llx ps %016llx rt 0x%08X/0x%08X mode %u zctl 0x%08X zinfo 0x%08X\n",
                     d.primType, uint32_t(d.source), d.index32, d.indexCount, d.indexBase,
                     (unsigned long long)(d.vs ? d.vs->hash : 0), (unsigned long long)(d.ps ? d.ps->hash : 0),
-                    (*d.regs)[kRegRbSurfaceInfo], (*d.regs)[kRegRbColorInfo], (*d.regs)[kRegRbModeControl] & 7, (*d.regs)[0x2200], (*d.regs)[kRegRbDepthInfo]);
+                    regs[kRegRbSurfaceInfo], regs[kRegRbColorInfo], regs[kRegRbModeControl] & 7, regs[0x2200], regs[kRegRbDepthInfo]);
+            }
+            regs = renderer.Registers();
+            applied = 0;
             for (auto& d : frame.draws)
             {
-                const RegisterFile& r = *d.regs;
+                replay(d.regWritesEnd);
+                const RegisterFile& r = regs;
                 RuntimeLog("[frame]  vte 0x%08X vp %08X %08X %08X %08X %08X %08X winoff 0x%08X scis 0x%08X 0x%08X blend 0x%08X mask 0x%08X\n",
                     r[0x2206], r[0x210F], r[0x2110], r[0x2111], r[0x2112], r[0x2113], r[0x2114], r[0x2080], r[0x2081], r[0x2082], r[0x2201], r[0x2104]);
                 for (uint32_t i = 0; i < 18; i += 6) // fetch dwords 0-17: texture slots 0-2 / vertex slots 0-8

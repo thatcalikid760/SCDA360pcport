@@ -117,10 +117,12 @@ struct DrawResources
         uint64_t hash = 0, lastUsed = 0;
     };
     std::unordered_map<uint64_t, CachedTexture> textureCache;
-    const RegisterFile* lastRegs = nullptr;
-    uint32_t lastTexSlots = 0; // texture slots bound for lastRegs
-    // ALU constant pages last uploaded to b0/b1 (kept alive so a pointer match means same contents).
-    std::shared_ptr<RegisterFile::Page> aluPages[2][1024 / RegisterFile::kPageSize];
+    // Register state replayed from Frame::regWrites; applied = writes of the current frame done.
+    RegisterFile regs;
+    size_t applied = 0;
+    bool stateDirty = true;            // registers changed, or bindings invalidated, since the last bind
+    bool aluDirty[2] = { true, true }; // b0 / b1 constants changed since their last upload
+    uint32_t lastTexSlots = 0;         // texture slots the last bind decoded
     // Resolve copies of the target by guest physical destination; kept across frames (the
     // frontbuffer and render-to-texture results are read after the frame that made them).
     struct Resolved
@@ -474,24 +476,45 @@ void D3D11Renderer::UploadVertexMemory(const DrawCall& d, const Frame& frame)
 }
 
 // texSlots: texture fetch slots (bit n) the draw's shaders sample; only those are decoded and bound.
+const RegisterFile& D3D11Renderer::Registers() const
+{
+    static const RegisterFile none;
+    return m_draw ? m_draw->regs : none;
+}
+
+void D3D11Renderer::ApplyRegisterWrites(const Frame& frame, size_t end)
+{
+    DrawResources& r = *m_draw;
+    end = std::min(end, frame.regWrites.size());
+    for (; r.applied < end; r.applied++)
+    {
+        const RegisterWrite& w = frame.regWrites[r.applied];
+        if (w.index == kRegClearAll)
+        {
+            r.regs.Clear();
+            r.aluDirty[0] = r.aluDirty[1] = true;
+        }
+        else
+        {
+            r.regs.Set(w.index, w.value);
+            if (w.index - kRegAluConstants < 2048)
+                r.aluDirty[(w.index - kRegAluConstants) >> 10] = true;
+        }
+        r.stateDirty = true;
+    }
+}
+
 void D3D11Renderer::BindRegisterState(const RegisterFile& regs, uint32_t texSlots)
 {
     DrawResources& r = *m_draw;
     for (uint32_t pixel = 0; pixel < 2; pixel++)
     {
-        auto& last = r.aluPages[pixel];
-        bool same = true;
-        for (uint32_t p = 0; p < std::size(last); p++)
-        {
-            const auto& page = regs.PageOf(kRegAluConstants + pixel * 1024 + p * RegisterFile::kPageSize);
-            same = same && last[p] == page;
-            last[p] = page;
-        }
-        if (same)
+        if (!r.aluDirty[pixel])
             continue; // b0/b1 already hold these constants
         uint32_t alu[1024];
         CopyAluConstants(regs, pixel != 0, alu);
         m_context->UpdateSubresource(r.constants[pixel].Get(), 0, nullptr, alu, 0, 0);
+        r.aluDirty[pixel] = false;
     }
     SharedConstants shared = BuildSharedConstants(regs, kTargetWidth, kTargetHeight);
     m_context->UpdateSubresource(r.constants[2].Get(), 0, nullptr, &shared, 0, 0);
@@ -714,6 +737,7 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs, uint32_t texSlot
 void D3D11Renderer::ExecuteDraw(const DrawCall& d, const Frame& frame)
 {
     DrawResources& r = *m_draw;
+    ApplyRegisterWrites(frame, d.regWritesEnd);
     uint32_t topology = HostTopology(d.primType);
     const bool rectList = d.primType == 8;
     // SCDA_SKIP_SHADER=<hex hash>[,..]: skip draws using that VS or PS (finding which draw makes a glitch
@@ -727,7 +751,7 @@ void D3D11Renderer::ExecuteDraw(const DrawCall& d, const Frame& frame)
     }();
     const bool skipped = d.vs && d.ps &&
         std::find_if(skipShaders.begin(), skipShaders.end(), [&](uint64_t h) { return h == d.vs->hash || h == d.ps->hash; }) != skipShaders.end();
-    if (skipped || !topology || !d.vs || !d.ps || !d.regs || d.source == IndexSource::Immediate || (rectList && !r.rectListGs))
+    if (skipped || !topology || !d.vs || !d.ps || d.source == IndexSource::Immediate || (rectList && !r.rectListGs))
     {
         m_lastSkipped++;
         return;
@@ -747,8 +771,8 @@ void D3D11Renderer::ExecuteDraw(const DrawCall& d, const Frame& frame)
                 used += " " + std::to_string(n);
         }
         RuntimeLog("[rtrace] draw %u vs %016llx ps %016llx rt %08X/%08X mask %08X samples%s\n", m_lastDrawn + m_lastSkipped,
-            (unsigned long long)d.vs->hash, (unsigned long long)d.ps->hash, (*d.regs)[kRegRbSurfaceInfo], (*d.regs)[kRegRbColorInfo],
-            (*d.regs)[0x2104], used.c_str());
+            (unsigned long long)d.vs->hash, (unsigned long long)d.ps->hash, r.regs[kRegRbSurfaceInfo], r.regs[kRegRbColorInfo],
+            r.regs[0x2104], used.c_str());
     }
     static const std::filesystem::path cacheDir = DefaultShaderCacheDir();
     auto& vs = r.vs[d.vs->hash];
@@ -771,11 +795,11 @@ void D3D11Renderer::ExecuteDraw(const DrawCall& d, const Frame& frame)
         return;
     }
     const uint32_t texSlots = ShaderTextureFetchSlots(*d.vs) | ShaderTextureFetchSlots(*d.ps);
-    if (d.regs.get() != r.lastRegs || (texSlots & ~r.lastTexSlots))
+    if (r.stateDirty || (texSlots & ~r.lastTexSlots))
     {
-        r.lastTexSlots = d.regs.get() == r.lastRegs ? r.lastTexSlots | texSlots : texSlots;
-        BindRegisterState(*d.regs, r.lastTexSlots);
-        r.lastRegs = d.regs.get();
+        r.lastTexSlots = r.stateDirty ? texSlots : r.lastTexSlots | texSlots;
+        BindRegisterState(r.regs, r.lastTexSlots);
+        r.stateDirty = false;
     }
     UploadVertexMemory(d, frame);
     m_context->VSSetShader(vs.Get(), nullptr, 0);
@@ -981,7 +1005,7 @@ void D3D11Renderer::ExecuteResolve(const Resolve& res)
     if (ResolveClearsDepth(res))
         if (ID3D11DepthStencilView* dsv = DepthTargetFor(m_device, m_context, r, EdramDepthKey(res.depthInfo, res.surfaceInfo)))
             m_context->ClearDepthStencilView(dsv, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, ResolveDepthClearValue(res), UINT8(res.depthClear & 0xFF));
-    r.lastRegs = nullptr; // texture bindings may now point at a new resolve
+    r.stateDirty = true; // texture bindings may now point at a new resolve
 }
 
 void D3D11Renderer::Blit(ID3D11ShaderResourceView* source)
@@ -1037,9 +1061,8 @@ void D3D11Renderer::Present(const Frame& frame)
             r.resolved.clear();
             r.textureCache.clear();
             r.last = nullptr;
-            r.lastRegs = nullptr;
-            for (auto& pages : r.aluPages)
-                std::fill(std::begin(pages), std::end(pages), nullptr);
+            r.stateDirty = true;
+            r.aluDirty[0] = r.aluDirty[1] = true;
         }
         // EDRAM surfaces persist across frames; only guest clears (resolves) clear them.
         r.bound = false;
@@ -1055,7 +1078,8 @@ void D3D11Renderer::Present(const Frame& frame)
         ID3D11Buffer* cbs[3] = { r.constants[0].Get(), r.constants[1].Get(), r.constants[2].Get() };
         m_context->VSSetConstantBuffers(0, 3, cbs);
         m_context->PSSetConstantBuffers(0, 3, cbs);
-        r.lastRegs = nullptr;
+        r.stateDirty = true;
+        r.applied = 0;
         // Draws and resolves in stream order: resolve k runs before draw resolves[k].drawIndex.
         // SCDA_DRAW_LIMIT=<n>: run only draws [0, n) (and the resolves before them), then show the
         // last RT0 instead of the frontbuffer (bisecting which pass draws what).
@@ -1086,6 +1110,7 @@ void D3D11Renderer::Present(const Frame& frame)
                 Dump(std::string(dumpDraws, strcspn(dumpDraws, ",")) + name, r.last->texture.Get());
             }
         }
+        ApplyRegisterWrites(frame, frame.regWrites.size()); // draws past SCDA_DRAW_LIMIT still wrote registers
         r.uploaded.clear();
         r.textures.clear();
         if (m_presented % 60 == 0) // drop textures unused for ~10 s

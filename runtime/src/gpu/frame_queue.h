@@ -20,6 +20,9 @@ struct Frame
 {
     std::vector<DrawCall> draws;
     std::vector<Resolve> resolves; // in stream order; Resolve::drawIndex places each among draws
+    // Register writes in stream order; DrawCall::regWritesEnd says how many precede each draw. The
+    // renderer replays them into its own RegisterFile (state carries over from frame to frame).
+    std::vector<RegisterWrite> regWrites;
     uint32_t frontbuffer = 0;      // guest physical address of the surface this frame's swap shows
     // Guest vertex and DMA index ranges the draws read, copied when the draw was submitted: the
     // CPU reuses its buffers long before the renderer gets here. A range gets a new snapshot only
@@ -38,16 +41,20 @@ class FrameQueue
 public:
     static constexpr size_t kMaxDrawsPerFrame = 65536;
 
-    explicit FrameQueue(size_t maxFrames = 3) : m_max(maxFrames) {}
+    explicit FrameQueue(size_t maxFrames = 3) : m_max(maxFrames ? maxFrames : 1) {}
 
     // Visible writes the command processor made to guest memory (fences, scratch mirrors, read
     // pointer, interrupts, swaps). The CPU can only observe that a draw is done through one, so a
     // range read before and after the same epoch cannot have been legally rewritten in between.
     void SetEpoch(uint64_t epoch) { m_epoch = epoch; }
 
-    void AddDraw(DrawCall d)
+    // Submits d after the register writes in pending (moved into the frame's log).
+    void AddDraw(DrawCall d, std::vector<RegisterWrite>& pending)
     {
         std::lock_guard lock(m_mutex);
+        m_open.regWrites.insert(m_open.regWrites.end(), pending.begin(), pending.end());
+        pending.clear();
+        d.regWritesEnd = uint32_t(m_open.regWrites.size());
         if (m_open.draws.size() >= kMaxDrawsPerFrame)
         {
             m_droppedDraws++;
@@ -110,8 +117,14 @@ public:
         m_latest.clear();
         while (m_done.size() > m_max)
         {
+            // Its register writes still happened: they lead the next frame's log.
+            std::vector<RegisterWrite> carry = std::move(m_done.front().regWrites);
             m_done.pop_front();
             m_dropped++;
+            Frame& next = m_done.front();
+            next.regWrites.insert(next.regWrites.begin(), carry.begin(), carry.end());
+            for (auto& d : next.draws)
+                d.regWritesEnd += uint32_t(carry.size());
         }
     }
     bool PopFrame(Frame& out)

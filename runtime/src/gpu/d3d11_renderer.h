@@ -36,6 +36,8 @@ public:
     void DumpNextFrame(std::string path) { m_dumpPath = std::move(path); }
     // Title relaunch (any thread): the next Present drops EDRAM targets and resolve copies first.
     static void RequestReset();
+    // Register state after the last frame executed (SCDA_TRACE_FRAME replays the next frame's log on it).
+    const RegisterFile& Registers() const;
     // Reads one texel (as RGBA8) of the last RT0 drawn or resolved (tests); 0 when unavailable.
     uint32_t ReadTargetTexel(uint32_t x, uint32_t y);
 
@@ -46,6 +48,7 @@ private:
     void ExecuteDraw(const DrawCall& d, const Frame& frame);
     void ExecuteResolve(const Resolve& r);
     void BindRegisterState(const RegisterFile& regs, uint32_t texSlots);
+    void ApplyRegisterWrites(const Frame& frame, size_t end);
     void UploadVertexMemory(const DrawCall& d, const Frame& frame);
     void Blit(ID3D11ShaderResourceView* source);
     void Dump(const std::string& path, ID3D11Texture2D* source);

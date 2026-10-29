@@ -5,6 +5,8 @@
 #include <gpu_state.h>
 #include <runtime.h>
 
+static std::vector<RegisterWrite> none; // draws submitted without register writes
+
 TEST(frame_queue_keeps_order)
 {
     FrameQueue q(3);
@@ -12,7 +14,7 @@ TEST(frame_queue_keeps_order)
     {
         DrawCall d;
         d.indexCount = i + 10;
-        q.AddDraw(std::move(d));
+        q.AddDraw(std::move(d), none);
         q.EndFrame();
     }
     Frame f;
@@ -48,8 +50,8 @@ TEST(frame_queue_drops_oldest_when_full)
 TEST(end_frame_counts_stats)
 {
     FrameQueue q(3);
-    q.AddDraw(DrawCall{});
-    q.AddDraw(DrawCall{});
+    q.AddDraw(DrawCall{}, none);
+    q.AddDraw(DrawCall{}, none);
     q.AddResolve(Resolve{});
     q.EndFrame();
     Frame f;
@@ -80,7 +82,7 @@ TEST(cp_draws_and_swap_form_a_frame)
     CHECK(Frames().PopFrame(f));
     CHECK_EQ(f.stats.draws, 1u);
     CHECK_EQ(f.draws[0].indexCount, 6u);
-    CHECK(f.draws[0].regs != nullptr);
+    CHECK_EQ(f.draws[0].regWritesEnd, uint32_t(f.regWrites.size()));
     CHECK_EQ(f.frontbuffer, 0x00682000u);
     Gpu().pendingSwaps = 0;
 }
@@ -90,7 +92,7 @@ TEST(open_frame_draws_are_capped)
 {
     FrameQueue q(3);
     for (size_t i = 0; i < FrameQueue::kMaxDrawsPerFrame + 10; i++)
-        q.AddDraw(DrawCall{});
+        q.AddDraw(DrawCall{}, none);
     q.EndFrame();
     Frame f;
     CHECK(q.PopFrame(f));
@@ -103,7 +105,7 @@ TEST(resolve_records_draw_index_and_frontbuffer)
 {
     FrameQueue q(3);
     q.AddResolve(Resolve{});
-    q.AddDraw(DrawCall{});
+    q.AddDraw(DrawCall{}, none);
     q.AddResolve(Resolve{});
     q.EndFrame(0x00682000);
     Frame f;
@@ -138,4 +140,27 @@ TEST(vertex_snapshots_are_versioned)
     CHECK_EQ(f.memory[s1].bytes[0], 5);
     // A new frame starts with no versions.
     CHECK_EQ(q.AddVertexData(42, b, 4), 0u);
+}
+
+// Register writes travel with the frame in stream order; a frame dropped by a full queue hands
+// its writes to the next one so the renderer's replayed state stays complete.
+TEST(register_writes_carry_over_dropped_frames)
+{
+    FrameQueue q(1);
+    std::vector<RegisterWrite> pending{ { 0x2000, 1 } };
+    q.AddDraw(DrawCall{}, pending);
+    CHECK(pending.empty());
+    q.EndFrame();
+    pending = { { 0x2001, 2 }, { 0x2002, 3 } };
+    q.AddDraw(DrawCall{}, pending);
+    q.AddDraw(DrawCall{}, pending);
+    q.EndFrame(); // the first frame is dropped
+    Frame f;
+    CHECK(q.PopFrame(f));
+    CHECK_EQ(q.Dropped(), 1ull);
+    CHECK_EQ(f.regWrites.size(), size_t(3));
+    CHECK_EQ(f.regWrites[0].index, 0x2000u);
+    CHECK_EQ(f.regWrites[2].value, 3u);
+    CHECK_EQ(f.draws[0].regWritesEnd, 3u);
+    CHECK_EQ(f.draws[1].regWritesEnd, 3u);
 }

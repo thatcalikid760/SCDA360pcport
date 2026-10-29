@@ -49,10 +49,9 @@ SharedConstants BuildSharedConstants(const RegisterFile& r, uint32_t rtWidth, ui
 
 void CopyAluConstants(const RegisterFile& r, bool pixel, uint32_t out[1024])
 {
-    static_assert(kRegAluConstants % RegisterFile::kPageSize == 0);
-    uint32_t base = kRegAluConstants + (pixel ? 1024 : 0);
-    for (uint32_t i = 0; i < 1024; i += RegisterFile::kPageSize)
-        memcpy(out + i, r.PageOf(base + i)->data(), RegisterFile::kPageSize * 4);
+    const uint32_t base = kRegAluConstants + (pixel ? 1024 : 0);
+    for (uint32_t i = 0; i < 1024; i++)
+        out[i] = r[base + i];
 }
 
 bool VertexFetchRange(const RegisterFile& r, uint32_t slot, MemoryRange& out)

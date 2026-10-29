@@ -7,35 +7,31 @@
 #include <gpu/shader_cache.h>
 #include <pm4.h>
 
-// Host-order register block (0x7FC80000 + index*4), copy-on-write in 256-dword pages:
-// copying a RegisterFile shares every page; Set() on a shared page copies only that page.
+// Host-order register block (0x7FC80000 + index*4). The command processor keeps the live copy and
+// logs every write into the frame (Frame::regWrites); the renderer replays the log into its own.
 class RegisterFile
 {
 public:
-    static constexpr uint32_t kCount = 0x5003, kPageSize = 256, kPages = (kCount + kPageSize - 1) / kPageSize;
-    using Page = std::array<uint32_t, kPageSize>;
+    static constexpr uint32_t kCount = 0x5003;
 
-    RegisterFile()
-    {
-        static const auto zero = std::make_shared<Page>(Page{});
-        pages.fill(zero);
-    }
-    uint32_t operator[](uint32_t i) const { return i < kCount ? (*pages[i / kPageSize])[i % kPageSize] : 0; }
+    uint32_t operator[](uint32_t i) const { return i < kCount ? regs[i] : 0; }
     void Set(uint32_t i, uint32_t v)
     {
-        if (i >= kCount)
-            return;
-        auto& page = pages[i / kPageSize];
-        if (page.use_count() > 1)
-            page = std::make_shared<Page>(*page);
-        (*page)[i % kPageSize] = v;
+        if (i < kCount)
+            regs[i] = v;
     }
-    // Page holding register i: the same pointer in two files means the same contents.
-    const std::shared_ptr<Page>& PageOf(uint32_t i) const { return pages[i / kPageSize]; }
+    void Clear() { regs.fill(0); }
 
 private:
-    std::array<std::shared_ptr<Page>, kPages> pages;
+    std::array<uint32_t, kCount> regs{};
 };
+
+// One register write in stream order. index kRegClearAll zeroes every register (title relaunch).
+struct RegisterWrite
+{
+    uint32_t index, value;
+};
+constexpr uint32_t kRegClearAll = 0xFFFFFFFF;
 
 enum : uint32_t
 {
@@ -60,7 +56,7 @@ struct DrawCall
     int32_t indexSnapshot = -1;                 // DMA: Frame::memory snapshot of the indices
     const ShaderBlob* vs = nullptr;
     const ShaderBlob* ps = nullptr;
-    std::shared_ptr<const RegisterFile> regs;   // shared between draws until registers change
+    uint32_t regWritesEnd = 0;                  // Frame::regWrites[0, regWritesEnd) precede this draw
 };
 
 struct Resolve
