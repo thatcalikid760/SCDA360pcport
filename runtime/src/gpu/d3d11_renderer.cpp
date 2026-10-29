@@ -36,7 +36,20 @@ void main(uint id : SV_VertexID, out float4 pos : SV_Position, out float2 uv : T
 static const char kBlitPs[] = R"HLSL(
 Texture2D t : register(t0);
 SamplerState s : register(s0);
-float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target { return t.Sample(s, uv); }
+// A source larger than the window (internal resolution scale) is box-filtered: n x n taps at the
+// centres of the source texels under the window pixel; otherwise one bilinear tap.
+float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target
+{
+    float w, h;
+    t.GetDimensions(w, h);
+    float2 texels = float2(ddx(uv.x) * w, ddy(uv.y) * h);
+    int2 n = clamp(int2(ceil(texels - 0.01)), 1, 4);
+    float4 sum = 0;
+    for (int y = 0; y < n.y; y++)
+        for (int x = 0; x < n.x; x++)
+            sum += t.SampleLevel(s, uv + ((float2(x, y) + 0.5) / float2(n) - 0.5) * texels / float2(w, h), 0);
+    return sum / float(n.x * n.y);
+}
 )HLSL";
 
 // Resolve copy into a fixed-point destination format: the EDRAM -> memory conversion saturates,
@@ -189,6 +202,7 @@ D3D11Renderer::~D3D11Renderer() { ReleaseAll(); }
 bool D3D11Renderer::Init(HWND hwnd, uint32_t width, uint32_t height, bool vsync, uint32_t scale)
 {
     m_scale = std::clamp<uint32_t>(scale, 1, 4);
+    RuntimeLog("[d3d11] internal resolution %ux%u (scale %u)\n", kTargetWidth * m_scale, 720 * m_scale, m_scale);
     m_vsync = vsync;
     m_hwnd = hwnd;
     m_width = width;
