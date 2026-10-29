@@ -56,7 +56,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_ACTIVATE:
         if (g_mouseLook)
             HoldCursor(hwnd, LOWORD(wp) != WA_INACTIVE);
-        return 0;
+        break; // DefWindowProc gives the window keyboard focus
     case WM_INPUT:
     {
         RAWINPUT raw;
