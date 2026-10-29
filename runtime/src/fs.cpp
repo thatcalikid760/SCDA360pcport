@@ -175,6 +175,7 @@ static uint32_t OpenFile(PPCContext& ctx, uint32_t pHandle, uint32_t access, uin
     if (access & 0x80000001) hostAccess |= GENERIC_READ;  // GENERIC_READ / FILE_READ_DATA
     if (access & 0x40000002) hostAccess |= GENERIC_WRITE; // GENERIC_WRITE / FILE_WRITE_DATA
     if (!hostAccess) hostAccess = GENERIC_READ;
+    if (access & FILE_WRITE_ATTRIBUTES) hostAccess |= FILE_WRITE_ATTRIBUTES;
 
     DWORD attr = GetFileAttributesA(host.c_str());
     bool isDir = attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY);
@@ -357,6 +358,25 @@ SCDA_IMPORT(NtSetInformationFile)
         li.QuadPart = (LONGLONG)GuestLoad64(ctx.r5.u32);
         SetFilePointerEx(h, li, nullptr, FILE_BEGIN);
         SetEndOfFile(h);
+    }
+    else if (cls == 4) // FileBasicInformation: 4x u64 times (0 = keep), u32 attributes
+    {
+        uint32_t in = ctx.r5.u32;
+        FILE_BASIC_INFO bi{};
+        bi.CreationTime.QuadPart = (LONGLONG)GuestLoad64(in + 0x00);
+        bi.LastAccessTime.QuadPart = (LONGLONG)GuestLoad64(in + 0x08);
+        bi.LastWriteTime.QuadPart = (LONGLONG)GuestLoad64(in + 0x10);
+        bi.ChangeTime.QuadPart = (LONGLONG)GuestLoad64(in + 0x18);
+        bi.FileAttributes = GuestLoad32(in + 0x20) & (FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_HIDDEN |
+            FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_NORMAL);
+        RuntimeLog("[fs] set basic info create %llx access %llx write %llx change %llx attr %x\n",
+            bi.CreationTime.QuadPart, bi.LastAccessTime.QuadPart, bi.LastWriteTime.QuadPart, bi.ChangeTime.QuadPart,
+            GuestLoad32(in + 0x20));
+        if (!SetFileInformationByHandle(h, FileBasicInfo, &bi, sizeof(bi)))
+            RuntimeLog("[fs] set basic info failed %lu\n", GetLastError());
+    }
+    else if (cls == 19) // FileAllocationInformation: host allocates on write
+    {
     }
     else
     {
