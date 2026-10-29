@@ -46,8 +46,10 @@ SharedConstants BuildSharedConstants(const RegisterFile& r, uint32_t rtWidth, ui
     }
     // RB_COLOR_INFO / RB_COLOR1-3_INFO format 3 or 0xC (2_10_10_10_FLOAT): the host target is FP16,
     // so the shader clamps to the 7e3 range (rgb [0, 31.875], 2-bit alpha [0, 1]) like the EDRAM store.
+    // SCDA_NO_COLOR_CLAMP=1 turns it off (A/B).
     static constexpr uint32_t kInfo[4] = { 0x2001, 0x2003, 0x2004, 0x2005 };
-    for (uint32_t i = 0; i < 4; i++)
+    static const bool noClamp = getenv("SCDA_NO_COLOR_CLAMP") != nullptr;
+    for (uint32_t i = 0; i < 4 && !noClamp; i++)
     {
         uint32_t format = (r[kInfo[i]] >> 16) & 0xF;
         if (format == 3 || format == 0xC)

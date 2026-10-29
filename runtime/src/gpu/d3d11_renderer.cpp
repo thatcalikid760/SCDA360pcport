@@ -39,6 +39,21 @@ SamplerState s : register(s0);
 float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target { return t.Sample(s, uv); }
 )HLSL";
 
+// Resolve copy into a fixed-point destination format: the EDRAM -> memory conversion saturates,
+// but float host targets hold values past [0, 1] (FP16 7e3 blending overflows the 2-bit alpha).
+static const char kSaturateCs[] = R"HLSL(
+Texture2D<float4> src : register(t0);
+RWTexture2D<float4> dst : register(u0);
+cbuffer Rect : register(b0) { int4 rect; int dy; };
+[numthreads(8, 8, 1)]
+void main(uint3 id : SV_DispatchThreadID)
+{
+    int2 p = int2(rect.xy) + int2(id.xy);
+    if (p.x < rect.z && p.y < rect.w)
+        dst[p + int2(0, dy)] = saturate(src[p]);
+}
+)HLSL";
+
 // Rect lists: 3 corners per rectangle. The corner opposite the longest edge is the right angle;
 // the 4th corner (and its interpolators) is the other two minus it. Layout = translated VS output.
 static const char kRectListGs[] = R"HLSL(
@@ -88,6 +103,8 @@ struct DrawResources
     ComPtr<ID3D11VertexShader> blitVs;
     ComPtr<ID3D11PixelShader> blitPs;
     ComPtr<ID3D11GeometryShader> rectListGs;
+    ComPtr<ID3D11ComputeShader> saturateCs;
+    ComPtr<ID3D11Buffer> saturateRect;
     ComPtr<ID3D11RasterizerState> rasterizer;
     ComPtr<ID3D11SamplerState> sampler;
     ComPtr<ID3D11Buffer> constants[3]; // b0 VS, b1 PS, b2 shared
@@ -129,6 +146,7 @@ struct DrawResources
     {
         ComPtr<ID3D11Texture2D> texture;
         ComPtr<ID3D11ShaderResourceView> srv;
+        ComPtr<ID3D11UnorderedAccessView> uav; // float formats: saturating copies (kSaturateCs)
         uint32_t width = 0, height = 0;
         DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN; // the source target's
         uint32_t rowBytes = 0; // guest bytes per row (RB_COPY_DEST_INFO format x width)
@@ -228,6 +246,13 @@ bool D3D11Renderer::CreateDrawResources()
     auto gs = CompileHlsl(kRectListGs, "gs_5_0", &error);
     if (gs.empty() || FAILED(m_device->CreateGeometryShader(gs.data(), gs.size(), nullptr, &r->rectListGs)))
         printf("[d3d11] rect list shader: %s\n", error.c_str()); // rect lists are then skipped
+    auto cs = CompileHlsl(kSaturateCs, "cs_5_0", &error);
+    D3D11_BUFFER_DESC rb{};
+    rb.ByteWidth = 32;
+    rb.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    if (cs.empty() || FAILED(m_device->CreateComputeShader(cs.data(), cs.size(), nullptr, &r->saturateCs)) ||
+        FAILED(m_device->CreateBuffer(&rb, nullptr, &r->saturateRect)))
+        printf("[d3d11] saturate shader: %s\n", error.c_str()); // resolves then copy unclamped
 
     D3D11_RASTERIZER_DESC rd{};
     rd.FillMode = D3D11_FILL_SOLID;
@@ -945,10 +970,12 @@ void D3D11Renderer::ExecuteResolve(const Resolve& res)
                 td.MipLevels = td.ArraySize = 1;
                 td.Format = sd.Format;
                 td.SampleDesc.Count = 1;
-                td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+                const bool floatTarget = sd.Format != DXGI_FORMAT_R8G8B8A8_UNORM && sd.Format != DXGI_FORMAT_R10G10B10A2_UNORM;
+                td.BindFlags = D3D11_BIND_SHADER_RESOURCE | (floatTarget ? D3D11_BIND_UNORDERED_ACCESS : 0);
                 dst = {};
                 if (SUCCEEDED(m_device->CreateTexture2D(&td, nullptr, &dst.texture)) &&
-                    SUCCEEDED(m_device->CreateShaderResourceView(dst.texture.Get(), nullptr, &dst.srv)))
+                    SUCCEEDED(m_device->CreateShaderResourceView(dst.texture.Get(), nullptr, &dst.srv)) &&
+                    (!floatTarget || SUCCEEDED(m_device->CreateUnorderedAccessView(dst.texture.Get(), nullptr, &dst.uav))))
                 {
                     dst.width = w;
                     dst.height = h;
@@ -977,8 +1004,31 @@ void D3D11Renderer::ExecuteResolve(const Resolve& res)
             y1 = std::min(y1, int32_t(kTargetHeight));
             if (x1 > x0 && y1 > y0)
             {
-                D3D11_BOX box{ UINT(x0), UINT(y0), 0, UINT(x1), UINT(y1), 1 };
-                m_context->CopySubresourceRegion(dst.texture.Get(), 0, UINT(x0), UINT(y0) + dy, 0, source->texture.Get(), 0, &box);
+                const uint32_t destFormat = (res.destInfo >> 7) & 0x3F;
+                if (dst.uav && r.saturateCs && !IsFloatTextureFormat(destFormat))
+                {
+                    // The source is bound as a render target: unbind it before reading it.
+                    m_context->OMSetRenderTargets(0, nullptr, nullptr);
+                    r.bound = false;
+                    const int32_t rect[8] = { x0, y0, x1, y1, int32_t(dy) };
+                    m_context->UpdateSubresource(r.saturateRect.Get(), 0, nullptr, rect, 0, 0);
+                    ID3D11ShaderResourceView* srv = source->srv.Get();
+                    ID3D11UnorderedAccessView* uav = dst.uav.Get();
+                    m_context->CSSetShader(r.saturateCs.Get(), nullptr, 0);
+                    m_context->CSSetConstantBuffers(0, 1, r.saturateRect.GetAddressOf());
+                    m_context->CSSetShaderResources(0, 1, &srv);
+                    m_context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+                    m_context->Dispatch(UINT(x1 - x0 + 7) / 8, UINT(y1 - y0 + 7) / 8, 1);
+                    srv = nullptr;
+                    uav = nullptr;
+                    m_context->CSSetShaderResources(0, 1, &srv);
+                    m_context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+                }
+                else
+                {
+                    D3D11_BOX box{ UINT(x0), UINT(y0), 0, UINT(x1), UINT(y1), 1 };
+                    m_context->CopySubresourceRegion(dst.texture.Get(), 0, UINT(x0), UINT(y0) + dy, 0, source->texture.Get(), 0, &box);
+                }
                 m_lastResolved++;
                 dst.version++;
                 // SCDA_DUMP_RESOLVES=<dir>: on a SCDA_DUMP_FRAME frame, each resolve's destination after the copy.
@@ -987,6 +1037,7 @@ void D3D11Renderer::ExecuteResolve(const Resolve& res)
                 {
                     char name[96];
                     snprintf(name, sizeof(name), "/res_%02u_%08X_y%u.bmp", m_lastResolved, base, dy);
+                    RuntimeLog("[resolve] dump #%u src fmt %u dest fmt %u\n", m_lastResolved, (res.colorInfo >> 16) & 0xF, (res.destInfo >> 7) & 0x3F);
                     Dump(std::string(dumpResolves) + name, dst.texture.Get());
                 }
             }
@@ -1219,6 +1270,21 @@ static std::vector<uint32_t> ReadTarget(ID3D11Device* device, ID3D11DeviceContex
         return out;
     const uint32_t bpp = td.Format == DXGI_FORMAT_R16G16B16A16_FLOAT || td.Format == DXGI_FORMAT_R32G32_FLOAT ? 8 : 4;
     out.resize(size_t(td.Width) * td.Height);
+    // SCDA_RT_STATS=1: log the FP16 maxima (rgb, alpha) of each target read back (dumps squash to 8-bit).
+    static const bool stats = getenv("SCDA_RT_STATS") != nullptr;
+    if (stats && td.Format == DXGI_FORMAT_R16G16B16A16_FLOAT)
+    {
+        float maxRgb = 0, maxA = 0;
+        for (uint32_t y = 0; y < td.Height; y++)
+            for (uint32_t x = 0; x < td.Width * 4; x++)
+            {
+                uint16_t h;
+                memcpy(&h, (uint8_t*)m.pData + size_t(y) * m.RowPitch + size_t(x) * 2, 2);
+                float& mx = (x & 3) == 3 ? maxA : maxRgb;
+                mx = std::max(mx, HalfToFloat(h));
+            }
+        RuntimeLog("[rtstats] %ux%u fp16 max rgb %.3f alpha %.3f\n", td.Width, td.Height, maxRgb, maxA);
+    }
     for (uint32_t y = 0; y < td.Height; y++)
         for (uint32_t x = 0; x < td.Width; x++)
             out[size_t(y) * td.Width + x] = TexelToRgba8(td.Format, (uint8_t*)m.pData + size_t(y) * m.RowPitch + size_t(x) * bpp);
