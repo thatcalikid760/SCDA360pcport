@@ -146,12 +146,6 @@ void TitleForceRelaunch()
     TitleThreadExit();
 }
 
-static std::vector<std::pair<DWORD, TitleThread*>> Snapshot()
-{
-    std::lock_guard lock(g_mutex);
-    return { g_threads.begin(), g_threads.end() };
-}
-
 // The thread must be suspended (or never started).
 static void Kill(DWORD hostId, TitleThread* t)
 {
@@ -170,20 +164,35 @@ void TitleStopAll()
     TitleForceRelaunch(); // idempotent: makes sure stop is set when the manager starts it
     // Threads created suspended that never ran end now. Guest-suspended threads (NtSuspendThread)
     // are resumed so they can reach an exit point.
+    // Suspends happen under g_mutex: threads exit concurrently (stop is already set), and one that
+    // unregistered between a snapshot and our SuspendThread had closed its handle and freed its entry
+    // (likely a reused handle value then suspended an unrelated host thread: the stop froze on ~1 in 6
+    // relaunches before, 0 in 50 after). Kill lists are reserved
+    // first: no allocation while a thread that may hold the heap lock is suspended.
     uint32_t terminated = 0;
-    for (auto [hostId, t] : Snapshot())
+    std::vector<std::pair<DWORD, TitleThread*>> kill;
+    auto suspendAll = [&](auto&& decide)
     {
-        DWORD prev = SuspendThread(t->handle);
-        if (prev == DWORD(-1))
-            continue;
-        if (!t->started && prev >= 1)
+        kill.clear();
+        std::lock_guard lock(g_mutex);
+        kill.reserve(g_threads.size());
+        for (auto& [hostId, t] : g_threads)
         {
-            Kill(hostId, t);
-            terminated++;
-            continue;
+            DWORD prev = SuspendThread(t->handle);
+            if (prev == DWORD(-1))
+                continue;
+            if (decide(t, prev))
+                kill.push_back({ hostId, t }); // stays suspended
+            else
+                for (DWORD n = prev + 1; n; n--) // the guest's suspends and ours
+                    ResumeThread(t->handle);
         }
-        for (DWORD n = prev + 1; n; n--) // the guest's suspends and ours
-            ResumeThread(t->handle);
+    };
+    suspendAll([](TitleThread* t, DWORD prev) { return !t->started && prev >= 1; });
+    for (auto [hostId, t] : kill)
+    {
+        Kill(hostId, t);
+        terminated++;
     }
     // Clean exits first: threads leave at their next import entry or HLE wait.
     ULONGLONG start = GetTickCount64();
@@ -203,21 +212,22 @@ void TitleStopAll()
         RuntimeLog("[title] %zu threads still running after 2 s:\n%s", left, WatchdogReport(g_base).c_str());
     for (int round = 0; round < 60 && left; round++)
     {
-        for (auto [hostId, t] : Snapshot())
+        suspendAll([round](TitleThread* t, DWORD)
         {
-            if (SuspendThread(t->handle) == DWORD(-1))
-                continue;
             CONTEXT c{};
             c.ContextFlags = CONTEXT_CONTROL;
             GetThreadContext(t->handle, &c); // makes the suspend synchronous
             // Last rounds: also inside imports (a thread stuck in a host wait the stop cannot reach).
-            if (t->importDepth.load() == 0 || round >= 50)
-            {
-                Kill(hostId, t);
-                terminated++;
-            }
-            else
-                ResumeThread(t->handle);
+            return t->importDepth.load() == 0 || round >= 50;
+        });
+        // Several may be suspended now: end them all before Kill logs and frees (one could hold the
+        // log or heap lock).
+        for (auto [hostId, t] : kill)
+            TerminateThread(t->handle, 1);
+        for (auto [hostId, t] : kill)
+        {
+            Kill(hostId, t);
+            terminated++;
         }
         {
             std::lock_guard lock(g_mutex);
