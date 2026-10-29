@@ -518,11 +518,12 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs)
             continue;
         }
         static const bool traceResolve = getenv("SCDA_TRACE_RESOLVE") != nullptr;
-        for (auto& e : r.resolved)
-            if (traceResolve && t.physical >= e.first && t.physical < e.first + e.second.rowBytes * e.second.height &&
-                TraceResolveOnce((2ull << 60) | ((m_presented & 0xFFFF) << 40) | (uint64_t(t.physical) << 8) | t.format))
-                RuntimeLog("[resolve] frame %llu fetch %08X fmt %u %ux%u tiled %d inside resolve %08X fmt %u %ux%u (+%u B), not used\n", m_presented, t.physical, t.format,
-                    t.width, t.height, t.tiled, e.first, e.second.destFormat, e.second.width, e.second.height, t.physical - e.first);
+        if (traceResolve)
+            for (auto& e : r.resolved)
+                if (t.physical >= e.first && t.physical < e.first + e.second.rowBytes * e.second.height &&
+                    TraceResolveOnce((2ull << 60) | ((m_presented & 0xFFFF) << 40) | (uint64_t(t.physical) << 8) | t.format))
+                    RuntimeLog("[resolve] frame %llu fetch %08X fmt %u %ux%u tiled %d inside resolve %08X fmt %u %ux%u (+%u B), not used\n", m_presented, t.physical, t.format,
+                        t.width, t.height, t.tiled, e.first, e.second.destFormat, e.second.width, e.second.height, t.physical - e.first);
         if (!TextureElementBytes(t.format))
         {
             // SCDA_DUMP_TEXTURES: each unsupported texture once, with the nearest resolve at or below it.

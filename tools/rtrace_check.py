@@ -21,6 +21,6 @@ for d in sorted(samples):
         if not f:
             continue
         base, fmt, w, h, tiled, rw, rh, rf = f
-        if int(rw) and (int(rw) < int(w) or int(rh) < int(h) or rf != fmt):
+        if int(rw) and ((rw, rh) != (w, h) or rf != fmt):
             print('mismatch', d, ps, s, f)
 print('draws', len(samples))
