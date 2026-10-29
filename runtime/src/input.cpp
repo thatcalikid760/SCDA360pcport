@@ -1,6 +1,7 @@
 // XamInput* and the local profile. Semantics follow Xenia (BSD): one offline profile, signed in
 // locally, in user slot 0; its controller is XInput pad 0 merged with the keyboard (while the game
 // window has focus) and SCDA_AUTOPRESS.
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -71,20 +72,57 @@ std::vector<AutoPress> ParseAutoPress(const char* text)
         for (auto& c : name)
             c = char(toupper((unsigned char)c));
         int frame = atoi(item.c_str());
+        int frames = int(kAutoPressFrames);
+        if (size_t c2 = name.find(':'); c2 != std::string::npos)
+        {
+            frames = atoi(name.c_str() + c2 + 1);
+            name.resize(c2);
+        }
+        if (frame < 0 || frames <= 0)
+            continue;
         for (auto& n : kNames)
-            if (name == n.name && frame >= 0)
-                out.push_back({ uint32_t(frame), n.button });
+            if (name == n.name)
+                out.push_back({ uint32_t(frame), n.button, uint32_t(frames), -1, 0 });
+        static const char* const kAxes[] = { "LX", "LY", "RX", "RY", "LT", "RT" };
+        size_t eq = name.find('=');
+        if (eq == std::string::npos)
+            continue;
+        float value = float(atof(name.c_str() + eq + 1));
+        name.resize(eq);
+        for (int a = 0; a < 6; a++)
+            if (name == kAxes[a] && value >= (a < 4 ? -1.0f : 0.0f) && value <= 1.0f)
+                out.push_back({ uint32_t(frame), 0, uint32_t(frames), a, value });
     }
     return out;
 }
 
+void AutoPressApply(const std::vector<AutoPress>& script, uint32_t frame, XINPUT_GAMEPAD& g)
+{
+    for (auto& p : script)
+    {
+        if (frame < p.frame || frame >= p.frame + p.frames)
+            continue;
+        g.wButtons |= p.buttons;
+        int16_t stick = int16_t(std::lround(p.value * 32767.0f));
+        if (p.value < 0)
+            stick = int16_t(std::lround(p.value * 32768.0f));
+        switch (p.axis)
+        {
+        case 0: g.sThumbLX = stick; break;
+        case 1: g.sThumbLY = stick; break;
+        case 2: g.sThumbRX = stick; break;
+        case 3: g.sThumbRY = stick; break;
+        case 4: g.bLeftTrigger = uint8_t(std::lround(p.value * 255.0f)); break;
+        case 5: g.bRightTrigger = uint8_t(std::lround(p.value * 255.0f)); break;
+        }
+    }
+}
+
 uint16_t AutoPressButtons(const std::vector<AutoPress>& script, uint32_t frame)
 {
-    uint16_t buttons = 0;
-    for (auto& p : script)
-        if (frame >= p.frame && frame < p.frame + kAutoPressFrames)
-            buttons |= p.buttons;
-    return buttons;
+    XINPUT_GAMEPAD g{};
+    AutoPressApply(script, frame, g);
+    return g.wButtons;
 }
 
 static bool KeyDown(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
@@ -121,7 +159,7 @@ SCDA_IMPORT(XamInputGetState)
         if (!connected || (!g.sThumbRX && !g.sThumbRY))
             g.sThumbRX = k.sThumbRX, g.sThumbRY = k.sThumbRY;
     }
-    g.wButtons |= AutoPressButtons(script, uint32_t(Frames().FramesEnded()));
+    AutoPressApply(script, uint32_t(Frames().FramesEnded()), g);
     // The packet number changes whenever the state does.
     static std::mutex m;
     static XINPUT_GAMEPAD last{};

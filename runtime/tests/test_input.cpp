@@ -58,6 +58,31 @@ TEST(autopress_script_parses_and_presses)
     CHECK_EQ(AutoPressButtons(script, 700), uint16_t(XINPUT_GAMEPAD_START));
 }
 
+// "<frame>:<name>[=<value>][:<frames>]": sticks LX LY RX RY in [-1, 1], triggers LT RT in [0, 1],
+// any entry held for <frames> frames.
+TEST(autopress_script_holds_sticks_and_triggers)
+{
+    auto script = ParseAutoPress("100:LY=1:60,100:rx=-0.5:30,120:RT=1:10,200:A:20,300:LX,300:LX=2");
+    CHECK_EQ(script.size(), size_t(4));
+    XINPUT_GAMEPAD g{};
+    AutoPressApply(script, 99, g);
+    CHECK_EQ(g.sThumbLY, int16_t(0));
+    AutoPressApply(script, 125, g);
+    CHECK_EQ(g.sThumbLY, int16_t(32767));
+    CHECK_EQ(g.sThumbRX, int16_t(-16384));
+    CHECK_EQ(g.bRightTrigger, uint8_t(255));
+    g = {};
+    AutoPressApply(script, 159, g);
+    CHECK_EQ(g.sThumbLY, int16_t(32767));
+    CHECK_EQ(g.sThumbRX, int16_t(0));
+    CHECK_EQ(g.bRightTrigger, uint8_t(0));
+    g = {};
+    AutoPressApply(script, 160, g);
+    CHECK_EQ(g.sThumbLY, int16_t(0));
+    CHECK_EQ(AutoPressButtons(script, 219), uint16_t(XINPUT_GAMEPAD_A));
+    CHECK_EQ(AutoPressButtons(script, 220), uint16_t(0));
+}
+
 // One local profile, signed in, in slot 0.
 TEST(local_profile_signed_in_slot_0)
 {
