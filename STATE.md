@@ -15,7 +15,7 @@
 - `config/scda_config.toml` helpers: restgprlr 82B7FE20, savegprlr 82B7FDD0, restfpr 82B8039C, savefpr 82B80350, restvmx14 82B867E8, savevmx14 82B86550, restvmx64 82B8687C, savevmx64 82B865E4; padding skip `0x00000000`.
 - 34520 functions (53 extra via `tools/fix_missing_functions.py`); 509 switch tables (`config/scda_switches.toml`) + manual 821A5B50 (`config/scda_switches_manual.toml`).
 - Imports: 10 data vars (`tools/list_imports.py` -> `import_vars.inc`); 51 still logging stubs. In-game only NetDll_WSAStartup/XNetStartup still fire (2026-10-28: XamGetSystemVersion=0, KiApcNormalRoutineNop, ExRegisterTitleTerminateNotification no-ops; only XAudio registers, routine 823FE078 just sets its shutdown event) (2026-10-28: ExGetXConfigSetting/XGetGameRegion/RtlTime*/MmQueryStatistics done; GlobalMemoryStatus 821E2DB0 had read stack garbage). Title heaps now first-fit + reuse (`guest_heap.h`): bump allocator ran out of 0x40000000-0x7F000000 by ~frame 6500 (64 KB-aligned 16 KB churn); now top ~0x4BA9xxxx, live use plateaus ~126k pages over 280 s + relaunch.
-- Physical memory is aliased: 0xA0000000 and 0xC0000000 both = phys 0 (one section, 2 views, `main.cpp`). D3D copies shader ucode via 0xC alias. 0xE0000000 alias NOT mirrored; `SCDA_TRAP_ALIAS=1` traps it (re-run in new game states).
+- Physical memory is aliased: 0xA0000000 and 0xC0000000 both = phys 0 (one section, 2 views, `main.cpp`). D3D copies shader ucode via 0xC alias. 0xE0000000 alias NOT mirrored; `SCDA_TRAP_ALIAS=1` traps it (2026-10-29: Kinshasa01 + Jail to frame 2000 clean).
 - GPU regs: VTE 0x2206 (bit 10 = exported w is W), VPORT 0x210F-0x2114, PS consts 0x4400, fetch 0x4800, window offset 0x2080.
 
 ## Done
