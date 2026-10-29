@@ -1,5 +1,4 @@
 # STATE — SCDA Xbox 360 static recomp (Title 555307D7)
-
 ## Root + inputs
 - `C:\SCDA-Recomp`, git branch `phase2-gpu`, GPL-3.0. Remote: github.com/thatcalikid760/SCDA360pcport (private). Tests: `python -I -m unittest discover -s tools/tests -t .` + `tools/test_runtime.bat`.
 - Input `assets/SC4_Offline.xex` (`SC4.pe`). Flat image `assets/SC4_Offline.img` (0x1300000, zero-padded) via `tools/xex_dump --patch`; sha256 01193b25...aea4e in `config/expected_image.txt`. TU3 NOT needed (header-only patch, identical image); `tools/stfs/tu_extract` -> `assets/tu3/` if ever needed. `SC4_Offline.bin` obsolete.
