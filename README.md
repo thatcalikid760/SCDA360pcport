@@ -2,7 +2,7 @@
 
 <img src="icon.jpg" width="160" alt="SCDA Recomp">
 
-# SCDA Recomp
+# SCDA V1 Recomp
 
 **A native Windows port of *Splinter Cell: Double Agent* (Xbox 360), built by static recompilation.**
 
