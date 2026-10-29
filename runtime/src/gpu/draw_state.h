@@ -46,6 +46,9 @@ struct MemoryRange
 bool VertexFetchRange(const RegisterFile& regs, uint32_t slot, MemoryRange& out);
 // Vertex fetch constant slots a translated vertex shader reads (its FetchVertex(slot, ...) calls).
 std::bitset<96> VertexFetchSlots(const std::string& hlsl);
+// Texture fetch constant slots (0-31) a translated shader samples: bit n set when the body uses
+// sn_Texture{2D,3D,Cube}DescriptorIndex outside its #define.
+uint32_t TextureFetchSlots(const std::string& hlsl);
 // True when [p, p + n) is committed, readable host memory (fetch constants can hold garbage).
 bool GuestRangeReadable(const uint8_t* p, size_t n);
 // Set by the runtime once guest physical memory (views at 0xA0000000 and 0xC0000000) is one

@@ -138,6 +138,17 @@ std::bitset<96> ShaderVertexFetchSlots(const ShaderBlob& blob)
     return it->second;
 }
 
+uint32_t ShaderTextureFetchSlots(const ShaderBlob& blob)
+{
+    static std::mutex mutex;
+    static std::unordered_map<uint64_t, uint32_t> slots;
+    std::lock_guard lock(mutex);
+    auto it = slots.find(blob.hash);
+    if (it == slots.end())
+        it = slots.emplace(blob.hash, TextureFetchSlots(TranslateShader(blob).hlsl)).first;
+    return it->second;
+}
+
 std::filesystem::path DefaultShaderCacheDir()
 {
     if (const char* base = getenv("LOCALAPPDATA"))

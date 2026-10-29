@@ -18,6 +18,8 @@ const CompiledShader& GetCompiledShader(const ShaderBlob& blob, const std::files
 
 // Vertex fetch constant slots the vertex shader reads (translated once per blob, cached).
 std::bitset<96> ShaderVertexFetchSlots(const ShaderBlob& blob);
+// Texture fetch constant slots (bit n = slot n) the shader samples (translated once per blob, cached).
+uint32_t ShaderTextureFetchSlots(const ShaderBlob& blob);
 
 // %LOCALAPPDATA%\SCDARecomp\shadercache (falls back to .\shadercache).
 std::filesystem::path DefaultShaderCacheDir();

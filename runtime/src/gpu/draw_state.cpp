@@ -82,6 +82,32 @@ std::bitset<96> VertexFetchSlots(const std::string& hlsl)
     return slots;
 }
 
+uint32_t TextureFetchSlots(const std::string& hlsl)
+{
+    uint32_t slots = 0;
+    static const std::string kSuffix = "DescriptorIndex";
+    for (size_t at = hlsl.find(kSuffix); at != std::string::npos; at = hlsl.find(kSuffix, at + 1))
+    {
+        // ... s<slot>_Texture<kind>DescriptorIndex: walk back to the 's'.
+        size_t tex = hlsl.rfind("_Texture", at);
+        if (tex == std::string::npos || at - tex > 16)
+            continue;
+        size_t digits = tex;
+        while (digits > 0 && isdigit((unsigned char)hlsl[digits - 1]))
+            digits--;
+        if (digits == tex || digits == 0 || hlsl[digits - 1] != 's')
+            continue;
+        size_t line = hlsl.rfind('\n', digits);
+        line = line == std::string::npos ? 0 : line + 1;
+        if (hlsl.compare(line, 8, "#define ") == 0)
+            continue;
+        uint32_t slot = uint32_t(strtoul(hlsl.c_str() + digits, nullptr, 10));
+        if (slot < 32)
+            slots |= 1u << slot;
+    }
+    return slots;
+}
+
 bool g_physicalViewsCommitted = false;
 
 bool GuestRangeReadable(const uint8_t* p, size_t n)

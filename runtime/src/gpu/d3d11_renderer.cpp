@@ -118,6 +118,7 @@ struct DrawResources
     };
     std::unordered_map<uint64_t, CachedTexture> textureCache;
     const RegisterFile* lastRegs = nullptr;
+    uint32_t lastTexSlots = 0; // texture slots bound for lastRegs
     // ALU constant pages last uploaded to b0/b1 (kept alive so a pointer match means same contents).
     std::shared_ptr<RegisterFile::Page> aluPages[2][1024 / RegisterFile::kPageSize];
     // Resolve copies of the target by guest physical destination; kept across frames (the
@@ -472,7 +473,8 @@ void D3D11Renderer::UploadVertexMemory(const DrawCall& d, const Frame& frame)
     m_context->VSSetShaderResources(kHlslMemorySlot, 1, &mem);
 }
 
-void D3D11Renderer::BindRegisterState(const RegisterFile& regs)
+// texSlots: texture fetch slots (bit n) the draw's shaders sample; only those are decoded and bound.
+void D3D11Renderer::BindRegisterState(const RegisterFile& regs, uint32_t texSlots)
 {
     DrawResources& r = *m_draw;
     for (uint32_t pixel = 0; pixel < 2; pixel++)
@@ -580,6 +582,8 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs)
     for (uint32_t slot = 0; slot < 32; slot++)
     {
         srvs[slot] = r.white.Get();
+        if (!(texSlots >> slot & 1))
+            continue;
         TextureFetch t = DecodeTextureFetch(regs, slot);
         if (!t.valid)
             continue;
@@ -686,6 +690,9 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs)
     ID3D11SamplerState* samplers[16];
     for (uint32_t slot = 0; slot < 16; slot++)
     {
+        samplers[slot] = r.sampler.Get();
+        if (!((texSlots | texSlots >> 16) >> slot & 1)) // sampler = fetch slot & 15
+            continue;
         HostSampler hs = DecodeSampler(regs, slot);
         auto& state = r.samplers[(uint64_t(hs.filter) << 24) | (hs.addressU << 16) | (hs.addressV << 8) | hs.addressW];
         if (!state)
@@ -763,9 +770,11 @@ void D3D11Renderer::ExecuteDraw(const DrawCall& d, const Frame& frame)
         m_lastSkipped++;
         return;
     }
-    if (d.regs.get() != r.lastRegs)
+    const uint32_t texSlots = ShaderTextureFetchSlots(*d.vs) | ShaderTextureFetchSlots(*d.ps);
+    if (d.regs.get() != r.lastRegs || (texSlots & ~r.lastTexSlots))
     {
-        BindRegisterState(*d.regs);
+        r.lastTexSlots = d.regs.get() == r.lastRegs ? r.lastTexSlots | texSlots : texSlots;
+        BindRegisterState(*d.regs, r.lastTexSlots);
         r.lastRegs = d.regs.get();
     }
     UploadVertexMemory(d, frame);

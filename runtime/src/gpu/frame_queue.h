@@ -1,11 +1,14 @@
 // Frames handed from the command processor (producer) to the renderer (consumer).
 // Bounded: when the renderer falls behind the oldest frame is dropped; the CP never blocks.
 #pragma once
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <mutex>
 #include <unordered_map>
 #include <gpu/draw.h>
+#include <runtime.h>
 
 struct FrameStats
 {
@@ -37,6 +40,11 @@ public:
 
     explicit FrameQueue(size_t maxFrames = 3) : m_max(maxFrames) {}
 
+    // Visible writes the command processor made to guest memory (fences, scratch mirrors, read
+    // pointer, interrupts, swaps). The CPU can only observe that a draw is done through one, so a
+    // range read before and after the same epoch cannot have been legally rewritten in between.
+    void SetEpoch(uint64_t epoch) { m_epoch = epoch; }
+
     void AddDraw(DrawCall d)
     {
         std::lock_guard lock(m_mutex);
@@ -51,17 +59,30 @@ public:
     // range's latest snapshot when the bytes are unchanged.
     uint32_t AddVertexData(uint64_t key, const uint8_t* data, uint32_t bytes)
     {
+        // SCDA_SNAP_COMPARE=1: always compare bytes (ignore the epoch).
+        static const bool alwaysCompare = getenv("SCDA_SNAP_COMPARE") != nullptr;
         std::lock_guard lock(m_mutex);
-        auto [it, added] = m_latest.try_emplace(key, uint32_t(m_open.memory.size()));
+        auto [it, added] = m_latest.try_emplace(key, Latest{ uint32_t(m_open.memory.size()), m_epoch });
         if (!added)
         {
-            const auto& last = m_open.memory[it->second].bytes;
+            if (it->second.epoch == m_epoch && !alwaysCompare)
+            {
+                statSkip++;
+                return it->second.index;
+            }
+            const auto& last = m_open.memory[it->second.index].bytes;
+            statCmp++; statCmpBytes += bytes;
             if (last.size() == bytes && !memcmp(last.data(), data, bytes))
-                return it->second;
-            it->second = uint32_t(m_open.memory.size());
+            {
+                it->second.epoch = m_epoch;
+                return it->second.index;
+            }
+            statDiff++; statDiffBytes += bytes;
+            it->second = { uint32_t(m_open.memory.size()), m_epoch };
         }
+        statCopy++; statCopyBytes += bytes;
         m_open.memory.push_back({ key, std::vector<uint8_t>(data, data + bytes) });
-        return it->second;
+        return it->second.index;
     }
     void AddResolve(Resolve r)
     {
@@ -79,6 +100,11 @@ public:
         m_open.stats.resolves = uint32_t(m_open.resolves.size());
         m_open.stats.shaders = uint32_t(ShaderCacheSize());
         m_open.stats.frame = m_next++;
+        if (getenv("SCDA_TRACE_SNAP") && m_open.stats.frame % 100 == 0)
+            RuntimeLog("[snap] frame %llu: skip %llu cmp %llu (%llu KB) diff %llu (%llu KB) copy %llu (%llu KB)\n",
+                (unsigned long long)m_open.stats.frame, statSkip, statCmp, statCmpBytes >> 10, statDiff, statDiffBytes >> 10, statCopy,
+                statCopyBytes >> 10);
+        statSkip = statCmp = statCmpBytes = statDiff = statDiffBytes = statCopy = statCopyBytes = 0;
         m_done.push_back(std::move(m_open));
         m_open = Frame{};
         m_latest.clear();
@@ -118,9 +144,17 @@ private:
     mutable std::mutex m_mutex;
     size_t m_max;
     Frame m_open;
-    std::unordered_map<uint64_t, uint32_t> m_latest; // open frame: range key -> latest snapshot
+    struct Latest
+    {
+        uint32_t index;  // Frame::memory
+        uint64_t epoch;  // CP epoch the bytes were last seen in
+    };
+    std::unordered_map<uint64_t, Latest> m_latest; // open frame: range key -> latest snapshot
+    uint64_t m_epoch = 0;
     std::deque<Frame> m_done;
     uint64_t m_next = 0, m_dropped = 0, m_droppedDraws = 0;
+    // SCDA_TRACE_SNAP=1: per-100-frame snapshot counters.
+    unsigned long long statSkip = 0, statCmp = 0, statCmpBytes = 0, statDiff = 0, statDiffBytes = 0, statCopy = 0, statCopyBytes = 0;
 };
 
 FrameQueue& Frames();

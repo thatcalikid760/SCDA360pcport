@@ -114,13 +114,19 @@ TEST(resolve_records_draw_index_and_frontbuffer)
 }
 
 // Guest ranges are versioned within a frame: unchanged bytes share a snapshot, changed bytes
-// (a vertex buffer the CPU rewrites between draws) get a new one.
+// (a vertex buffer the CPU rewrites between draws) get a new one. Bytes are only re-read after a
+// CP epoch change (a write the CPU could have synchronized on); in the same epoch the snapshot is
+// reused without looking.
 TEST(vertex_snapshots_are_versioned)
 {
     FrameQueue q(3);
     uint8_t a[4] = { 1, 2, 3, 4 }, b[4] = { 5, 6, 7, 8 };
     uint32_t s0 = q.AddVertexData(42, a, 4);
     CHECK_EQ(q.AddVertexData(42, a, 4), s0);
+    CHECK_EQ(q.AddVertexData(42, b, 4), s0); // same epoch: not compared
+    q.SetEpoch(1);
+    CHECK_EQ(q.AddVertexData(42, a, 4), s0); // compared, unchanged
+    q.SetEpoch(2);
     uint32_t s1 = q.AddVertexData(42, b, 4);
     CHECK(s1 != s0);
     CHECK_EQ(q.AddVertexData(43, a, 4), s1 + 1);

@@ -7,6 +7,7 @@
 #include <string>
 #include <thread>
 #include <algorithm>
+#include <unordered_map>
 #include <vector>
 #include <command_processor.h>
 #include <gpu/draw_state.h>
@@ -68,6 +69,9 @@ uint32_t GpuRegister(uint32_t index) { return GuestLoad32(kGpuRegBase + index * 
 // to 0x7FC80000 bypass the shadow.
 static RegisterFile g_shadow;
 static bool g_regsDirty = true;
+// Bumped on every write the CPU can observe (see FrameQueue::SetEpoch).
+static uint64_t g_epoch = 1;
+static void BumpEpoch();
 static void SetGpuRegister(uint32_t index, uint32_t v)
 {
     index &= 0x7FFF;
@@ -77,13 +81,44 @@ static void SetGpuRegister(uint32_t index, uint32_t v)
     // SCRATCH_REG0-7: mirrored to SCRATCH_ADDR + 4*i for SCRATCH_UMSK bits (D3D polls that memory).
     uint32_t scratch = index - kRegScratch0;
     if (scratch < 8 && (GpuRegister(kRegScratchUmsk) >> scratch & 1))
+    {
         GuestStore32(GuestPhysical(GpuRegister(kRegScratchAddr) + scratch * 4), v);
+        BumpEpoch();
+    }
 }
 
 FrameQueue& Frames()
 {
     static FrameQueue queue(3);
     return queue;
+}
+
+static void BumpEpoch() { Frames().SetEpoch(++g_epoch); }
+
+// IM_LOAD shaders by guest address: unchanged since the last load in the same epoch (the CPU
+// cannot have rewritten ucode the GPU may still read), else compared against the last bytes.
+struct LoadedShader
+{
+    const ShaderBlob* blob;
+    uint64_t epoch;
+    std::vector<uint32_t> be;
+};
+static std::unordered_map<uint64_t, LoadedShader> g_loaded; // physical | dwords << 32
+
+static const ShaderBlob* LoadShader(ShaderType type, uint32_t guest, uint32_t dwords)
+{
+    const uint32_t* be = (const uint32_t*)GuestPtr(guest);
+    auto [it, added] = g_loaded.try_emplace((uint64_t(dwords) << 32 | guest) * 2 + uint32_t(type), LoadedShader{});
+    LoadedShader& l = it->second;
+    if (!added && (l.epoch == g_epoch || !memcmp(l.be.data(), be, dwords * 4ull)))
+    {
+        l.epoch = g_epoch;
+        return l.blob;
+    }
+    l.blob = ShaderCacheInsert(type, be, dwords);
+    l.epoch = g_epoch;
+    l.be.assign(be, be + dwords);
+    return l.blob;
 }
 
 // Register snapshot shared by consecutive draws until a register changes.
@@ -159,6 +194,8 @@ void CommandProcessorReset()
     g_lastBase = 0;
     memset(g_resume, 0, sizeof(g_resume));
     g_binMask = g_binSelect = ~0ull;
+    g_loaded.clear();
+    BumpEpoch();
     // Display registers D3D reads over MMIO (Xenia's values): 1280x720 viewport, V counter.
     GuestStore32(kGpuRegBase + 0x194C * 4, 0x000002D0);
     GuestStore32(kGpuRegBase + 0x1961 * 4, 0x050002D0);
@@ -214,6 +251,7 @@ static uint32_t GpuSwap(uint32_t v, uint32_t mode)
 static void GpuStore(uint32_t address, uint32_t value)
 {
     GuestStore32(GuestPhysical(address & ~3u), _byteswap_ulong(GpuSwap(value, address)));
+    BumpEpoch();
 }
 
 static uint32_t GpuLoad(uint32_t address)
@@ -326,6 +364,7 @@ static bool ExecutePacket(uint32_t h, const Pm4Payload& p, int depth, CpStats& s
             GuestStore32(a, _byteswap_ulong(kFakeSamples));
             GuestStore32(a + 16, _byteswap_ulong(kFakeSamples));
         }
+        BumpEpoch();
         return true;
     }
     case kOpEventWriteExt:
@@ -375,6 +414,7 @@ static bool ExecutePacket(uint32_t h, const Pm4Payload& p, int depth, CpStats& s
             Gpu().swapCounter++;
             Gpu().pendingSwaps++;
             Frames().EndFrame(count >= 2 ? p(1) & 0x1FFFFFFF : 0); // VdSwap: frontbuffer address
+            BumpEpoch();
         }
         return true;
     case kOpSetConstant:
@@ -410,7 +450,7 @@ static bool ExecutePacket(uint32_t h, const Pm4Payload& p, int depth, CpStats& s
         // p0 = physical address | shader type (bits 0-1), p1 = start << 16 | size in dwords.
         uint32_t dwords = p(1) & 0xFFFF, guest = GuestPhysical(p(0) & ~3u);
         if (dwords && Committed(guest, dwords * 4))
-            SetCurrentShader(ShaderCacheInsert(ShaderType(p(0) & 1), (const uint32_t*)GuestPtr(guest), dwords));
+            SetCurrentShader(LoadShader(ShaderType(p(0) & 1), guest, dwords));
         else
             st.skipped++;
         return true;
@@ -459,6 +499,7 @@ static bool ExecutePacket(uint32_t h, const Pm4Payload& p, int depth, CpStats& s
     case kOpInterrupt:
     {
         st.interrupts++;
+        BumpEpoch();
         std::lock_guard lock(g_sinkMutex);
         // p0 = CPU mask: one delivery per CPU (Xenia), each runs as that processor.
         for (uint32_t cpu = 0; cpu < 6; cpu++)
@@ -505,7 +546,10 @@ bool CommandProcessorTick(CpStats* stats)
     g_read = Pm4WalkRing({ base, size }, g_read, write,
         [&](uint32_t h, const Pm4Payload& p) { return Execute(h, p, 0, st); });
     if (uint32_t wb = Gpu().rptrWriteback.load())
+    {
         GuestStore32(wb, g_read);
+        BumpEpoch();
+    }
     return true;
 }
 

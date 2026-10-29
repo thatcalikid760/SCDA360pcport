@@ -220,6 +220,16 @@ TEST(vertex_fetch_slots_from_hlsl)
     CHECK(slots[95] && slots[3]);
 }
 
+TEST(texture_fetch_slots_from_hlsl)
+{
+    uint32_t slots = TextureFetchSlots("#define s0_Texture2DDescriptorIndex 0\n#define s7_TextureCubeDescriptorIndex 7\n"
+                                       "#define s31_Texture3DDescriptorIndex 31\n"
+                                       " r0 = tfetch2D(s7_Texture2DDescriptorIndex, s7_SamplerDescriptorIndex, r0.xy, float2(0, 0));\n"
+                                       " r1 = tfetchCube(s12_TextureCubeDescriptorIndex, s12_SamplerDescriptorIndex, r0.xyz, cmd);\n"
+                                       " pixelCoord = getPixelCoord(s31_Texture2DDescriptorIndex, r0.xy);");
+    CHECK_EQ(slots, (1u << 7) | (1u << 12) | (1u << 31));
+}
+
 // RB_BLENDCONTROL0 / RB_COLOR_MASK / RB_BLEND_* -> D3D11 blend enums; PA_SU_SC_MODE_CNTL -> cull.
 TEST(blend_and_cull_from_registers)
 {
