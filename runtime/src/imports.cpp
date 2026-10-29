@@ -235,8 +235,41 @@ SCDA_IMPORT(RtlTimeFieldsToTime)
 
 // ---- Console config ----
 
+// XCONFIG_USER 1-7 = host time zone, as read by sub_821E88E0 (GetTimeZoneInformation):
+// 1 Bias, 6 StandardBias, 7 DaylightBias (s32 minutes); 2/3 names (4 ASCII bytes);
+// 4/5 dates (bytes month, day, dayOfWeek, hour).
+static uint32_t XConfigTimeZone(uint32_t setting)
+{
+    TIME_ZONE_INFORMATION tz{};
+    if (GetTimeZoneInformation(&tz) == TIME_ZONE_ID_INVALID)
+        return 0;
+    auto name = [](const WCHAR* s) // "Pacific Standard Time" -> "PST"
+    {
+        uint32_t v = 0, n = 0;
+        for (bool start = true; *s && n < 4; ++s)
+        {
+            if (start && *s > L' ' && *s < 0x80)
+                v |= uint32_t(*s) << (24 - 8 * n++);
+            start = *s == L' ';
+        }
+        return v;
+    };
+    auto date = [](const SYSTEMTIME& d)
+    { return uint32_t(d.wMonth) << 24 | uint32_t(d.wDay) << 16 | uint32_t(d.wDayOfWeek) << 8 | d.wHour; };
+    switch (setting)
+    {
+    case 1: return uint32_t(tz.Bias);
+    case 2: return name(tz.StandardName);
+    case 3: return name(tz.DaylightName);
+    case 4: return date(tz.StandardDate);
+    case 5: return date(tz.DaylightDate);
+    case 6: return uint32_t(tz.StandardBias);
+    default: return uint32_t(tz.DaylightBias);
+    }
+}
+
 // ExGetXConfigSetting(u16 Category, u16 Setting, void* Buffer, u16 BufferSize, u16* RequiredSize).
-// Values as Unleashed/Xenia: English, US/Canada AV region, time zone UTC.
+// Values as Unleashed/Xenia: English, US/Canada AV region; time zone from the host.
 SCDA_IMPORT(ExGetXConfigSetting)
 {
     uint32_t category = ctx.r3.u32 & 0xFFFF, setting = ctx.r4.u32 & 0xFFFF;
@@ -253,7 +286,7 @@ SCDA_IMPORT(ExGetXConfigSetting)
         case 0xA: value = 0x00040000; break; // XCONFIG_USER_VIDEO_FLAGS
         case 0xC: value = 1; break;          // XCONFIG_USER_RETAIL_FLAGS
         case 0xE: value = 103; break;        // XCONFIG_USER_COUNTRY: US
-        default: value = 0; break;           // time zone bias / names / dates: UTC
+        default: value = XConfigTimeZone(setting); break;
         }
     }
     else
