@@ -96,6 +96,10 @@ struct DrawResources
     ComPtr<ID3D11Buffer> memory;
     ComPtr<ID3D11ShaderResourceView> memorySrv;
     uint32_t memoryBytes = 0;
+    // Dynamic ring for per-draw index data (NO_OVERWRITE appends, DISCARD on wrap).
+    ComPtr<ID3D11Buffer> indexRing;
+    uint32_t indexRingBytes = 0, indexRingPos = 0;
+    std::vector<uint8_t> indexScratch; // reused per draw
     std::unordered_map<uint64_t, ComPtr<ID3D11VertexShader>> vs;
     std::unordered_map<uint64_t, ComPtr<ID3D11PixelShader>> ps;
     // Fixed-function state by the registers it is built from.
@@ -772,8 +776,8 @@ void D3D11Renderer::ExecuteDraw(const DrawCall& d, const Frame& frame)
     const bool expand = NeedsTriangleListExpansion(d.primType);
     if (d.source == IndexSource::Dma || expand)
     {
-        // shortcut: one immutable index buffer per draw.
-        std::vector<uint8_t> indices;
+        std::vector<uint8_t>& indices = r.indexScratch;
+        indices.clear();
         uint32_t count = d.indexCount;
         bool wide = d.index32;
         if (d.source == IndexSource::Dma)
@@ -808,18 +812,48 @@ void D3D11Renderer::ExecuteDraw(const DrawCall& d, const Frame& frame)
             m_lastSkipped++;
             return;
         }
-        D3D11_BUFFER_DESC bd{};
-        bd.ByteWidth = uint32_t(indices.size());
-        bd.Usage = D3D11_USAGE_IMMUTABLE;
-        bd.BindFlags = D3D11_BIND_INDEX_BUFFER;
-        D3D11_SUBRESOURCE_DATA init{ indices.data(), 0, 0 };
-        ComPtr<ID3D11Buffer> ib;
-        if (FAILED(m_device->CreateBuffer(&bd, &init, &ib)))
+        const uint32_t bytes = (uint32_t(indices.size()) + 3) & ~3u;
+        if (!r.indexRing)
         {
-            m_lastSkipped++;
-            return;
+            D3D11_BUFFER_DESC bd{};
+            bd.ByteWidth = 16u << 20;
+            bd.Usage = D3D11_USAGE_DYNAMIC;
+            bd.BindFlags = D3D11_BIND_INDEX_BUFFER;
+            bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+            if (SUCCEEDED(m_device->CreateBuffer(&bd, nullptr, &r.indexRing)))
+                r.indexRingBytes = bd.ByteWidth;
         }
-        m_context->IASetIndexBuffer(ib.Get(), wide ? DXGI_FORMAT_R32_UINT : DXGI_FORMAT_R16_UINT, 0);
+        if (bytes <= r.indexRingBytes)
+        {
+            const bool wrap = r.indexRingPos + bytes > r.indexRingBytes;
+            D3D11_MAPPED_SUBRESOURCE map;
+            if (FAILED(m_context->Map(r.indexRing.Get(), 0, wrap ? D3D11_MAP_WRITE_DISCARD : D3D11_MAP_WRITE_NO_OVERWRITE, 0, &map)))
+            {
+                m_lastSkipped++;
+                return;
+            }
+            const uint32_t offset = wrap ? 0 : r.indexRingPos;
+            memcpy(static_cast<uint8_t*>(map.pData) + offset, indices.data(), indices.size());
+            m_context->Unmap(r.indexRing.Get(), 0);
+            r.indexRingPos = offset + bytes;
+            m_context->IASetIndexBuffer(r.indexRing.Get(), wide ? DXGI_FORMAT_R32_UINT : DXGI_FORMAT_R16_UINT, offset);
+        }
+        else
+        {
+            // Larger than the ring: one immutable buffer for this draw.
+            D3D11_BUFFER_DESC bd{};
+            bd.ByteWidth = uint32_t(indices.size());
+            bd.Usage = D3D11_USAGE_IMMUTABLE;
+            bd.BindFlags = D3D11_BIND_INDEX_BUFFER;
+            D3D11_SUBRESOURCE_DATA init{ indices.data(), 0, 0 };
+            ComPtr<ID3D11Buffer> ib;
+            if (FAILED(m_device->CreateBuffer(&bd, &init, &ib)))
+            {
+                m_lastSkipped++;
+                return;
+            }
+            m_context->IASetIndexBuffer(ib.Get(), wide ? DXGI_FORMAT_R32_UINT : DXGI_FORMAT_R16_UINT, 0);
+        }
         m_context->DrawIndexed(count, 0, 0);
     }
     else
