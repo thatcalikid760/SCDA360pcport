@@ -9,9 +9,16 @@
 // Writes a guest X_INPUT_STATE (packet number + XINPUT_GAMEPAD, big-endian) at addr.
 void StoreInputState(uint32_t addr, uint32_t packet, const XINPUT_GAMEPAD& g);
 
-// Keyboard -> gamepad: Enter A, Backspace B, E X, Q Y, Esc Start, Tab Back, arrows d-pad,
-// WASD left stick, IJKL right stick, Z/C triggers, 1/3 shoulders.
+// Keyboard/mouse buttons -> gamepad: Enter/Space A, Backspace/Ctrl B, E X, Q Y, Esc Start, Tab Back,
+// arrows d-pad, WASD left stick, IJKL right stick, Z/right mouse LT, C/left mouse RT, 1/3 shoulders.
 XINPUT_GAMEPAD KeyboardGamepad(bool (*down)(int vk));
+
+// Mouse look. The window thread adds raw motion and wheel notches; each XamInputGetState poll
+// takes them (MouseTake zeroes the totals) and turns the motion into the right stick: full
+// deflection at 50 / sensitivity pixels, +dy (down) pulls the stick down unless inverted.
+void MouseAccumulate(int dx, int dy, int wheel);
+void MouseTake(int& dx, int& dy, int& wheel);
+void MouseToStick(int dx, int dy, float sensitivity, bool invertY, int16_t& rx, int16_t& ry);
 
 struct AutoPress
 {

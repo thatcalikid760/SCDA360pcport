@@ -1,6 +1,8 @@
 // XamInput* and the local profile. Semantics follow Xenia (BSD): one offline profile, signed in
 // locally, in user slot 0; its controller is XInput pad 0 merged with the keyboard (while the game
 // window has focus) and SCDA_AUTOPRESS.
+#include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -10,6 +12,7 @@
 #include <gpu/frame_queue.h>
 #include <input.h>
 #include <runtime.h>
+#include <settings.h>
 
 constexpr uint32_t kErrorSuccess = 0, kErrorDeviceNotConnected = 0x48F, kErrorNoSuchUser = 0x525;
 constexpr uint64_t kLocalXuid = 0xE000000053434441ull; // offline XUID ('SCDA')
@@ -29,7 +32,8 @@ void StoreInputState(uint32_t addr, uint32_t packet, const XINPUT_GAMEPAD& g)
 XINPUT_GAMEPAD KeyboardGamepad(bool (*down)(int vk))
 {
     static const struct { int vk; uint16_t button; } kButtons[] = {
-        { VK_RETURN, XINPUT_GAMEPAD_A }, { VK_BACK, XINPUT_GAMEPAD_B }, { 'E', XINPUT_GAMEPAD_X }, { 'Q', XINPUT_GAMEPAD_Y },
+        { VK_RETURN, XINPUT_GAMEPAD_A }, { VK_SPACE, XINPUT_GAMEPAD_A }, { VK_BACK, XINPUT_GAMEPAD_B }, { VK_CONTROL, XINPUT_GAMEPAD_B },
+        { 'E', XINPUT_GAMEPAD_X }, { 'Q', XINPUT_GAMEPAD_Y },
         { VK_ESCAPE, XINPUT_GAMEPAD_START }, { VK_TAB, XINPUT_GAMEPAD_BACK }, { VK_UP, XINPUT_GAMEPAD_DPAD_UP },
         { VK_DOWN, XINPUT_GAMEPAD_DPAD_DOWN }, { VK_LEFT, XINPUT_GAMEPAD_DPAD_LEFT }, { VK_RIGHT, XINPUT_GAMEPAD_DPAD_RIGHT },
         { '1', XINPUT_GAMEPAD_LEFT_SHOULDER }, { '3', XINPUT_GAMEPAD_RIGHT_SHOULDER },
@@ -43,9 +47,32 @@ XINPUT_GAMEPAD KeyboardGamepad(bool (*down)(int vk))
     g.sThumbLY = axis('S', 'W');
     g.sThumbRX = axis('J', 'L');
     g.sThumbRY = axis('K', 'I');
-    g.bLeftTrigger = down('Z') ? 255 : 0;
-    g.bRightTrigger = down('C') ? 255 : 0;
+    g.bLeftTrigger = down('Z') || down(VK_RBUTTON) ? 255 : 0;
+    g.bRightTrigger = down('C') || down(VK_LBUTTON) ? 255 : 0;
     return g;
+}
+
+static std::atomic<int> g_mouseDx, g_mouseDy, g_mouseWheel;
+
+void MouseAccumulate(int dx, int dy, int wheel)
+{
+    g_mouseDx += dx;
+    g_mouseDy += dy;
+    g_mouseWheel += wheel;
+}
+
+void MouseTake(int& dx, int& dy, int& wheel)
+{
+    dx = g_mouseDx.exchange(0);
+    dy = g_mouseDy.exchange(0);
+    wheel = g_mouseWheel.exchange(0);
+}
+
+void MouseToStick(int dx, int dy, float sensitivity, bool invertY, int16_t& rx, int16_t& ry)
+{
+    auto stick = [&](int d) { return int16_t(std::clamp(d * sensitivity / 50.0f, -1.0f, 1.0f) * 32767.0f); };
+    rx = stick(dx);
+    ry = stick(invertY ? dy : -dy);
 }
 
 std::vector<AutoPress> ParseAutoPress(const char* text)
@@ -165,10 +192,13 @@ SCDA_IMPORT(XamInputGetState)
         }
         return ParseAutoPress(env);
     }();
+    static const InputSettings mouse = LoadInputSettings(SettingsPath());
     XINPUT_STATE pad{};
     bool connected = XInputGetState(0, &pad) == ERROR_SUCCESS;
     XINPUT_GAMEPAD g = connected ? pad.Gamepad : XINPUT_GAMEPAD{};
-    // A scripted run ignores the keyboard, so typing elsewhere cannot leak into it.
+    int dx, dy, wheel;
+    MouseTake(dx, dy, wheel); // drained every poll so unfocused motion never piles up
+    // A scripted run ignores the keyboard and mouse, so typing elsewhere cannot leak into it.
     if (script.empty() && GameWindowFocused())
     {
         XINPUT_GAMEPAD k = KeyboardGamepad(KeyDown);
@@ -178,7 +208,15 @@ SCDA_IMPORT(XamInputGetState)
         if (!connected || (!g.sThumbLX && !g.sThumbLY))
             g.sThumbLX = k.sThumbLX, g.sThumbLY = k.sThumbLY;
         if (!connected || (!g.sThumbRX && !g.sThumbRY))
-            g.sThumbRX = k.sThumbRX, g.sThumbRY = k.sThumbRY;
+        {
+            int16_t rx = 0, ry = 0;
+            if (mouse.mouseLook)
+                MouseToStick(dx, dy, mouse.mouseSensitivity, mouse.mouseInvertY, rx, ry);
+            g.sThumbRX = rx ? rx : k.sThumbRX;
+            g.sThumbRY = ry ? ry : k.sThumbRY;
+        }
+        if (mouse.mouseLook && wheel)
+            g.wButtons |= wheel > 0 ? XINPUT_GAMEPAD_DPAD_UP : XINPUT_GAMEPAD_DPAD_DOWN;
     }
     AutoPressApply(script, uint32_t(Frames().FramesEnded()), g);
     // The packet number changes whenever the state does.

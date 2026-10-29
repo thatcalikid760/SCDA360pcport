@@ -11,12 +11,13 @@ static std::string Lower(std::string s)
     return s;
 }
 
-DisplaySettings LoadDisplaySettings(const std::filesystem::path& ini)
+// Calls f(key, value) for every key=value line of [section] (all lowercased).
+template <typename F>
+static void ForEachSetting(const std::filesystem::path& ini, const char* wanted, F f)
 {
-    DisplaySettings s;
-    std::ifstream f(ini);
+    std::ifstream in(ini);
     std::string line, section;
-    while (std::getline(f, line))
+    while (std::getline(in, line))
     {
         if (!line.empty() && line.back() == '\r')
             line.pop_back();
@@ -26,9 +27,38 @@ DisplaySettings LoadDisplaySettings(const std::filesystem::path& ini)
             continue;
         }
         size_t eq = line.find('=');
-        if (section != "display" || eq == std::string::npos)
+        if (section != wanted || eq == std::string::npos)
             continue;
-        std::string key = Lower(line.substr(0, eq)), value = Lower(line.substr(eq + 1));
+        f(Lower(line.substr(0, eq)), Lower(line.substr(eq + 1)));
+    }
+}
+
+static bool Truthy(const std::string& value) { return value != "0" && value != "false"; }
+
+InputSettings LoadInputSettings(const std::filesystem::path& ini)
+{
+    InputSettings s;
+    ForEachSetting(ini, "input", [&](const std::string& key, const std::string& value)
+    {
+        if (key == "mouselook")
+            s.mouseLook = Truthy(value);
+        else if (key == "mouseinverty")
+            s.mouseInvertY = Truthy(value);
+        else if (key == "mousesensitivity")
+        {
+            float v = float(atof(value.c_str()));
+            if (v >= 0.1f && v <= 10.0f)
+                s.mouseSensitivity = v;
+        }
+    });
+    return s;
+}
+
+DisplaySettings LoadDisplaySettings(const std::filesystem::path& ini)
+{
+    DisplaySettings s;
+    ForEachSetting(ini, "display", [&](const std::string& key, const std::string& value)
+    {
         if (key == "scale")
         {
             int v = atoi(value.c_str());
@@ -42,8 +72,8 @@ DisplaySettings LoadDisplaySettings(const std::filesystem::path& ini)
             else if (value == "fullscreen") s.mode = DisplaySettings::Fullscreen;
         }
         else if (key == "vsync")
-            s.vsync = value != "0" && value != "false";
-    }
+            s.vsync = Truthy(value);
+    });
     return s;
 }
 

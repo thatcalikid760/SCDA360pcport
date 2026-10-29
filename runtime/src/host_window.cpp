@@ -12,10 +12,31 @@
 #include <gpu/draw_state.h>
 #include <gpu/shader_compiler.h>
 #include <host_window.h>
+#include <input.h>
 #include <runtime.h>
 
 static std::atomic<HWND> g_hwnd;
 static std::atomic<uint32_t> g_resizeW, g_resizeH;
+static bool g_mouseLook;   // capture the cursor and feed raw motion to the right stick
+static bool g_cursorHeld;  // cursor hidden and clipped to the client area now
+
+// Mouse look while the window is in the foreground: the cursor is hidden and kept inside the
+// client area; Alt+Tab (focus loss) releases it.
+static void HoldCursor(HWND hwnd, bool hold)
+{
+    if (hold)
+    {
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        MapWindowPoints(hwnd, nullptr, reinterpret_cast<POINT*>(&rc), 2);
+        ClipCursor(&rc);
+    }
+    else
+        ClipCursor(nullptr);
+    if (hold != g_cursorHeld)
+        ShowCursor(hold ? FALSE : TRUE);
+    g_cursorHeld = hold;
+}
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
@@ -24,6 +45,28 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_SIZE:
         g_resizeH = HIWORD(lp);
         g_resizeW = LOWORD(lp);
+        if (g_cursorHeld)
+            HoldCursor(hwnd, true);
+        return 0;
+    case WM_MOVE:
+        if (g_cursorHeld)
+            HoldCursor(hwnd, true);
+        return 0;
+    case WM_ACTIVATE:
+        if (g_mouseLook)
+            HoldCursor(hwnd, LOWORD(wp) != WA_INACTIVE);
+        return 0;
+    case WM_INPUT:
+    {
+        RAWINPUT raw;
+        UINT size = sizeof(raw);
+        if (GetRawInputData(reinterpret_cast<HRAWINPUT>(lp), RID_INPUT, &raw, &size, sizeof(RAWINPUTHEADER)) != UINT(-1) &&
+            raw.header.dwType == RIM_TYPEMOUSE && !(raw.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE))
+            MouseAccumulate(raw.data.mouse.lLastX, raw.data.mouse.lLastY, 0);
+        return DefWindowProcW(hwnd, msg, wp, lp);
+    }
+    case WM_MOUSEWHEEL:
+        MouseAccumulate(0, 0, GET_WHEEL_DELTA_WPARAM(wp) / WHEEL_DELTA);
         return 0;
     case WM_CLOSE:
         // Guest threads have no shutdown path: end the process.
@@ -63,6 +106,15 @@ static void WindowThread(DisplaySettings s)
     HWND hwnd = CreateWindowExW(0, wc.lpszClassName, L"Splinter Cell: Double Agent Recomp", style, x, y,
         r.right - r.left, r.bottom - r.top, nullptr, nullptr, inst, nullptr);
     ShowWindow(hwnd, SW_SHOW);
+    // Scripted runs (SCDA_AUTOPRESS) never take the mouse: an unattended window must not trap the cursor.
+    g_mouseLook = LoadInputSettings(SettingsPath()).mouseLook && !getenv("SCDA_AUTOPRESS");
+    if (g_mouseLook)
+    {
+        RAWINPUTDEVICE rid{ 0x01 /* generic desktop */, 0x02 /* mouse */, 0, hwnd };
+        RegisterRawInputDevices(&rid, 1, sizeof(rid));
+        if (GetForegroundWindow() == hwnd)
+            HoldCursor(hwnd, true);
+    }
     g_hwnd = hwnd;
     MSG m;
     while (GetMessageW(&m, nullptr, 0, 0))

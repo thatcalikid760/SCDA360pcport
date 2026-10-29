@@ -45,6 +45,29 @@ TEST(keyboard_maps_to_gamepad)
     CHECK_EQ(g.sThumbLY, int16_t(0));
 }
 
+// Raw mouse motion -> right stick: 50 px = full deflection at sensitivity 1, screen-down = stick down.
+TEST(mouse_motion_maps_to_right_stick)
+{
+    int16_t rx, ry;
+    MouseToStick(25, 0, 1.0f, false, rx, ry);
+    CHECK_EQ(rx, int16_t(16383));
+    CHECK_EQ(ry, int16_t(0));
+    MouseToStick(-500, 10, 1.0f, false, rx, ry);
+    CHECK_EQ(rx, int16_t(-32767));
+    CHECK(ry < 0);
+    MouseToStick(0, 10, 1.0f, true, rx, ry);
+    CHECK(ry > 0);
+    MouseToStick(10, 0, 2.0f, false, rx, ry);
+    CHECK_EQ(rx, int16_t(13106));
+    MouseAccumulate(3, -4, 1);
+    MouseAccumulate(2, 0, 0);
+    int dx, dy, wheel;
+    MouseTake(dx, dy, wheel);
+    CHECK(dx == 5 && dy == -4 && wheel == 1);
+    MouseTake(dx, dy, wheel);
+    CHECK(dx == 0 && dy == 0 && wheel == 0);
+}
+
 // SCDA_AUTOPRESS="<frame>:<button>,...": each button held for kAutoPressFrames frames.
 TEST(autopress_script_parses_and_presses)
 {

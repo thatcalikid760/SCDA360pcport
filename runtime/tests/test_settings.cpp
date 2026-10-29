@@ -31,3 +31,13 @@ TEST(settings_invalid_values_fall_back)
     CHECK_EQ(s.scale, 1u);
     CHECK(s.mode == DisplaySettings::Windowed);
 }
+
+TEST(input_settings_parsed_and_defaulted)
+{
+    InputSettings d = LoadInputSettings("C:/nonexistent/settings.ini");
+    CHECK(d.mouseLook && !d.mouseInvertY && d.mouseSensitivity == 1.0f);
+    InputSettings s = LoadInputSettings(Ini("[Display]\nScale=2\n[Input]\nMouseLook=0\nMouseSensitivity=2.5\nMouseInvertY=true\n"));
+    CHECK(!s.mouseLook && s.mouseInvertY && s.mouseSensitivity == 2.5f);
+    InputSettings bad = LoadInputSettings(Ini("[Input]\nMouseSensitivity=50\n"));
+    CHECK(bad.mouseSensitivity == 1.0f);
+}
