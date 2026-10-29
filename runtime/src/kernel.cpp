@@ -195,6 +195,14 @@ SCDA_IMPORT(ExCreateThread)
 
 SCDA_IMPORT(ExTerminateThread) { TitleThreadExit(); }
 
+// ExRegisterTitleTerminateNotification(Registration, Create): only XAudio registers (routine
+// 823FE078: unregisters and sets its shutdown event). Relaunch stops title threads directly, so
+// the routine is never called.
+SCDA_IMPORT(ExRegisterTitleTerminateNotification) {}
+
+// APC normal routine that does nothing; the title queues it as a placeholder.
+SCDA_IMPORT(KiApcNormalRoutineNop) {}
+
 // NtResumeThread(Handle, u32* SuspendCount)
 SCDA_IMPORT(NtResumeThread)
 {

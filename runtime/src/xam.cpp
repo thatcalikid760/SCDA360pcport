@@ -52,6 +52,9 @@ SCDA_IMPORT(XamCreateEnumeratorHandle)
     ctx.r3.u64 = kErrorSuccess;
 }
 
+// XamGetSystemVersion(): dashboard version. 0, as Xenia returns.
+SCDA_IMPORT(XamGetSystemVersion) { ctx.r3.u64 = 0; }
+
 // XamGetPrivateEnumStructureFromHandle(Handle, u32* Structure)
 SCDA_IMPORT(XamGetPrivateEnumStructureFromHandle)
 {

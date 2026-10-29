@@ -2,7 +2,6 @@
 #include <runtime.h>
 
 SCDA_IMPORT(NetDll_WSAStartup) { ImportStub("NetDll_WSAStartup", ctx); }
-SCDA_IMPORT(XamGetSystemVersion) { ImportStub("XamGetSystemVersion", ctx); }
 SCDA_IMPORT(NetDll_WSACleanup) { ImportStub("NetDll_WSACleanup", ctx); }
 SCDA_IMPORT(NetDll_socket) { ImportStub("NetDll_socket", ctx); }
 SCDA_IMPORT(NetDll_closesocket) { ImportStub("NetDll_closesocket", ctx); }
@@ -39,8 +38,6 @@ SCDA_IMPORT(HalReturnToFirmware) { ImportStub("HalReturnToFirmware", ctx); }
 SCDA_IMPORT(KeBugCheckEx) { ImportStub("KeBugCheckEx", ctx); }
 SCDA_IMPORT(RtlCompareMemoryUlong) { ImportStub("RtlCompareMemoryUlong", ctx); }
 SCDA_IMPORT(RtlRaiseException) { ImportStub("RtlRaiseException", ctx); }
-SCDA_IMPORT(KiApcNormalRoutineNop) { ImportStub("KiApcNormalRoutineNop", ctx); }
-SCDA_IMPORT(ExRegisterTitleTerminateNotification) { ImportStub("ExRegisterTitleTerminateNotification", ctx); }
 SCDA_IMPORT(ObDeleteSymbolicLink) { ImportStub("ObDeleteSymbolicLink", ctx); }
 SCDA_IMPORT(ObCreateSymbolicLink) { ImportStub("ObCreateSymbolicLink", ctx); }
 SCDA_IMPORT(KeLockL2) { ImportStub("KeLockL2", ctx); }
