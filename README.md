@@ -105,13 +105,27 @@ tools\test_runtime.bat
 | `tools/` | Installer, XEX dumper, STFS extractor, recompile and check scripts, tests |
 | `docs/` | Triage reports, specs, screenshots |
 
-## Credits and legal
+## Credits
 
 Built on [XenonRecomp](https://github.com/hedge-dev/XenonRecomp), [XenosRecomp](https://github.com/hedge-dev/XenosRecomp)
 and patterns from [UnleashedRecomp](https://github.com/hedge-dev/UnleashedRecomp) by hedge-dev. Format knowledge comes
 from [Xenia](https://github.com/xenia-project/xenia), and audio from [FFmpeg](https://ffmpeg.org). See
-[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). The source code is licensed under **GPL-3.0** ([`LICENSE`](LICENSE)).
 
-Licensed under **GPL-3.0** ([`LICENSE`](LICENSE)).
-*Splinter Cell: Double Agent* is the property of Ubisoft. This project is not affiliated with or endorsed by
-Ubisoft or Microsoft, and it contains no game data. Screenshots are shown only to document the project's progress.
+## Legal
+
+Unofficial fan project, not affiliated with or endorsed by Ubisoft or Microsoft. *Splinter Cell*, *Splinter Cell:
+Double Agent*, Sam Fisher and all related characters, names, logos and content are the property of Ubisoft
+Entertainment. Xbox and Xbox 360 are trademarks of Microsoft.
+
+- **No game data is included.** This repository contains only original source code, build scripts and configuration
+  (function addresses and jump tables). It ships no executables, assets, audio, video or text from the game.
+- **You must own the game.** The installer works only from your own *Splinter Cell: Double Agent* Xbox 360 disc image.
+  It checks the image's hash and builds the game files on your PC. Do not ask for or share game files or disc images
+  here; such issues will be closed.
+- **No piracy.** This project does not help anyone obtain the game. To read the game's code, the tools decrypt and
+  unpack the executable from your own disc on your PC, as other Xbox 360 recompilation projects do.
+- **Screenshots** in `docs/images/` were captured from this project running the author's own copy of the game. They
+  are shown only to document the port's progress.
+- **Takedown requests:** if you are a rights holder and have a concern, please open an issue or contact the
+  maintainer. It will be addressed promptly.
