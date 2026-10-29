@@ -49,3 +49,26 @@ Project commands (`.claude/commands/`):
 3. The 4 commands above.
 4. Folder layout above.
 5. `tools/pe_ppc_inspect.py` written; `default.xex` + `SC4_Offline.xex` extracted from the ISO and triaged (`docs/triage_*.txt`).
+
+# Project: Splinter Cell: Double Agent (Xbox 360) Static Recompilation
+## Target Architecture: Xbox 360 PowerPC (Xenon) -> Native C++20 (x86_64)
+## Engine Architecture: Modified Unreal Engine 2.5 (Ubisoft Shanghai SC4 Engine)
+
+You are one of several parallel autonomous reverse-engineering agents working simultaneously on this repository. To prevent race conditions, file overwrites, and duplicate work, you MUST obey the Multi-Agent Coordination Protocol below.
+
+### 1. Multi-Agent Coordination & Locking Protocol
+1. **Claiming Work:** Read `tasks/queue.json`. Find the first `"unclaimed"` function matching your assigned subsystem. Immediately update its status to `"in_progress"` and set `"claimed_by"` to your instance ID before doing any analysis.
+2. **File Isolation:** Never edit a `.cpp` file currently claimed by another agent. Write your decompiled C++ functions into isolated translation units under your subsystem folder (e.g., `src/gameplay/sub_821A0000.cpp`) until they are ready to be merged.
+3. **Shared Header Rules (`include/scda_types.h`):** Re-read `include/scda_types.h` before modifying structs. Preserve standard UE2 naming conventions (`UObject`, `AActor`, `FVector`, `FArchive`).
+
+### 2. Specialized Agent Roles
+Stick strictly to the role assigned at startup:
+* **AGENT_CORE:** `UObject` serialization, memory allocators, string tables, file I/O, and `xboxkrnl.exe` shims.
+* **AGENT_GAMEPLAY:** Sam Fisher's state machine, JBA trust meter logic, NPC stealth/light/sound perception, and Havok physics wrappers.
+* **AGENT_GFX:** Xbox 360 Direct3D 9ex / Xenos custom shader calls, dynamic daylight/shadow rendering pipelines, and XAudio2/XMA sound hooks.
+* **AGENT_RECOMP:** Pure math, utility, and leaf functions (0 outgoing calls) from `tasks/queue.json`.
+
+### 3. Technical Translation Rules (PowerPC to x86_64)
+* **Endianness:** Xbox 360 is Big-Endian; x86_64 is Little-Endian. Wrap raw memory/asset reads in byte-swap macros (`BSWAP16`, `BSWAP32`, `BSWAP64`).
+* **Register Mapping:** Translate PowerPC registers (`r3`–`r31`, `f1`–`f31`, `vmx`) into clean local C++ variables and struct pointers.
+* **Verification:** Run `./scripts/verify_build.sh <function_name>`. If a function fails 5 times, mark it `"blocked"` in `tasks/queue.json`, revert your draft, and move on.
