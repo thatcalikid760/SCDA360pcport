@@ -49,9 +49,10 @@ SharedConstants BuildSharedConstants(const RegisterFile& r, uint32_t rtWidth, ui
 
 void CopyAluConstants(const RegisterFile& r, bool pixel, uint32_t out[1024])
 {
+    static_assert(kRegAluConstants % RegisterFile::kPageSize == 0);
     uint32_t base = kRegAluConstants + (pixel ? 1024 : 0);
-    for (uint32_t i = 0; i < 1024; i++)
-        out[i] = r[base + i];
+    for (uint32_t i = 0; i < 1024; i += RegisterFile::kPageSize)
+        memcpy(out + i, r.PageOf(base + i)->data(), RegisterFile::kPageSize * 4);
 }
 
 bool VertexFetchRange(const RegisterFile& r, uint32_t slot, MemoryRange& out)
@@ -485,7 +486,15 @@ uint32_t HostColorFormat(uint32_t guestFormat)
 void SwapIndices(const uint8_t* guest, uint32_t bytes, uint32_t endian, uint8_t* out)
 {
     // Endian modes work on whole dwords (8-in-16 on 16-bit indices swaps each index).
-    for (uint32_t i = 0; i < bytes; i += 4)
+    uint32_t i = 0;
+    for (; i + 4 <= bytes; i += 4)
+    {
+        uint32_t d;
+        memcpy(&d, guest + i, 4);
+        d = SwapDword(d, endian);
+        memcpy(out + i, &d, 4);
+    }
+    for (; i < bytes; i += 4)
     {
         uint32_t d = 0, n = bytes - i < 4 ? bytes - i : 4;
         memcpy(&d, guest + i, n);

@@ -30,6 +30,8 @@ public:
             page = std::make_shared<Page>(*page);
         (*page)[i % kPageSize] = v;
     }
+    // Page holding register i: the same pointer in two files means the same contents.
+    const std::shared_ptr<Page>& PageOf(uint32_t i) const { return pages[i / kPageSize]; }
 
 private:
     std::array<std::shared_ptr<Page>, kPages> pages;

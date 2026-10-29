@@ -114,6 +114,8 @@ struct DrawResources
     };
     std::unordered_map<uint64_t, CachedTexture> textureCache;
     const RegisterFile* lastRegs = nullptr;
+    // ALU constant pages last uploaded to b0/b1 (kept alive so a pointer match means same contents).
+    std::shared_ptr<RegisterFile::Page> aluPages[2][1024 / RegisterFile::kPageSize];
     // Resolve copies of the target by guest physical destination; kept across frames (the
     // frontbuffer and render-to-texture results are read after the frame that made them).
     struct Resolved
@@ -469,11 +471,22 @@ void D3D11Renderer::UploadVertexMemory(const DrawCall& d, const Frame& frame)
 void D3D11Renderer::BindRegisterState(const RegisterFile& regs)
 {
     DrawResources& r = *m_draw;
-    uint32_t alu[1024];
-    CopyAluConstants(regs, false, alu);
-    m_context->UpdateSubresource(r.constants[0].Get(), 0, nullptr, alu, 0, 0);
-    CopyAluConstants(regs, true, alu);
-    m_context->UpdateSubresource(r.constants[1].Get(), 0, nullptr, alu, 0, 0);
+    for (uint32_t pixel = 0; pixel < 2; pixel++)
+    {
+        auto& last = r.aluPages[pixel];
+        bool same = true;
+        for (uint32_t p = 0; p < std::size(last); p++)
+        {
+            const auto& page = regs.PageOf(kRegAluConstants + pixel * 1024 + p * RegisterFile::kPageSize);
+            same = same && last[p] == page;
+            last[p] = page;
+        }
+        if (same)
+            continue; // b0/b1 already hold these constants
+        uint32_t alu[1024];
+        CopyAluConstants(regs, pixel != 0, alu);
+        m_context->UpdateSubresource(r.constants[pixel].Get(), 0, nullptr, alu, 0, 0);
+    }
     SharedConstants shared = BuildSharedConstants(regs, kTargetWidth, kTargetHeight);
     m_context->UpdateSubresource(r.constants[2].Get(), 0, nullptr, &shared, 0, 0);
 
@@ -982,6 +995,8 @@ void D3D11Renderer::Present(const Frame& frame)
             r.textureCache.clear();
             r.last = nullptr;
             r.lastRegs = nullptr;
+            for (auto& pages : r.aluPages)
+                std::fill(std::begin(pages), std::end(pages), nullptr);
         }
         // EDRAM surfaces persist across frames; only guest clears (resolves) clear them.
         r.bound = false;
