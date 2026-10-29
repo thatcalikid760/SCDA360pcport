@@ -134,7 +134,7 @@ static void RenderThread(DisplaySettings s)
     RECT rc;
     GetClientRect(hwnd, &rc);
     D3D11Renderer renderer;
-    if (!renderer.Init(hwnd, rc.right, rc.bottom, s.vsync))
+    if (!renderer.Init(hwnd, rc.right, rc.bottom, s.vsync, s.scale))
     {
         RuntimeLog("[window] no Direct3D 11 device\n");
         return;

@@ -60,9 +60,8 @@ All shots come from the current build at 1280x720, running natively on Windows.
 | Multiplayer / Xbox Live | ❌ Not planned for now (network calls are stubbed) |
 
 **Known issues**
-- In Iceland the Osprey bay ceiling sometimes fails to render, leaving sky visible behind the cables.
 - Small differences from the console in fog, light shafts and some edges of the under-ice sky.
-- The renderer is a straightforward D3D11 path. There are no upscaling or widescreen extras yet.
+- The renderer is a straightforward D3D11 path. Internal resolution scaling exists (`Scale`); no widescreen extras yet.
 
 ## Getting started
 
@@ -74,7 +73,21 @@ All shots come from the current build at 1280x720, running natively on Windows.
    SHA-256, extracts the game files to `<dir>\game` and prepares the flat image.
 3. Run `scda.exe` from the install folder.
 
-Settings (resolution scale, window mode, VSync, mouse) live in `settings.ini` next to the executable.
+Settings live in `%LOCALAPPDATA%\SCDARecomp\settings.ini`:
+
+```ini
+[Display]
+Scale=2
+Mode=borderless
+VSync=1
+[Input]
+MouseLook=1
+MouseSensitivity=1.0
+MouseInvertY=0
+```
+
+`Scale` (1-4) renders at 1280x720 times Scale and downsamples to the window (2 = 2560x1440).
+`Mode` is `windowed`, `borderless` or `fullscreen`. The parser has no inline comments.
 
 <img src="installer.png" width="640" alt="Installer">
 
