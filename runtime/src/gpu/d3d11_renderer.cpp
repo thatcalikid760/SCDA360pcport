@@ -795,9 +795,41 @@ void D3D11Renderer::ExecuteDraw(const DrawCall& d, const Frame& frame)
             if (count > 3)
                 used += " " + std::to_string(n);
         }
-        RuntimeLog("[rtrace] draw %u vs %016llx ps %016llx rt %08X/%08X mask %08X samples%s\n", m_lastDrawn + m_lastSkipped,
-            (unsigned long long)d.vs->hash, (unsigned long long)d.ps->hash, r.regs[kRegRbSurfaceInfo], r.regs[kRegRbColorInfo],
-            r.regs[0x2104], used.c_str());
+        RuntimeLog("[rtrace] draw %u vs %016llx ps %016llx rt %08X/%08X mask %08X zctl %08X zinfo %08X vte %08X zs %08X zo %08X wo %08X sc %08X ib %08X n %u samples%s\n",
+            m_lastDrawn + m_lastSkipped, (unsigned long long)d.vs->hash, (unsigned long long)d.ps->hash, r.regs[kRegRbSurfaceInfo],
+            r.regs[kRegRbColorInfo], r.regs[0x2104], r.regs[0x2200], r.regs[kRegRbDepthInfo], r.regs[0x2206], r.regs[0x2113],
+            r.regs[0x2114], r.regs[0x2080], r.regs[0x2205], d.indexBase, d.indexCount, used.c_str());
+        // SCDA_TRACE_CONSTS=<index base hex>: draws with that index base also log their vertex/index
+        // snapshot hashes, draw state, PS c0, bool and vertex fetch constants and VS c0-c255.
+        static const uint32_t constsIb = getenv("SCDA_TRACE_CONSTS") ? strtoul(getenv("SCDA_TRACE_CONSTS"), nullptr, 16) : 0;
+        if (constsIb && d.indexBase == constsIb)
+        {
+            auto hash = [&](int32_t m)
+            {
+                uint64_t h = 1469598103934665603ull;
+                if (m >= 0 && size_t(m) < frame.memory.size())
+                    for (uint8_t b : frame.memory[m].bytes)
+                        h = (h ^ b) * 1099511628211ull;
+                return (unsigned long long)h;
+            };
+            for (uint32_t m : d.memory)
+                RuntimeLog("[rtrace]   snap %u key %016llx size %zu hash %016llx\n", m, (unsigned long long)frame.memory[m].key,
+                    frame.memory[m].bytes.size(), hash(int32_t(m)));
+            RuntimeLog("[rtrace]   idx %d hash %016llx prim %u src %d i32 %d endian %u vgt %08X %08X %08X %08X colorctl %08X aref %08X mode %08X\n",
+                d.indexSnapshot, hash(d.indexSnapshot), d.primType, int(d.source), int(d.index32), d.indexEndian, r.regs[0x2100],
+                r.regs[0x2101], r.regs[0x2102], r.regs[0x2103], r.regs[0x2202], r.regs[0x210E], r.regs[kRegRbModeControl]);
+            RuntimeLog("[rtrace]   psc0 %08X %08X %08X %08X psc255 %08X bool %08X %08X\n", r.regs[kRegAluConstants + 1024],
+                r.regs[kRegAluConstants + 1025], r.regs[kRegAluConstants + 1026], r.regs[kRegAluConstants + 1027],
+                r.regs[kRegAluConstants + 1024 + 255 * 4], r.regs[kRegBoolConstants], r.regs[kRegBoolConstants + 4]);
+            for (uint32_t c = 0; c < 192; c += 6)
+                if ((r.regs[kRegFetchConstants + c] & 3) == 3 || (r.regs[kRegFetchConstants + c + 2] & 3) == 3 || (r.regs[kRegFetchConstants + c + 4] & 3) == 3)
+                    RuntimeLog("[rtrace]   fetch%u %08X %08X %08X %08X %08X %08X\n", c / 6, r.regs[kRegFetchConstants + c],
+                        r.regs[kRegFetchConstants + c + 1], r.regs[kRegFetchConstants + c + 2], r.regs[kRegFetchConstants + c + 3],
+                        r.regs[kRegFetchConstants + c + 4], r.regs[kRegFetchConstants + c + 5]);
+            for (uint32_t c = 0; c < 256; c++)
+                RuntimeLog("[rtrace]   c%u %08X %08X %08X %08X\n", c, r.regs[kRegAluConstants + c * 4], r.regs[kRegAluConstants + c * 4 + 1],
+                    r.regs[kRegAluConstants + c * 4 + 2], r.regs[kRegAluConstants + c * 4 + 3]);
+        }
     }
     static const std::filesystem::path cacheDir = DefaultShaderCacheDir();
     auto& vs = r.vs[d.vs->hash];
@@ -828,7 +860,12 @@ void D3D11Renderer::ExecuteDraw(const DrawCall& d, const Frame& frame)
     }
     UploadVertexMemory(d, frame);
     m_context->VSSetShader(vs.Get(), nullptr, 0);
-    m_context->PSSetShader(ps.Get(), nullptr, 0);
+    // RB_MODECONTROL 5 (depth only): the pixel shader does not run, so its kills (a masked prepass
+    // PS left bound with another draw's texture) must not drop depth (Xenia xenos::ModeControl).
+    // SCDA_DEPTH_ONLY_PS=1 runs it anyway (A/B).
+    static const bool depthOnlyPs = getenv("SCDA_DEPTH_ONLY_PS") != nullptr;
+    const bool depthOnly = (r.regs[kRegRbModeControl] & 7) == 5 && !depthOnlyPs;
+    m_context->PSSetShader(depthOnly ? nullptr : ps.Get(), nullptr, 0);
     m_context->GSSetShader(rectList ? r.rectListGs.Get() : nullptr, nullptr, 0);
     m_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY(topology));
     const bool expand = NeedsTriangleListExpansion(d.primType);
@@ -1160,6 +1197,20 @@ void D3D11Renderer::Present(const Frame& frame)
                 char name[64];
                 snprintf(name, sizeof(name), "/draw_%04zu.bmp", i);
                 Dump(std::string(dumpDraws, strcspn(dumpDraws, ",")) + name, r.last->texture.Get());
+                // SCDA_DUMP_DEPTH=1: also the bound depth target (z_<n>.bmp, see TexelToRgba8).
+                static const bool dumpDepth = getenv("SCDA_DUMP_DEPTH") != nullptr;
+                auto z = r.bound ? r.depthTargets.find(r.boundKeys[4]) : r.depthTargets.end();
+                if (dumpDepth && z != r.depthTargets.end())
+                {
+                    ComPtr<ID3D11Resource> res;
+                    ComPtr<ID3D11Texture2D> tex;
+                    z->second->GetResource(&res);
+                    if (SUCCEEDED(res.As(&tex)))
+                    {
+                        snprintf(name, sizeof(name), "/z_%04zu.bmp", i);
+                        Dump(std::string(dumpDraws, strcspn(dumpDraws, ",")) + name, tex.Get());
+                    }
+                }
             }
         }
         ApplyRegisterWrites(frame, frame.regWrites.size()); // draws past SCDA_DRAW_LIMIT still wrote registers
@@ -1216,6 +1267,13 @@ void D3D11Renderer::Present(const Frame& frame)
 static uint32_t TexelToRgba8(DXGI_FORMAT format, const uint8_t* p)
 {
     float c[4] = { 0, 0, 0, 1 };
+    if (format == DXGI_FORMAT_D32_FLOAT_S8X24_UINT) // depth dumps: unorm24 depth in RGB (R high), stencil in A
+    {
+        float z;
+        memcpy(&z, p, 4);
+        const uint32_t d = uint32_t(std::clamp(z, 0.0f, 1.0f) * 16777215.0f + 0.5f);
+        return (d >> 16) | (d & 0xFF00) | ((d & 0xFF) << 16) | (uint32_t(p[4]) << 24);
+    }
     switch (format)
     {
     case DXGI_FORMAT_R16G16B16A16_FLOAT:
@@ -1268,7 +1326,8 @@ static std::vector<uint32_t> ReadTarget(ID3D11Device* device, ID3D11DeviceContex
     D3D11_MAPPED_SUBRESOURCE m;
     if (FAILED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &m)))
         return out;
-    const uint32_t bpp = td.Format == DXGI_FORMAT_R16G16B16A16_FLOAT || td.Format == DXGI_FORMAT_R32G32_FLOAT ? 8 : 4;
+    const uint32_t bpp = td.Format == DXGI_FORMAT_R16G16B16A16_FLOAT || td.Format == DXGI_FORMAT_R32G32_FLOAT ||
+        td.Format == DXGI_FORMAT_D32_FLOAT_S8X24_UINT ? 8 : 4;
     out.resize(size_t(td.Width) * td.Height);
     // SCDA_RT_STATS=1: log the FP16 maxima (rgb, alpha) of each target read back (dumps squash to 8-bit).
     static const bool stats = getenv("SCDA_RT_STATS") != nullptr;
