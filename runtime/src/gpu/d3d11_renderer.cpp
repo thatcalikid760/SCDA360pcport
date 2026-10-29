@@ -152,6 +152,9 @@ struct DrawResources
         uint32_t rowBytes = 0; // guest bytes per row (RB_COPY_DEST_INFO format x width)
         uint32_t destFormat = 0; // RB_COPY_DEST_INFO bits 7-12
         uint32_t version = 0;    // bumped by each copy into texture
+        uint64_t guestHash = 0;  // SCDA_TRACE_STALE: guest bytes under the texture after the last copy
+        uint64_t checkedAt = ~0ull; // SCDA_TRACE_STALE: presented frame of the last hash check
+        uint64_t staleSince = 0;    // SCDA_TRACE_STALE: presented frame + 1 the change was seen, 0 = fresh
         // Fetches smaller than the resolve (pitch-aligned dest, e.g. a 1x1 fetch of a 32x1 resolve
         // that wrote 8x8): the top-left w x h, so normalized coordinates hit the written texels.
         struct Crop
@@ -574,6 +577,12 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs, uint32_t texSlot
     HostBlend b = DecodeBlend(regs);
     if ((regs[kRegRbModeControl] & 7) == 5) // depth-only pass (Z prepass, occlusion queries)
         b.writeMask = 0;
+    // SCDA_TRACE_BLEND=1: each RB_BLENDCONTROL0 per RT0 format and write mask once.
+    static const bool traceBlend = getenv("SCDA_TRACE_BLEND") != nullptr;
+    static std::unordered_set<uint64_t> blendSeen;
+    if (traceBlend && blendSeen.size() < 4000 &&
+        blendSeen.insert((uint64_t(regs[0x2201]) << 12) | ((regs[kRegRbColorInfo] >> 16 & 0xF) << 4) | b.writeMask).second)
+        RuntimeLog("[blend] frame %llu rt fmt %u blend %08X mask %X\n", m_presented, regs[kRegRbColorInfo] >> 16 & 0xF, regs[0x2201], b.writeMask);
     auto& blend = r.blend[(uint64_t(regs[0x2201]) << 4) | b.writeMask];
     if (!blend)
     {
@@ -644,11 +653,34 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs, uint32_t texSlot
         }
         // A resolve target: guest memory there does not hold the image, the host copy does.
         // shortcut: matched by address and size only; entries are never invalidated.
+        // SCDA_TRACE_STALE 19-map census (2026-10-29): no copy fetched after a CPU write in a later frame.
         if (auto res = r.resolved.find(t.physical); res != r.resolved.end() && t.width <= res->second.width && t.height <= res->second.height)
         {
             if (res->second.destFormat != t.format && TraceResolveOnce((1ull << 60) | (uint64_t(t.physical) << 8) | t.format))
                 RuntimeLog("[resolve] fetch %08X fmt %u %ux%u hits resolve fmt %u %ux%u\n", t.physical, t.format, t.width, t.height,
                     res->second.destFormat, res->second.width, res->second.height);
+            // SCDA_TRACE_STALE=1: the CPU wrote the destination since the resolve (once per frame and base):
+            // a texture streamed into a former resolve target would still bind the stale copy.
+            static const bool traceStale = getenv("SCDA_TRACE_STALE") != nullptr;
+            if (traceStale && res->second.checkedAt != m_presented)
+            {
+                res->second.checkedAt = m_presented;
+                const uint8_t* guest = PhysicalPtr(t.physical);
+                const size_t n = size_t(res->second.rowBytes) * res->second.height;
+                const uint64_t hash = GuestRangeReadable(guest, n) ? HashBytes(guest, n) : 0;
+                static std::unordered_set<uint32_t> stillLogged;
+                if (res->second.staleSince && res->second.staleSince - 1 < m_presented && stillLogged.insert(t.physical).second)
+                    RuntimeLog("[stale] frame %llu fetch %08X still the copy made before frame %llu\n", m_presented, t.physical, res->second.staleSince - 1);
+                if (hash != res->second.guestHash && !res->second.staleSince)
+                    res->second.staleSince = m_presented + 1;
+                if (hash != res->second.guestHash)
+                    RuntimeLog("[stale] frame %llu fetch %08X fmt %u %ux%u tiled %d: guest bytes changed since resolve v%u fmt %u %ux%u\n", m_presented,
+                        t.physical, t.format, t.width, t.height, t.tiled, res->second.version, res->second.destFormat, res->second.width, res->second.height);
+                static uint32_t checks = 0;
+                if (++checks % 5000 == 1)
+                    RuntimeLog("[stale] check #%u frame %llu fetch %08X hash %016llx\n", checks, m_presented, t.physical, (unsigned long long)hash);
+                res->second.guestHash = hash; // log each change once
+            }
             srvs[slot] = ResolvedView(m_device, m_context, res->second, t.width, t.height);
             continue;
         }
@@ -1068,6 +1100,16 @@ void D3D11Renderer::ExecuteResolve(const Resolve& res)
                 }
                 m_lastResolved++;
                 dst.version++;
+                static const bool traceStale = getenv("SCDA_TRACE_STALE") != nullptr;
+                if (traceStale)
+                {
+                    const uint8_t* guest = PhysicalPtr(dstIt->first);
+                    const size_t n = size_t(dst.rowBytes) * dst.height;
+                    dst.guestHash = GuestRangeReadable(guest, n) ? HashBytes(guest, n) : 0;
+                    if (dst.staleSince)
+                        RuntimeLog("[stale] frame %llu resolve %08X refreshes copy stale since frame %llu\n", m_presented, dstIt->first, dst.staleSince - 1);
+                    dst.staleSince = 0;
+                }
                 // SCDA_DUMP_RESOLVES=<dir>: on a SCDA_DUMP_FRAME frame, each resolve's destination after the copy.
                 static const char* dumpResolves = getenv("SCDA_DUMP_RESOLVES");
                 if (dumpResolves && !m_dumpPath.empty())
