@@ -136,8 +136,10 @@ SCDA_IMPORT(XMsgStartIORequestEx) { __imp__XMsgStartIORequest(ctx, base); }
 SCDA_IMPORT(XMsgInProcessCall)
 {
     constexpr uint32_t kAppXmp = 0xFA, kXmpGetStatus = 0x00070009, kXmpStateIdle = 0;
-    RuntimeLog("[xam] XMsgInProcessCall app 0x%X msg 0x%X\n", ctx.r3.u32, ctx.r4.u32);
-    if (ctx.r3.u32 == kAppXmp && ctx.r4.u32 == kXmpGetStatus && ctx.r5.u32)
+    const bool getStatus = ctx.r3.u32 == kAppXmp && ctx.r4.u32 == kXmpGetStatus;
+    if (!getStatus) // XMPGetStatus is polled every few frames: handled silently
+        RuntimeLog("[xam] XMsgInProcessCall app 0x%X msg 0x%X\n", ctx.r3.u32, ctx.r4.u32);
+    if (getStatus && ctx.r5.u32)
         if (uint32_t state = GuestLoad32(ctx.r5.u32 + 4))
             GuestStore32(state, kXmpStateIdle);
     ctx.r3.u64 = kErrorSuccess;
