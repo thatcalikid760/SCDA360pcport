@@ -160,9 +160,11 @@ static void RenderThread(DisplaySettings s)
                 nextDump++;
         }
         renderer.Present(frame);
+        static uint64_t presents = 0;
+        presents++;
         if (dumping || tracing)
-            RuntimeLog("[frame] %llu: drawn %u skipped %u resolved %u presented %s\n", (unsigned long long)frame.stats.frame, renderer.LastDrawn(),
-                renderer.LastSkipped(), renderer.LastResolved(), renderer.LastPresentedFrontbuffer() ? "frontbuffer" : "target");
+            RuntimeLog("[frame] %llu: drawn %u skipped %u resolved %u presented %s (present #%llu)\n", (unsigned long long)frame.stats.frame, renderer.LastDrawn(),
+                renderer.LastSkipped(), renderer.LastResolved(), renderer.LastPresentedFrontbuffer() ? "frontbuffer" : "target", (unsigned long long)presents);
         if (GetTickCount() - lastTitle > 500)
         {
             lastTitle = GetTickCount();

@@ -106,6 +106,13 @@ struct DrawResources
     // Per frame: guest ranges already uploaded, textures by fetch constant.
     std::unordered_map<uint64_t, uint32_t> uploaded; // range key -> Frame::memory snapshot in the buffer
     std::unordered_map<uint64_t, ComPtr<ID3D11ShaderResourceView>> textures;
+    // Converted textures across frames by fetch constant, reused while the guest bytes hash the same.
+    struct CachedTexture
+    {
+        ComPtr<ID3D11ShaderResourceView> srv;
+        uint64_t hash = 0, lastUsed = 0;
+    };
+    std::unordered_map<uint64_t, CachedTexture> textureCache;
     const RegisterFile* lastRegs = nullptr;
     // Resolve copies of the target by guest physical destination; kept across frames (the
     // frontbuffer and render-to-texture results are read after the frame that made them).
@@ -313,6 +320,27 @@ static uint32_t ToUnorm8(float v) { return uint32_t(std::clamp(v, 0.0f, 1.0f) * 
 constexpr size_t kMaxEdramTargets = 64;
 
 // The host target for an EDRAM colour surface, created (cleared to 0) on first use; null on failure.
+// 64-bit content hash (4 independent multiply-xor lanes); never 0.
+static uint64_t HashBytes(const uint8_t* p, size_t n)
+{
+    uint64_t h[4] = { 0x9E3779B97F4A7C15ull, 0xC2B2AE3D27D4EB4Full, 0x165667B19E3779F9ull, 0x27D4EB2F165667C5ull };
+    size_t i = 0;
+    for (; i + 32 <= n; i += 32)
+        for (int l = 0; l < 4; l++)
+        {
+            uint64_t w;
+            memcpy(&w, p + i + l * 8, 8);
+            h[l] = (h[l] ^ w) * 0x100000001B3ull;
+            h[l] ^= h[l] >> 29;
+        }
+    uint64_t r = n;
+    for (; i < n; i++)
+        r = (r ^ p[i]) * 0x100000001B3ull;
+    for (int l = 0; l < 4; l++)
+        r = (r ^ h[l]) * 0x9E3779B97F4A7C15ull;
+    return r | 1;
+}
+
 // The resolve's view for a w x h fetch: the whole texture, or a top-left crop copied after each resolve.
 static ID3D11ShaderResourceView* ResolvedView(ID3D11Device* device, ID3D11DeviceContext* context, DrawResources::Resolved& res, uint32_t w, uint32_t h)
 {
@@ -584,7 +612,14 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs)
         {
             ComPtr<ID3D11ShaderResourceView> srv;
             const uint8_t* guest = PhysicalPtr(t.physical);
-            if (GuestRangeReadable(guest, TextureGuestBytes(t)))
+            const uint32_t guestBytes = TextureGuestBytes(t);
+            const uint64_t hash = GuestRangeReadable(guest, guestBytes) ? HashBytes(guest, guestBytes) : 0;
+            auto& cached = r.textureCache[key];
+            cached.lastUsed = m_presented;
+            static const bool noCache = getenv("SCDA_NO_TEXCACHE") != nullptr; // debug: convert every frame
+            if (hash && cached.srv && cached.hash == hash && !noCache)
+                srv = cached.srv;
+            else if (hash)
             {
                 const bool isFloat = IsFloatTextureFormat(t.format);
                 std::vector<float> floats = isFloat ? ConvertTextureFloat(t, guest) : std::vector<float>();
@@ -619,6 +654,8 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs)
                 ComPtr<ID3D11Texture2D> tex;
                 if (SUCCEEDED(m_device->CreateTexture2D(&td, &init, &tex)))
                     m_device->CreateShaderResourceView(tex.Get(), nullptr, &srv);
+                cached.srv = srv;
+                cached.hash = hash;
             }
             it = r.textures.emplace(key, srv).first;
         }
@@ -942,6 +979,7 @@ void D3D11Renderer::Present(const Frame& frame)
             r.colorTargets.clear();
             r.depthTargets.clear();
             r.resolved.clear();
+            r.textureCache.clear();
             r.last = nullptr;
             r.lastRegs = nullptr;
         }
@@ -992,6 +1030,8 @@ void D3D11Renderer::Present(const Frame& frame)
         }
         r.uploaded.clear();
         r.textures.clear();
+        if (m_presented % 60 == 0) // drop textures unused for ~10 s
+            std::erase_if(r.textureCache, [&](auto& e) { return e.second.lastUsed + 600 < m_presented; });
         ID3D11ShaderResourceView* none[32] = {};
         m_context->VSSetShaderResources(0, 32, none);
         m_context->PSSetShaderResources(0, 32, none);
