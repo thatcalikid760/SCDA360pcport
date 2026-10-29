@@ -29,14 +29,33 @@ stands in for the console:
 - **Xenos GPU:** the PM4 command processor feeds a Direct3D 11 renderer. Shader microcode is translated to HLSL at run time.
 - **Audio:** XMA is decoded through FFmpeg's WMA Pro decoder and output through XAudio2.
 
+## Recent progress
+
+- **Higher internal resolution.** `Scale=2..4` in `settings.ini` renders at 2560x1440 to 5120x2880 and box-filters
+  down to the window, which acts as supersampling anti-aliasing. Kinshasa, the heaviest map, holds the game's 30 fps
+  cap at `Scale=2`.
+- **Texture mipmaps and anisotropic filtering.** Textures the game gives a mip chain now have one, so distant surfaces
+  no longer shimmer. `Anisotropy=16` sharpens floors and walls seen at an angle.
+- **Auto-exposure fixed at higher scales.** Scenes no longer turn twice as bright above `Scale=1`.
+- **In-mission flow verified.** Load last checkpoint after ASSIGNMENT FAILED, Restart Mission, Quit to the main menu
+  and loading a save from the pause menu all work, repeatedly, in one session.
+
+![Scale 1 vs Scale 3](docs/images/scale_compare.jpg)
+
+*Kinshasa at the console's 1280x720 (left) and at `Scale=3` (right), zoomed in. The two shots come from separate
+runs, so the camera position differs slightly.*
+
 ## Screenshots
 
-All shots come from the current build at 1280x720, running natively on Windows.
+Shots come from the current build, running natively on Windows. Shots marked *Scale 2* or *Scale 3* use the internal
+resolution setting; the rest are at the console's 1280x720.
 
 | | |
 |:-:|:-:|
+| ![Kinshasa at Scale 3](docs/images/kinshasa_scale3.jpg) | ![Kinshasa gate at Scale 2](docs/images/kinshasa_gate.jpg) |
+| **Kinshasa**: retrieving the plans (*Scale 3*) | **Kinshasa**: through the gate (*Scale 2, 16x anisotropic*) |
 | ![Iceland: Osprey bay](docs/images/iceland_osprey.jpg) | ![Ellsworth Penitentiary](docs/images/jail_cell.jpg) |
-| **Iceland**: Osprey bay before the drop | **Ellsworth Penitentiary**: helping Jamie escape |
+| **Iceland**: Osprey bay before the drop | **Ellsworth Penitentiary**: helping Jamie escape (*Scale 3*) |
 | ![Sea of Okhotsk: skydive](docs/images/okhotsk_skydive.jpg) | ![Sea of Okhotsk: under the ice](docs/images/okhotsk_ice_dive.jpg) |
 | **Sea of Okhotsk**: HALO jump toward the supertanker | **Sea of Okhotsk**: diving under the ice |
 | ![Cozumel](docs/images/cozumel_cruise_ship.jpg) | ![Kinshasa](docs/images/kinshasa_city.jpg) |
@@ -52,16 +71,19 @@ All shots come from the current build at 1280x720, running natively on Windows.
 |-|-|
 | Boot, menus, profile | ✅ Main menu and profile sign-in |
 | Missions | ✅ All 18 single-player maps load and play, at the game's 30 fps cap |
+| In-mission flow | ✅ Checkpoint reload after failure, restart mission, quit to menu, load from pause |
 | Menu to mission transitions | ✅ In-process title relaunch with launch data (no restart) |
 | Save / load | ✅ Saves to `%LOCALAPPDATA%\SCDARecomp`; position and difficulty restore |
-| Graphics | 🟡 Most scenes match the console. Some glitches remain (see below) |
+| Graphics | 🟡 Most scenes match the console. Some glitches remain (see below). Internal resolution up to 4x, mipmaps, anisotropic filtering |
 | Audio | ✅ Music, 3D sound effects, dialogue (XMA) and Bink video audio |
 | Input | ✅ Xbox controller. 🟡 Mouse look and keyboard are new and barely tested |
 | Multiplayer / Xbox Live | ❌ Not planned for now (network calls are stubbed) |
 
 **Known issues**
 - Small differences from the console in fog, light shafts and some edges of the under-ice sky.
-- The renderer is a straightforward D3D11 path. Internal resolution scaling exists (`Scale`); no widescreen extras yet.
+- The renderer is a straightforward D3D11 path. No ultrawide support yet.
+- Mipmaps are generated from the full-size texture rather than taken from the game's own smaller versions.
+- Above `Scale=1`, some post-processing passes can miss one pixel row/column at the screen edge.
 
 ## Getting started
 
