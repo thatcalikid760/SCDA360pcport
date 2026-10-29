@@ -968,6 +968,15 @@ PPC_FUNC(sub_82A66FC0)
                 const uint32_t p = PPC_LOAD_U32(l + off);
                 if (p < 0x40000000 || p >= 0x60000000 || (p & 3))
                     continue;
+                // Heap pointers may point at decommitted or guard pages (crashed on 02_Jail_01 at a
+                // stack guard page).
+                MEMORY_BASIC_INFORMATION mbi{};
+                if (!VirtualQuery(base + p, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT ||
+                    (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) || mbi.Protect == 0)
+                    continue;
+                if (!VirtualQuery(base + p + 944, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT ||
+                    (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) || mbi.Protect == 0)
+                    continue;
                 const float x = f(p + 932), y = f(p + 936), zz = f(p + 940);
                 if (x == x && x > -300000 && x < 300000 && (x != 0 || y != 0) && y > -300000 && y < 300000)
                     fprintf(stderr, "[dare]  listener+%X -> %08X vt %08X (%g %g %g)\n", off, p, PPC_LOAD_U32(p), x, y, zz);
