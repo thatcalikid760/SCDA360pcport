@@ -117,6 +117,16 @@ struct DrawResources
         DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN; // the source target's
         uint32_t rowBytes = 0; // guest bytes per row (RB_COPY_DEST_INFO format x width)
         uint32_t destFormat = 0; // RB_COPY_DEST_INFO bits 7-12
+        uint32_t version = 0;    // bumped by each copy into texture
+        // Fetches smaller than the resolve (pitch-aligned dest, e.g. a 1x1 fetch of a 32x1 resolve
+        // that wrote 8x8): the top-left w x h, so normalized coordinates hit the written texels.
+        struct Crop
+        {
+            ComPtr<ID3D11Texture2D> texture;
+            ComPtr<ID3D11ShaderResourceView> srv;
+            uint32_t version = ~0u;
+        };
+        std::unordered_map<uint32_t, Crop> crops; // by w << 16 | h
     };
     std::unordered_map<uint32_t, Resolved> resolved;
 };
@@ -303,6 +313,34 @@ static uint32_t ToUnorm8(float v) { return uint32_t(std::clamp(v, 0.0f, 1.0f) * 
 constexpr size_t kMaxEdramTargets = 64;
 
 // The host target for an EDRAM colour surface, created (cleared to 0) on first use; null on failure.
+// The resolve's view for a w x h fetch: the whole texture, or a top-left crop copied after each resolve.
+static ID3D11ShaderResourceView* ResolvedView(ID3D11Device* device, ID3D11DeviceContext* context, DrawResources::Resolved& res, uint32_t w, uint32_t h)
+{
+    if (w >= res.width && h >= res.height)
+        return res.srv.Get();
+    auto& crop = res.crops[(w << 16) | h];
+    if (!crop.srv)
+    {
+        D3D11_TEXTURE2D_DESC td{};
+        td.Width = w;
+        td.Height = h;
+        td.MipLevels = td.ArraySize = 1;
+        td.Format = res.format;
+        td.SampleDesc.Count = 1;
+        td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        if (FAILED(device->CreateTexture2D(&td, nullptr, &crop.texture)) ||
+            FAILED(device->CreateShaderResourceView(crop.texture.Get(), nullptr, &crop.srv)))
+            return res.srv.Get();
+    }
+    if (crop.version != res.version)
+    {
+        D3D11_BOX box{ 0, 0, 0, w, h, 1 };
+        context->CopySubresourceRegion(crop.texture.Get(), 0, 0, 0, 0, res.texture.Get(), 0, &box);
+        crop.version = res.version;
+    }
+    return crop.srv.Get();
+}
+
 static ColorTarget* ColorTargetFor(ID3D11Device* device, ID3D11DeviceContext* context, DrawResources& r, uint32_t key)
 {
     if (auto it = r.colorTargets.find(key); it != r.colorTargets.end())
@@ -514,7 +552,7 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs)
             if (res->second.destFormat != t.format && TraceResolveOnce((1ull << 60) | (uint64_t(t.physical) << 8) | t.format))
                 RuntimeLog("[resolve] fetch %08X fmt %u %ux%u hits resolve fmt %u %ux%u\n", t.physical, t.format, t.width, t.height,
                     res->second.destFormat, res->second.width, res->second.height);
-            srvs[slot] = res->second.srv.Get();
+            srvs[slot] = ResolvedView(m_device, m_context, res->second, t.width, t.height);
             continue;
         }
         static const bool traceResolve = getenv("SCDA_TRACE_RESOLVE") != nullptr;
@@ -762,8 +800,8 @@ void D3D11Renderer::ExecuteResolve(const Resolve& res)
         if ((res.destBase & 0xFFF) && TraceResolveOnce((3ull << 60) | res.destBase))
             RuntimeLog("[resolve] dest %08X has sub-page offset %03X (dropped)\n", res.destBase, res.destBase & 0xFFF);
         if (TraceResolveOnce((4ull << 60) | res.colorInfo | (uint64_t(res.surfaceInfo & 0x3FFF) << 32)))
-            RuntimeLog("[resolve] source info %08X surf %08X from_depth %d -> dest %08X fmt %u %ux%u\n", res.colorInfo, res.surfaceInfo,
-                ResolveFromDepth(res), res.destBase, (res.destInfo >> 7) & 0x3F, ResolveWidth(res), ResolveHeight(res));
+            RuntimeLog("[resolve] source info %08X surf %08X from_depth %d -> dest %08X info %08X fmt %u %ux%u\n", res.colorInfo, res.surfaceInfo,
+                ResolveFromDepth(res), res.destBase, res.destInfo, (res.destInfo >> 7) & 0x3F, ResolveWidth(res), ResolveHeight(res));
         uint32_t dy = 0;
         auto dstIt = r.resolved.end();
         for (auto it = r.resolved.begin(); it != r.resolved.end(); ++it)
@@ -825,6 +863,7 @@ void D3D11Renderer::ExecuteResolve(const Resolve& res)
                 D3D11_BOX box{ UINT(x0), UINT(y0), 0, UINT(x1), UINT(y1), 1 };
                 m_context->CopySubresourceRegion(dst.texture.Get(), 0, UINT(x0), UINT(y0) + dy, 0, source->texture.Get(), 0, &box);
                 m_lastResolved++;
+                dst.version++;
                 // SCDA_DUMP_RESOLVES=<dir>: on a SCDA_DUMP_FRAME frame, each resolve's destination after the copy.
                 static const char* dumpResolves = getenv("SCDA_DUMP_RESOLVES");
                 if (dumpResolves && !m_dumpPath.empty())
@@ -841,6 +880,8 @@ void D3D11Renderer::ExecuteResolve(const Resolve& res)
     if (ResolveClearsColor(res) && source)
     {
         const uint32_t c = res.colorClear;
+        if (TraceResolveOnce((5ull << 60) | res.colorInfo | (uint64_t(c) << 20)))
+            RuntimeLog("[resolve] clear src %08X surf %08X value %08X\n", res.colorInfo, res.surfaceInfo, c);
         const float color[4] = { (c & 0xFF) / 255.0f, ((c >> 8) & 0xFF) / 255.0f, ((c >> 16) & 0xFF) / 255.0f, (c >> 24) / 255.0f };
         m_context->ClearRenderTargetView(source->rtv.Get(), color);
     }
