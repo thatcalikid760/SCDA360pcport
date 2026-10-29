@@ -1,4 +1,5 @@
 #include <windows.h>
+#include <psapi.h>
 #include <algorithm>
 #include <atomic>
 #include <bit>
@@ -245,6 +246,18 @@ static void RenderThread(DisplaySettings s)
                 frame.stats.resolves, frame.stats.shaders,
                 ShaderCompilerReadyCount(), ShaderCompilerFailedCount());
             SetWindowTextW(hwnd, title);
+            // Leak watch: host memory and handles once a minute.
+            static ULONGLONG lastMem = 0;
+            if (GetTickCount64() - lastMem > 60000)
+            {
+                lastMem = GetTickCount64();
+                PROCESS_MEMORY_COUNTERS_EX pmc{ sizeof(pmc) };
+                DWORD handles = 0;
+                GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc), sizeof(pmc));
+                GetProcessHandleCount(GetCurrentProcess(), &handles);
+                RuntimeLog("[mem] %.0f s: working set %zu MB, private %zu MB, handles %lu\n", (GetTickCount64() - startTick) / 1000.0,
+                    size_t(pmc.WorkingSetSize >> 20), size_t(pmc.PrivateUsage >> 20), handles);
+            }
         }
     }
 }
