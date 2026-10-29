@@ -83,8 +83,8 @@ SCDA_IMPORT(XamLoaderSetLaunchData)
 // The title sends "Game:\default.xex" (the SP/MP launcher) a 520-byte block {u32 reason, ...}:
 // reason 1 = quit solo (sub_821D13D0, rest zero), 2 = likely an accepted game invite (sub_821D1550,
 // 88 bytes = XINVITE_INFO size; no invite import). Neither has a PC equivalent, so exiting is
-// right for both. Every map load
-// (menu, mission, restart, quit to menu) goes through sub_821D16E0 -> "SC4_Offline.xex".
+// right for both. Every map load (menu, mission, restart, quit to menu) goes through
+// sub_821D16E0 -> "SC4_Offline.xex".
 SCDA_IMPORT(XamLoaderLaunchTitle)
 {
     const char* path = ctx.r3.u32 ? (const char*)GuestPtr(ctx.r3.u32) : "(null)";
