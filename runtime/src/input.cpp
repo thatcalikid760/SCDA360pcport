@@ -2,6 +2,7 @@
 // locally, in user slot 0; its controller is XInput pad 0 merged with the keyboard (while the game
 // window has focus) and SCDA_AUTOPRESS.
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -143,7 +144,27 @@ SCDA_IMPORT(XamInputGetState)
         ctx.r3.u64 = kErrorDeviceNotConnected;
         return;
     }
-    static const std::vector<AutoPress> script = ParseAutoPress(getenv("SCDA_AUTOPRESS"));
+    // SCDA_AUTOPRESS=<script> or @<file> holding the script (long soak scripts).
+    static const std::vector<AutoPress> script = []
+    {
+        const char* env = getenv("SCDA_AUTOPRESS");
+        if (env && env[0] == '@')
+        {
+            std::string text;
+            if (FILE* f = fopen(env + 1, "rb"))
+            {
+                char buf[4096];
+                for (size_t n; (n = fread(buf, 1, sizeof(buf), f)) > 0;)
+                    text.append(buf, n);
+                fclose(f);
+            }
+            for (auto& c : text)
+                if (c == '\n' || c == '\r')
+                    c = ',';
+            return ParseAutoPress(text.c_str());
+        }
+        return ParseAutoPress(env);
+    }();
     XINPUT_STATE pad{};
     bool connected = XInputGetState(0, &pad) == ERROR_SUCCESS;
     XINPUT_GAMEPAD g = connected ? pad.Gamepad : XINPUT_GAMEPAD{};
