@@ -114,10 +114,12 @@ uint32_t HostCullMode(const RegisterFile& regs);
 bool HostFrontCounterClockwise(const RegisterFile& regs);
 
 // Texture fetch constant addressing (dword 0 clamp_x/y/z) and filtering (dword 3 mag/min/mip)
-// as D3D11_TEXTURE_ADDRESS_MODE / D3D11_FILTER values.
+// as D3D11_TEXTURE_ADDRESS_MODE / D3D11_FILTER values; mip levels the sampler may use (dword 4,
+// base map = min level only) and anisotropy (dword 3 aniso_filter, 1 = off).
 struct HostSampler
 {
     uint32_t filter = 0x15, addressU = 1, addressV = 1, addressW = 1;
+    uint32_t minLod = 0, maxLod = 0, anisotropy = 1;
 };
 HostSampler DecodeSampler(const RegisterFile& regs, uint32_t slot);
 

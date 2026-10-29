@@ -78,6 +78,7 @@ Settings live in `%LOCALAPPDATA%\SCDARecomp\settings.ini`:
 ```ini
 [Display]
 Scale=2
+Anisotropy=16
 Mode=borderless
 VSync=1
 [Input]
@@ -87,7 +88,7 @@ MouseInvertY=0
 ```
 
 `Scale` (1-4) renders at 1280x720 times Scale and downsamples to the window (2 = 2560x1440).
-`Mode` is `windowed`, `borderless` or `fullscreen`. The parser has no inline comments.
+`Anisotropy` (1-16, default 1) sets the minimum anisotropic filtering. `Mode` is `windowed`, `borderless` or `fullscreen`. The parser has no inline comments.
 
 <img src="installer.png" width="640" alt="Installer">
 

@@ -73,6 +73,12 @@ DisplaySettings LoadDisplaySettings(const std::filesystem::path& ini)
         }
         else if (key == "vsync")
             s.vsync = Truthy(value);
+        else if (key == "anisotropy")
+        {
+            int v = atoi(value.c_str());
+            if (v >= 1 && v <= 16)
+                s.anisotropy = uint32_t(v);
+        }
     });
     return s;
 }

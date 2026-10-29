@@ -367,4 +367,26 @@ TEST(sampler_from_fetch_constant)
     CHECK_EQ(s.addressV, 2u);
     CHECK_EQ(s.addressW, 4u);
     CHECK_EQ(s.filter, 0u);
+    CHECK_EQ(s.maxLod, 0u); // no mips
+}
+
+// Mip range (dword 4 mip_min_level bits 2-5, mip_max_level bits 6-9), mip filter 2 (base map) and
+// aniso_filter (dword 3 bits 25-27: 0 off, n = 2^(n-1) x). Field positions match Jail fetch
+// constants (mip_max_level > 0 exactly when dword 5 mip_address is set).
+TEST(sampler_mip_range_and_aniso)
+{
+    RegisterFile r;
+    r.Set(kRegFetchConstants + 3, (1u << 19) | (1u << 21) | (1u << 23) | (4u << 25)); // linear, 8x aniso
+    r.Set(kRegFetchConstants + 4, 6u << 6); // levels 0-6 (64x64)
+    HostSampler s = DecodeSampler(r, 0);
+    CHECK_EQ(s.filter, 0x15u);
+    CHECK_EQ(s.minLod, 0u);
+    CHECK_EQ(s.maxLod, 6u);
+    CHECK_EQ(s.anisotropy, 8u);
+    r.Set(kRegFetchConstants + 3, (1u << 19) | (1u << 21) | (2u << 23)); // base map: level min only
+    r.Set(kRegFetchConstants + 4, (1u << 2) | (6u << 6));
+    s = DecodeSampler(r, 0);
+    CHECK_EQ(s.minLod, 1u);
+    CHECK_EQ(s.maxLod, 1u);
+    CHECK_EQ(s.anisotropy, 1u);
 }

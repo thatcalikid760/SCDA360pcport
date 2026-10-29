@@ -21,8 +21,9 @@ public:
 
     D3D11Renderer();
     ~D3D11Renderer() override;
-    // scale: internal resolution factor (settings.ini [Display] Scale, 1-4) for EDRAM targets and resolves.
-    bool Init(HWND hwnd, uint32_t width, uint32_t height, bool vsync, uint32_t scale = 1);
+    // scale: internal resolution factor (settings.ini [Display] Scale, 1-4) for EDRAM targets and resolves;
+    // anisotropy: minimum for linear-filtered textures ([Display] Anisotropy, 1-16).
+    bool Init(HWND hwnd, uint32_t width, uint32_t height, bool vsync, uint32_t scale = 1, uint32_t anisotropy = 1);
     void Present(const Frame& frame) override;
     void Resize(uint32_t width, uint32_t height);
     uint64_t PresentedFrames() const { return m_presented; }
@@ -62,7 +63,7 @@ private:
     ID3D11RenderTargetView* m_backBuffer = nullptr;
     std::unique_ptr<DrawResources> m_draw;
     bool m_vsync = true;
-    uint32_t m_scale = 1;
+    uint32_t m_scale = 1, m_anisotropy = 1;
     uint64_t m_presented = 0;
     uint32_t m_lastDrawn = 0, m_lastSkipped = 0, m_lastResolved = 0;
     bool m_lastFrontbuffer = false;

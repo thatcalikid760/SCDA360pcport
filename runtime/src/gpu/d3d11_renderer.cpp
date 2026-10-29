@@ -44,10 +44,13 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target
     t.GetDimensions(w, h);
     float2 texels = float2(ddx(uv.x) * w, ddy(uv.y) * h);
     int2 n = clamp(int2(ceil(texels - 0.01)), 1, 4);
+    // Scaled frames: the last host column/row can be stale (half-integer-edged passes miss it with the
+    // host-pixel half-pixel offset), so taps stop at the one before.
+    float2 last = n > 1 ? (float2(w, h) - 1.5) / float2(w, h) : 1.0;
     float4 sum = 0;
     for (int y = 0; y < n.y; y++)
         for (int x = 0; x < n.x; x++)
-            sum += t.SampleLevel(s, uv + ((float2(x, y) + 0.5) / float2(n) - 0.5) * texels / float2(w, h), 0);
+            sum += t.SampleLevel(s, min(uv + ((float2(x, y) + 0.5) / float2(n) - 0.5) * texels / float2(w, h), last), 0);
     return sum / float(n.x * n.y);
 }
 )HLSL";
@@ -109,6 +112,7 @@ struct DrawResources
     // EDRAM surfaces, kTargetWidth x kTargetHeight (x scale) each, kept across frames like EDRAM.
     // Depth is float with stencil: it holds both guest formats (D24S8, D24FS8).
     uint32_t scale = 1; // host texels per guest pixel, each axis (targets and resolve copies)
+    uint32_t anisotropy = 1; // settings minimum for linear-filtered textures
     std::unordered_map<uint32_t, ColorTarget> colorTargets;
     std::unordered_map<uint32_t, ComPtr<ID3D11DepthStencilView>> depthTargets;
     uint32_t boundKeys[5] = {}; // RT0-3 + depth keys bound now; ~0u = none
@@ -199,9 +203,10 @@ void D3D11Renderer::ReleaseAll()
 
 D3D11Renderer::~D3D11Renderer() { ReleaseAll(); }
 
-bool D3D11Renderer::Init(HWND hwnd, uint32_t width, uint32_t height, bool vsync, uint32_t scale)
+bool D3D11Renderer::Init(HWND hwnd, uint32_t width, uint32_t height, bool vsync, uint32_t scale, uint32_t anisotropy)
 {
     m_scale = std::clamp<uint32_t>(scale, 1, 4);
+    m_anisotropy = std::clamp<uint32_t>(anisotropy, 1, 16);
     RuntimeLog("[d3d11] internal resolution %ux%u (scale %u)\n", kTargetWidth * m_scale, 720 * m_scale, m_scale);
     m_vsync = vsync;
     m_hwnd = hwnd;
@@ -250,6 +255,7 @@ bool D3D11Renderer::CreateDrawResources()
 {
     auto r = std::make_unique<DrawResources>();
     r->scale = m_scale;
+    r->anisotropy = m_anisotropy;
     D3D11_TEXTURE2D_DESC td{};
     td.MipLevels = td.ArraySize = 1;
     td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -568,6 +574,12 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs, uint32_t texSlot
     }
     SharedConstants shared = BuildSharedConstants(regs, kTargetWidth, kTargetHeight);
     shared.positionScale = 1.0f / float(r.scale);
+    // The D3D9 half-pixel offset in host pixels (0.5 / scale guest pixels): integer-edged rects
+    // (the 1x1..16x16 luminance chain) then cover exactly the host pixels of the guest pixels whose
+    // centres lie on their left/top edges, as at scale 1. shortcut: a half-integer-edged quad loses
+    // its last host column/row at scale > 1.
+    shared.halfPixelOffset[0] *= shared.positionScale;
+    shared.halfPixelOffset[1] *= shared.positionScale;
     m_context->UpdateSubresource(r.constants[2].Get(), 0, nullptr, &shared, 0, 0);
 
     // Render targets: RT0, RT1-3 with a colour mask (MRT), and the depth surface.
@@ -774,10 +786,41 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs, uint32_t texSlot
                 td.SampleDesc.Count = 1;
                 td.Usage = D3D11_USAGE_IMMUTABLE;
                 td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-                D3D11_SUBRESOURCE_DATA init{ isFloat ? (const void*)floats.data() : texels.data(), t.width * (isFloat ? 16 : 4), 0 };
+                const void* data = isFloat ? (const void*)floats.data() : texels.data();
+                const UINT rowPitch = t.width * (isFloat ? 16 : 4);
+                D3D11_SUBRESOURCE_DATA init{ data, rowPitch, 0 };
                 ComPtr<ID3D11Texture2D> tex;
-                if (SUCCEEDED(m_device->CreateTexture2D(&td, &init, &tex)))
-                    m_device->CreateShaderResourceView(tex.Get(), nullptr, &srv);
+                // Guest mip chain (dword 4 mip_max_level, levels at dword 5 mip_address): generated on
+                // the GPU from level 0. shortcut: generated mips, not the guest's packed authored ones.
+                uint32_t levels = 1;
+                for (uint32_t m = (regs[kRegFetchConstants + slot * 6 + 4] >> 6) & 0xF; m && ((t.width >> levels) | (t.height >> levels)); m--)
+                    levels++;
+                if (levels > 1)
+                {
+                    td.MipLevels = levels;
+                    td.Usage = D3D11_USAGE_DEFAULT;
+                    td.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+                    td.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
+                    if (SUCCEEDED(m_device->CreateTexture2D(&td, nullptr, &tex)) && SUCCEEDED(m_device->CreateShaderResourceView(tex.Get(), nullptr, &srv)))
+                    {
+                        m_context->UpdateSubresource(tex.Get(), 0, nullptr, data, rowPitch, 0);
+                        m_context->GenerateMips(srv.Get());
+                    }
+                    else
+                    {
+                        tex.Reset();
+                        srv.Reset();
+                    }
+                }
+                if (!srv)
+                {
+                    td.MipLevels = 1;
+                    td.Usage = D3D11_USAGE_IMMUTABLE;
+                    td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+                    td.MiscFlags = 0;
+                    if (SUCCEEDED(m_device->CreateTexture2D(&td, &init, &tex)))
+                        m_device->CreateShaderResourceView(tex.Get(), nullptr, &srv);
+                }
                 cached.srv = srv;
                 cached.hash = hash;
             }
@@ -797,15 +840,20 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs, uint32_t texSlot
         if (!((texSlots | texSlots >> 16) >> slot & 1)) // sampler = fetch slot & 15
             continue;
         HostSampler hs = DecodeSampler(regs, slot);
-        auto& state = r.samplers[(uint64_t(hs.filter) << 24) | (hs.addressU << 16) | (hs.addressV << 8) | hs.addressW];
+        // Anisotropy: the guest's, raised to the settings minimum for fully linear filtering.
+        const uint32_t aniso = std::max(hs.anisotropy, hs.filter == 0x15 ? r.anisotropy : 1u);
+        auto& state = r.samplers[(uint64_t(hs.filter) << 24) | (hs.addressU << 16) | (hs.addressV << 8) | hs.addressW |
+            (uint64_t(hs.minLod) << 32) | (uint64_t(hs.maxLod) << 36) | (uint64_t(aniso) << 40)];
         if (!state)
         {
             D3D11_SAMPLER_DESC sd{};
-            sd.Filter = D3D11_FILTER(hs.filter);
+            sd.Filter = aniso > 1 ? D3D11_FILTER_ANISOTROPIC : D3D11_FILTER(hs.filter);
+            sd.MaxAnisotropy = aniso;
             sd.AddressU = D3D11_TEXTURE_ADDRESS_MODE(hs.addressU);
             sd.AddressV = D3D11_TEXTURE_ADDRESS_MODE(hs.addressV);
             sd.AddressW = D3D11_TEXTURE_ADDRESS_MODE(hs.addressW);
-            sd.MaxLOD = D3D11_FLOAT32_MAX;
+            sd.MinLOD = float(hs.minLod);
+            sd.MaxLOD = float(hs.maxLod);
             m_device->CreateSamplerState(&sd, &state);
         }
         samplers[slot] = state ? state.Get() : r.sampler.Get();

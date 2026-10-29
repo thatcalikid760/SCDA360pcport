@@ -434,13 +434,17 @@ HostSampler DecodeSampler(const RegisterFile& r, uint32_t slot)
     // shortcut: the half-way and mirror-to-border modes map to their nearest D3D11 mode.
     static const uint32_t address[8] = { 1, 2, 3, 5, 3, 5, 4, 5 };
     HostSampler s;
-    const uint32_t c0 = r[kRegFetchConstants + slot * 6], c3 = r[kRegFetchConstants + slot * 6 + 3];
+    const uint32_t c0 = r[kRegFetchConstants + slot * 6], c3 = r[kRegFetchConstants + slot * 6 + 3], c4 = r[kRegFetchConstants + slot * 6 + 4];
     s.addressU = address[(c0 >> 10) & 7];
     s.addressV = address[(c0 >> 13) & 7];
     s.addressW = address[(c0 >> 16) & 7];
     // Filters: 1 = linear; point otherwise (shortcut: base-map and fetch-default modes as point).
     bool mag = ((c3 >> 19) & 3) == 1, min = ((c3 >> 21) & 3) == 1, mip = ((c3 >> 23) & 3) == 1;
     s.filter = (min ? 0x10 : 0) | (mag ? 0x4 : 0) | (mip ? 0x1 : 0);
+    s.minLod = (c4 >> 2) & 0xF;
+    s.maxLod = ((c3 >> 23) & 3) == 2 ? s.minLod : std::max(s.minLod, (c4 >> 6) & 0xF);
+    const uint32_t aniso = (c3 >> 25) & 7;
+    s.anisotropy = aniso ? std::min(1u << (aniso - 1), 16u) : 1;
     return s;
 }
 

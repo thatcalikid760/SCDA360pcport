@@ -8,6 +8,7 @@ struct DisplaySettings
     uint32_t scale = 1; // internal resolution = 1280x720 * scale (1..4)
     enum Mode { Windowed, Borderless, Fullscreen } mode = Windowed;
     bool vsync = true;
+    uint32_t anisotropy = 1; // minimum anisotropic filtering for linear-filtered textures (1 = off .. 16)
 };
 
 struct InputSettings
