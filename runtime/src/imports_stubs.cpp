@@ -23,7 +23,6 @@ SCDA_IMPORT(XamShowDirtyDiscErrorUI) { ImportStub("XamShowDirtyDiscErrorUI", ctx
 SCDA_IMPORT(XamShowMessageBoxUIEx) { ImportStub("XamShowMessageBoxUIEx", ctx); }
 SCDA_IMPORT(XGetLanguage) { ImportStub("XGetLanguage", ctx); }
 SCDA_IMPORT(XGetAVPack) { ImportStub("XGetAVPack", ctx); }
-SCDA_IMPORT(XamLoaderTerminateTitle) { ImportStub("XamLoaderTerminateTitle", ctx); }
 SCDA_IMPORT(XamGetExecutionId) { ImportStub("XamGetExecutionId", ctx); }
 SCDA_IMPORT(XexGetProcedureAddress) { ImportStub("XexGetProcedureAddress", ctx); }
 SCDA_IMPORT(XexGetModuleHandle) { ImportStub("XexGetModuleHandle", ctx); }

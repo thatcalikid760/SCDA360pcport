@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <string>
 #include <launch.h>
 #include <runtime.h>
 #include <title.h>
@@ -69,14 +70,31 @@ SCDA_IMPORT(XamLoaderSetLaunchData)
     ctx.r3.u64 = kErrorSuccess;
 }
 
+// Back to the dashboard: there is none on PC, so the game closes.
+[[noreturn]] static void ExitToDashboard(const char* why)
+{
+    RuntimeLog("[launch] %s: exiting\n", why);
+    ExitProcess(0);
+}
+
 // XamLoaderLaunchTitle(Path, Flags): this title relaunches itself ("SC4_Offline.xex") with the
-// launch data it just set; the runtime restarts it in-process (title.h). Never returns.
+// launch data it just set; the runtime restarts it in-process (title.h). Any other image (or
+// none: the dashboard) ends the process. Never returns.
 SCDA_IMPORT(XamLoaderLaunchTitle)
 {
     const char* path = ctx.r3.u32 ? (const char*)GuestPtr(ctx.r3.u32) : "(null)";
     RuntimeLog("[launch] LaunchTitle \"%s\" flags 0x%X, launch data %s\n", path, ctx.r4.u32, LaunchDataSetThisInstance() ? "set by this instance" : LaunchDataPresent() ? "STALE (from an earlier instance)" : "none");
-    // shortcut: any other image path (or none: back to the dashboard) relaunches this title too.
+    std::string lower = path;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return char(tolower(c)); });
+    if (lower.find("sc4_offline.xex") == std::string::npos)
+        ExitToDashboard("LaunchTitle of another image");
     TitleRequestRelaunch();
+}
+
+// XamLoaderTerminateTitle(): _xstart calls it when main returns (Quit). Never returns.
+SCDA_IMPORT(XamLoaderTerminateTitle)
+{
+    ExitToDashboard("TerminateTitle");
 }
 
 // XamLoaderGetLaunchDataSize(u32* Size)
