@@ -116,6 +116,7 @@ struct DrawResources
         uint32_t width = 0, height = 0;
         DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN; // the source target's
         uint32_t rowBytes = 0; // guest bytes per row (RB_COPY_DEST_INFO format x width)
+        uint32_t destFormat = 0; // RB_COPY_DEST_INFO bits 7-12
     };
     std::unordered_map<uint32_t, Resolved> resolved;
 };
@@ -275,6 +276,23 @@ static bool WriteBmp(const std::string& path, std::vector<uint32_t> texels, uint
     fwrite(texels.data(), 4, texels.size(), f);
     fclose(f);
     return true;
+}
+
+// SCDA_TRACE_RESOLVE=1: each suspicious resolve/fetch pairing once (sub-page dest offsets, dest or
+// fetch bases inside a resolve texture that do not match it, exact hits with another shape).
+static bool TraceResolveOnce(uint64_t key)
+{
+    static const bool on = getenv("SCDA_TRACE_RESOLVE") != nullptr;
+    static std::unordered_set<uint64_t> seen;
+    return on && seen.size() < 2000 && seen.insert(key).second;
+}
+
+// SCDA_TRACE_RESOLVE=<n>: also log every resolve and texture fetch of presented frame n in order.
+static bool TraceResolveFrame(uint64_t presented)
+{
+    static const char* v = getenv("SCDA_TRACE_RESOLVE");
+    static const long long frame = v && strcmp(v, "1") ? atoll(v) : -1;
+    return (long long)presented == frame;
 }
 
 static const uint8_t* PhysicalPtr(uint32_t physical) { return (const uint8_t*)GuestPtr(GuestPhysical(physical)); }
@@ -482,13 +500,29 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs)
         TextureFetch t = DecodeTextureFetch(regs, slot);
         if (!t.valid)
             continue;
+        if (TraceResolveFrame(m_presented))
+        {
+            auto hit = r.resolved.find(t.physical);
+            RuntimeLog("[rtrace] draw %u slot %u fetch %08X fmt %u %ux%u tiled %d resolve %ux%u fmt %u\n", m_lastDrawn + m_lastSkipped, slot, t.physical,
+                t.format, t.width, t.height, t.tiled, hit != r.resolved.end() ? hit->second.width : 0, hit != r.resolved.end() ? hit->second.height : 0,
+                hit != r.resolved.end() ? hit->second.destFormat : 0);
+        }
         // A resolve target: guest memory there does not hold the image, the host copy does.
         // shortcut: matched by address and size only; entries are never invalidated.
         if (auto res = r.resolved.find(t.physical); res != r.resolved.end() && t.width <= res->second.width && t.height <= res->second.height)
         {
+            if (res->second.destFormat != t.format && TraceResolveOnce((1ull << 60) | (uint64_t(t.physical) << 8) | t.format))
+                RuntimeLog("[resolve] fetch %08X fmt %u %ux%u hits resolve fmt %u %ux%u\n", t.physical, t.format, t.width, t.height,
+                    res->second.destFormat, res->second.width, res->second.height);
             srvs[slot] = res->second.srv.Get();
             continue;
         }
+        static const bool traceResolve = getenv("SCDA_TRACE_RESOLVE") != nullptr;
+        for (auto& e : r.resolved)
+            if (traceResolve && t.physical >= e.first && t.physical < e.first + e.second.rowBytes * e.second.height &&
+                TraceResolveOnce((2ull << 60) | ((m_presented & 0xFFFF) << 40) | (uint64_t(t.physical) << 8) | t.format))
+                RuntimeLog("[resolve] frame %llu fetch %08X fmt %u %ux%u tiled %d inside resolve %08X fmt %u %ux%u (+%u B), not used\n", m_presented, t.physical, t.format,
+                    t.width, t.height, t.tiled, e.first, e.second.destFormat, e.second.width, e.second.height, t.physical - e.first);
         if (!TextureElementBytes(t.format))
         {
             // SCDA_DUMP_TEXTURES: each unsupported texture once, with the nearest resolve at or below it.
@@ -598,6 +632,24 @@ void D3D11Renderer::ExecuteDraw(const DrawCall& d, const Frame& frame)
         m_lastSkipped++;
         return;
     }
+    if (TraceResolveFrame(m_presented))
+    {
+        // Texture slots the PS samples: s<n>_Texture*DescriptorIndex uses outside the #define header.
+        std::string used;
+        const std::string hlsl = TranslateShader(*d.ps).hlsl;
+        for (uint32_t n = 0; n < 32; n++)
+        {
+            const std::string name = "s" + std::to_string(n) + "_Texture";
+            size_t count = 0;
+            for (size_t at = hlsl.find(name); at != std::string::npos; at = hlsl.find(name, at + 1))
+                count++;
+            if (count > 3)
+                used += " " + std::to_string(n);
+        }
+        RuntimeLog("[rtrace] draw %u vs %016llx ps %016llx rt %08X/%08X mask %08X samples%s\n", m_lastDrawn + m_lastSkipped,
+            (unsigned long long)d.vs->hash, (unsigned long long)d.ps->hash, (*d.regs)[kRegRbSurfaceInfo], (*d.regs)[kRegRbColorInfo],
+            (*d.regs)[0x2104], used.c_str());
+    }
     static const std::filesystem::path cacheDir = DefaultShaderCacheDir();
     auto& vs = r.vs[d.vs->hash];
     if (!vs)
@@ -691,6 +743,10 @@ void D3D11Renderer::ExecuteResolve(const Resolve& res)
 {
     DrawResources& r = *m_draw;
     ColorTarget* source = ColorTargetFor(m_device, m_context, r, EdramColorKey(res.colorInfo, res.surfaceInfo));
+    if (TraceResolveFrame(m_presented))
+        RuntimeLog("[rtrace] resolve @draw %u ctrl %08X src %08X surf %08X -> dest %08X fmt %u %ux%u rect %d %d %d %d\n", res.drawIndex, res.copyControl,
+            res.colorInfo, res.surfaceInfo, res.destBase, (res.destInfo >> 7) & 0x3F, ResolveWidth(res), ResolveHeight(res), res.rect[0], res.rect[1],
+            res.rect[2], res.rect[3]);
     // shortcut: depth-source resolves copy nothing (the destination keeps its last copy, if any).
     if (ResolveCopies(res) && source && !ResolveFromDepth(res))
     {
@@ -702,6 +758,11 @@ void D3D11Renderer::ExecuteResolve(const Resolve& res)
         D3D11_TEXTURE2D_DESC sd;
         source->texture->GetDesc(&sd);
         const uint32_t base = res.destBase & 0x1FFFF000;
+        if ((res.destBase & 0xFFF) && TraceResolveOnce((3ull << 60) | res.destBase))
+            RuntimeLog("[resolve] dest %08X has sub-page offset %03X (dropped)\n", res.destBase, res.destBase & 0xFFF);
+        if (TraceResolveOnce((4ull << 60) | res.colorInfo | (uint64_t(res.surfaceInfo & 0x3FFF) << 32)))
+            RuntimeLog("[resolve] source info %08X surf %08X from_depth %d -> dest %08X fmt %u %ux%u\n", res.colorInfo, res.surfaceInfo,
+                ResolveFromDepth(res), res.destBase, (res.destInfo >> 7) & 0x3F, ResolveWidth(res), ResolveHeight(res));
         uint32_t dy = 0;
         auto dstIt = r.resolved.end();
         for (auto it = r.resolved.begin(); it != r.resolved.end(); ++it)
@@ -712,6 +773,10 @@ void D3D11Renderer::ExecuteResolve(const Resolve& res)
                 dy = (base - it->first) / it->second.rowBytes;
                 break;
             }
+            else if (it->first < base && base < it->first + it->second.rowBytes * it->second.height &&
+                TraceResolveOnce((5ull << 60) | (uint64_t(base) << 20) | ((it->first >> 12) & 0xFFFFF)))
+                RuntimeLog("[resolve] dest %08X fmt %u w %u inside resolve %08X fmt %u w %u rowBytes %u (+%u B) rejected: new texture\n", base,
+                    (res.destInfo >> 7) & 0x3F, ResolveWidth(res), it->first, it->second.destFormat, it->second.width, it->second.rowBytes, base - it->first);
         if (dstIt == r.resolved.end())
         {
             uint32_t w = std::min(ResolveWidth(res), kTargetWidth), h = std::min(ResolveHeight(res), kTargetHeight);
@@ -735,6 +800,7 @@ void D3D11Renderer::ExecuteResolve(const Resolve& res)
                 }
             }
             dst.rowBytes = w * TextureElementBytes((res.destInfo >> 7) & 0x3F);
+            dst.destFormat = (res.destInfo >> 7) & 0x3F;
             dstIt = r.resolved.find(base);
         }
         auto& dst = dstIt->second;
