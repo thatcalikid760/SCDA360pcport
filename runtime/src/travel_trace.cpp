@@ -67,6 +67,14 @@ PPC_FUNC(sub_821D16E0)
 // Object the game sends IsMissionEnd / CheckMissionStatus / EndMission events to (captured by
 // the sub_8258E908 hook when SCDA_FORCE_ENDMISSION is set).
 static uint32_t g_missionObject = 0;
+static uint32_t g_endMissionTick = 0; // engine ticks since the capture
+
+// Relaunch: guest memory is reset, so the captured object is stale.
+void TravelTraceReset()
+{
+    g_missionObject = 0;
+    g_endMissionTick = 0;
+}
 static std::string GuestFName(uint32_t index);
 static void ForceEndMission(PPCContext& ctx, uint8_t* base);
 
@@ -182,16 +190,16 @@ PPC_FUNC(sub_8258E908)
     }
 }
 
-// SCDA_FORCE_ENDMISSION=<tick>[:<bMissionComplete>[:<iFailureType>]]: at engine tick <tick> send the
+// SCDA_FORCE_ENDMISSION=<tick>[:<bMissionComplete>[:<iFailureType>]]: <tick> engine ticks after the
+// mission object is captured (once per process) send the
 // script event EndMission(bool bMissionComplete, int iFailureType, int TrustEventID) to the mission
 // object, the way the scripts end a mission (Sam's death: PawnDied -> EndMissionCoop -> EndMission
 // -> ProcessEndMission). Default bMissionComplete 1. FName EndMission index lives at 0x83283E80.
 static void ForceEndMission(PPCContext& ctx, uint8_t* base)
 {
     static const char* spec = getenv("SCDA_FORCE_ENDMISSION");
-    static uint32_t tick = 0;
     static bool fired = false;
-    if (!spec || fired || !g_missionObject || ++tick < uint32_t(strtoul(spec, nullptr, 10)))
+    if (!spec || fired || !g_missionObject || ++g_endMissionTick < uint32_t(strtoul(spec, nullptr, 10)))
         return;
     fired = true;
     uint32_t complete = 1, failure = 0;
@@ -208,7 +216,7 @@ static void ForceEndMission(PPCContext& ctx, uint8_t* base)
     sub_8258E908(ctx, base);
     const uint32_t function = ctx.r3.u32;
     RuntimeLog("[travel] force EndMission(%u, %u) object %08X function %08X at tick %u\n", complete, failure,
-        g_missionObject, function, tick);
+        g_missionObject, function, g_endMissionTick);
     if (function)
     {
         const uint32_t parms = GuestAllocVirtual(16, 16);

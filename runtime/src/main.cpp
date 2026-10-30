@@ -226,6 +226,8 @@ void VideoReset();
 
 // Between title instances (no title thread running): guest memory and every HLE module back to
 // boot state. Kept: service-region contexts, host windows/devices, compiled shaders, launch data.
+void TravelTraceReset(); // travel_trace.cpp
+
 static bool ResetTitle(const char* imagePath)
 {
     VideoReset(); // ring first: the command processor goes idle
@@ -237,6 +239,7 @@ static bool ResetTitle(const char* imagePath)
     FsReset();
     TlsReset();
     XamReset();
+    TravelTraceReset();
     // Title heaps: stack guard pages back to read/write (TitleHeapAlloc zeroes what it hands out).
     DWORD old;
     VirtualProtect(g_base + 0x40000000u, g_virtualHeap.Top() - 0x40000000u, PAGE_READWRITE, &old);
