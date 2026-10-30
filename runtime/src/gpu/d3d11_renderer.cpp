@@ -368,12 +368,15 @@ static bool TraceResolveOnce(uint64_t key)
     return on && seen.size() < 2000 && seen.insert(key).second;
 }
 
-// SCDA_TRACE_RESOLVE=<n>: also log every resolve and texture fetch of presented frame n in order.
+// SCDA_TRACE_RESOLVE=<n>[/<period>]: also log every resolve and texture fetch of presented frame n
+// (and every period-th one after it) in order.
 static bool TraceResolveFrame(uint64_t presented)
 {
     static const char* v = getenv("SCDA_TRACE_RESOLVE");
     static const long long frame = v && strcmp(v, "1") ? atoll(v) : -1;
-    return (long long)presented == frame;
+    static const long long period = v && strchr(v, '/') ? std::max(1ll, atoll(strchr(v, '/') + 1)) : 0;
+    const long long n = (long long)presented;
+    return frame >= 0 && (n == frame || (period && n > frame && (n - frame) % period == 0));
 }
 
 static const uint8_t* PhysicalPtr(uint32_t physical) { return (const uint8_t*)GuestPtr(GuestPhysical(physical)); }
@@ -1008,6 +1011,14 @@ void D3D11Renderer::ExecuteDraw(const DrawCall& d, const Frame& frame)
             m_lastDrawn + m_lastSkipped, (unsigned long long)d.vs->hash, (unsigned long long)d.ps->hash, r.regs[kRegRbSurfaceInfo],
             r.regs[kRegRbColorInfo], r.regs[0x2104], r.regs[0x2200], r.regs[kRegRbDepthInfo], r.regs[0x2206], r.regs[0x2113],
             r.regs[0x2114], r.regs[0x2080], r.regs[0x2205], r.regs[0x2202], r.regs[0x210E], d.indexBase, d.indexCount, used.c_str());
+        // SCDA_TRACE_PS=<ps hash hex>: draws with that PS also log PS c0-c7 and blend control.
+        static const uint64_t tracePs = getenv("SCDA_TRACE_PS") ? strtoull(getenv("SCDA_TRACE_PS"), nullptr, 16) : 0;
+        if (tracePs && d.ps->hash == tracePs)
+            for (uint32_t c = 0; c < 8; c++)
+            {
+                auto f = [&](uint32_t i) { return std::bit_cast<float>(r.regs[kRegAluConstants + 1024 + c * 4 + i]); };
+                RuntimeLog("[rtrace]   ps c%u %g %g %g %g blend %08X\n", c, f(0), f(1), f(2), f(3), r.regs[0x2201]);
+            }
         // SCDA_TRACE_CONSTS=<index base hex>: draws with that index base also log their vertex/index
         // snapshot hashes, draw state, PS c0, bool and vertex fetch constants and VS c0-c255.
         static const uint32_t constsIb = getenv("SCDA_TRACE_CONSTS") ? strtoul(getenv("SCDA_TRACE_CONSTS"), nullptr, 16) : 0;
@@ -1353,6 +1364,8 @@ void D3D11Renderer::Present(const Frame& frame)
     }
     m_lastDrawn = m_lastSkipped = m_lastResolved = 0;
     m_lastFrontbuffer = false;
+    if (TraceResolveFrame(m_presented))
+        RuntimeLog("[rtrace] present #%llu guest frame %llu\n", (unsigned long long)m_presented, (unsigned long long)frame.stats.frame);
     // No draws: a dark colour that pulses with the frame number, so a running game is visibly
     // distinct from a hung one.
     float pulse = float(frame.stats.frame % 120) / 120.0f;
