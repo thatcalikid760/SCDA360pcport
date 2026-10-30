@@ -161,7 +161,8 @@ PPC_FUNC(sub_8258E908)
     }
     const uint32_t nameIndex = ctx.r4.u32;
     static const bool capture = getenv("SCDA_FORCE_ENDMISSION") != nullptr;
-    if (capture && !g_missionObject && GuestFName(nameIndex) == "CheckMissionStatus")
+    // Cozumel_01 never looks up CheckMissionStatus; IsMissionEnd goes to the same object on every map.
+    if (capture && !g_missionObject && (GuestFName(nameIndex) == "CheckMissionStatus" || GuestFName(nameIndex) == "IsMissionEnd"))
     {
         g_missionObject = ctx.r3.u32;
         RuntimeLog("[travel] mission object %08X\n", g_missionObject);
