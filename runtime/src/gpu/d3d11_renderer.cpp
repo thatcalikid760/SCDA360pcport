@@ -11,6 +11,7 @@
 #include <wrl/client.h>
 #include <gpu/d3d11_renderer.h>
 #include <gpu/draw_state.h>
+#include <gpu/gamma_ramp.h>
 #include <gpu/shader_compiler.h>
 #include <gpu/xenos/translate.h>
 #include <gpu_state.h>
@@ -35,7 +36,12 @@ void main(uint id : SV_VertexID, out float4 pos : SV_Position, out float2 uv : T
 
 static const char kBlitPs[] = R"HLSL(
 Texture2D t : register(t0);
+Texture2D ramp : register(t1); // display gamma ramp, 256x1 (gamma_ramp.h)
 SamplerState s : register(s0);
+float Ramp(float v, int channel)
+{
+    return ramp.SampleLevel(s, float2((saturate(v) * 255.0 + 0.5) / 256.0, 0.5), 0)[channel];
+}
 // A source larger than the window (internal resolution scale) is box-filtered: n x n taps at the
 // centres of the source texels under the window pixel; otherwise one bilinear tap.
 float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target
@@ -51,7 +57,9 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target
     for (int y = 0; y < n.y; y++)
         for (int x = 0; x < n.x; x++)
             sum += t.SampleLevel(s, min(uv + ((float2(x, y) + 0.5) / float2(n) - 0.5) * texels / float2(w, h), last), 0);
-    return sum / float(n.x * n.y);
+    float4 c = sum / float(n.x * n.y);
+    // Scan-out applies the ramp after the frontbuffer (and after scaling).
+    return float4(Ramp(c.r, 0), Ramp(c.g, 1), Ramp(c.b, 2), c.a);
 }
 )HLSL";
 
@@ -136,6 +144,9 @@ struct DrawResources
     SurfaceLayout lastLayout{ 1280, 1, 1, 1280, 1280 }; // surface layout `last` was bound with
     ComPtr<ID3D11VertexShader> blitVs;
     ComPtr<ID3D11PixelShader> blitPs;
+    ComPtr<ID3D11Texture2D> gammaRamp; // 256x1 R10G10B10A2, display gamma ramp
+    ComPtr<ID3D11ShaderResourceView> gammaRampSrv;
+    uint32_t gammaRampVersion = ~0u;
     ComPtr<ID3D11GeometryShader> rectListGs;
     ComPtr<ID3D11ComputeShader> saturateCs;
     ComPtr<ID3D11Buffer> saturateRect;
@@ -309,6 +320,17 @@ bool D3D11Renderer::CreateDrawResources()
     {
         printf("[d3d11] blit shader: %s\n", error.c_str());
         return false;
+    }
+    {
+        D3D11_TEXTURE2D_DESC gd{};
+        gd.Width = 256;
+        gd.Height = gd.MipLevels = gd.ArraySize = 1;
+        gd.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
+        gd.SampleDesc.Count = 1;
+        gd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        if (FAILED(m_device->CreateTexture2D(&gd, nullptr, &r->gammaRamp)) ||
+            FAILED(m_device->CreateShaderResourceView(r->gammaRamp.Get(), nullptr, &r->gammaRampSrv)))
+            return false;
     }
     auto gs = CompileHlsl(kRectListGs, "gs_5_0", &error);
     if (gs.empty() || FAILED(m_device->CreateGeometryShader(gs.data(), gs.size(), nullptr, &r->rectListGs)))
@@ -1622,11 +1644,24 @@ void D3D11Renderer::Blit(ID3D11ShaderResourceView* source)
     m_context->VSSetShader(r.blitVs.Get(), nullptr, 0);
     m_context->GSSetShader(nullptr, nullptr, 0);
     m_context->PSSetShader(r.blitPs.Get(), nullptr, 0);
-    m_context->PSSetShaderResources(0, 1, &source);
+    // SCDA_NO_GAMMA_RAMP=1: identity ramp (A/B against the title's display gamma ramp).
+    static const bool noRamp = getenv("SCDA_NO_GAMMA_RAMP") != nullptr;
+    const uint32_t version = noRamp ? 0 : DisplayGammaRamp().version.load();
+    if (version != r.gammaRampVersion)
+    {
+        r.gammaRampVersion = version;
+        std::array<uint32_t, 256> entries = noRamp ? GammaRamp().entries : DisplayGammaRamp().Copy();
+        for (auto& e : entries)
+            e |= 3u << 30;
+        m_context->UpdateSubresource(r.gammaRamp.Get(), 0, nullptr, entries.data(), sizeof(entries), 0);
+    }
+    ID3D11ShaderResourceView* srvs[2] = { source, r.gammaRampSrv.Get() };
+    m_context->PSSetShaderResources(0, 2, srvs);
     ID3D11SamplerState* s = r.sampler.Get();
     m_context->PSSetSamplers(0, 1, &s);
     m_context->Draw(3, 0);
-    m_context->PSSetShaderResources(0, 1, &none);
+    ID3D11ShaderResourceView* nones[2] = {};
+    m_context->PSSetShaderResources(0, 2, nones);
 }
 
 static std::vector<uint32_t> ReadTarget(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Texture2D* target);
@@ -1774,7 +1809,7 @@ void D3D11Renderer::Present(const Frame& frame)
         ID3D11ShaderResourceView* shownSrv = m_lastFrontbuffer ? front->second.srv.Get() : r.last ? r.last->srv.Get() : nullptr;
         if (!m_dumpPath.empty() && shown)
         {
-            Dump(m_dumpPath, shown);
+            Dump(m_dumpPath, shown, true);
             m_dumpPath.clear();
         }
         // SCDA_DUMP_ON_BLACK=<from>:<to>[:<count>]: in guest frames [from, to], when the presented
@@ -1830,7 +1865,7 @@ void D3D11Renderer::Present(const Frame& frame)
                     jumpArmed++;
                     RuntimeLog("[jump] present #%llu guest frame %llu: luma diff %.1f from the previous present (fb %08X %s): dumping this + next frame, tracing 2\n",
                         (unsigned long long)m_presented, (unsigned long long)frame.stats.frame, diff, frame.frontbuffer, m_lastFrontbuffer ? "frontbuffer" : "target");
-                    Dump("scda_frame_" + std::to_string(frame.stats.frame) + ".bmp", shown);
+                    Dump("scda_frame_" + std::to_string(frame.stats.frame) + ".bmp", shown, true);
                     m_dumpPath = "scda_frame_" + std::to_string(frame.stats.frame + 1) + ".bmp";
                     g_traceJumpPresents = 2;
                 }
@@ -1971,10 +2006,24 @@ uint32_t D3D11Renderer::ReadTargetTexel(uint32_t x, uint32_t y)
     return texels[size_t(y * sy) * t.width + x * sx];
 }
 
-void D3D11Renderer::Dump(const std::string& path, ID3D11Texture2D* source)
+void D3D11Renderer::Dump(const std::string& path, ID3D11Texture2D* source, bool ramp)
 {
     D3D11_TEXTURE2D_DESC td;
     source->GetDesc(&td);
-    if (WriteBmp(path, ReadTarget(m_device, m_context, source), td.Width, td.Height))
+    std::vector<uint32_t> texels = ReadTarget(m_device, m_context, source);
+    static const bool noRamp = getenv("SCDA_NO_GAMMA_RAMP") != nullptr;
+    if (ramp && !noRamp)
+    {
+        // Same lookup as the blit (nearest entry; the blit interpolates between entries).
+        const auto entries = DisplayGammaRamp().Copy();
+        for (auto& t : texels)
+        {
+            uint32_t out = t & 0xFF000000;
+            for (uint32_t c = 0; c < 3; c++)
+                out |= ((((entries[(t >> (8 * c)) & 0xFF] >> (10 * c)) & 0x3FF) * 255 + 511) / 1023) << (8 * c);
+            t = out;
+        }
+    }
+    if (WriteBmp(path, std::move(texels), td.Width, td.Height))
         printf("[d3d11] frame dumped to %s\n", path.c_str());
 }

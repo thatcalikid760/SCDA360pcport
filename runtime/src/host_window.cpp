@@ -10,6 +10,7 @@
 #include <thread>
 #include <vector>
 #include <gpu/d3d11_renderer.h>
+#include <gpu_state.h>
 #include <gpu/draw_state.h>
 #include <gpu/shader_compiler.h>
 #include <host_window.h>
@@ -252,6 +253,19 @@ static void RenderThread(DisplaySettings s)
         if (GetTickCount() - lastTitle > 500)
         {
             lastTitle = GetTickCount();
+            // SCDA_TRACE_GAMMA=1: display-controller registers (0x1800-0x1FFF, CPU MMIO writes land in
+            // the register file in guest memory) logged when they change.
+            static const bool traceGamma = getenv("SCDA_TRACE_GAMMA") != nullptr;
+            if (traceGamma)
+            {
+                static uint32_t last[0x800];
+                for (uint32_t i = 0; i < 0x800; i++)
+                    if (uint32_t v = GuestLoad32(kGpuRegBase + (0x1800 + i) * 4); v != last[i])
+                    {
+                        RuntimeLog("[gamma] frame %llu dc reg %04X = %08X (was %08X)\n", (unsigned long long)frame.stats.frame, 0x1800 + i, v, last[i]);
+                        last[i] = v;
+                    }
+            }
             wchar_t title[200];
             swprintf(title, 200, L"Splinter Cell: Double Agent Recomp - frame %llu draws %u (drawn %u skipped %u) resolves %u shaders %u compiled %u failed %u",
                 (unsigned long long)frame.stats.frame, frame.stats.draws, renderer.LastDrawn(), renderer.LastSkipped(),

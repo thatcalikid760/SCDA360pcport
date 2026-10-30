@@ -1,3 +1,5 @@
+#include <unordered_set>
+#include <mutex>
 #include <windows.h>
 #include <algorithm>
 #include <bit>
@@ -240,6 +242,17 @@ TextureFetch DecodeTextureFetch(const RegisterFile& r, uint32_t slot)
     if (t.packedMips && HasGuestMips(t) && PackedMipLevel(t) == 0) // base of 16 texels or less: own packed tail
         PackedMipOffset(t, 0, t.offsetX, t.offsetY);
     t.valid = t.physical != 0;
+    // SCDA_TRACE_GAMMA=1: each (format, sign fields xyzw) pair once (sign 3 = gamma, 1 = signed).
+    static const bool traceGamma = getenv("SCDA_TRACE_GAMMA") != nullptr;
+    if (traceGamma && t.valid)
+    {
+        static std::mutex m;
+        static std::unordered_set<uint32_t> seen;
+        std::lock_guard lock(m);
+        if (seen.insert(t.format << 8 | ((c0 >> 2) & 0xFF)).second)
+            RuntimeLog("[gamma] tex fmt %u sign %u%u%u%u (%ux%u, fetch exp %d)\n", t.format, (c0 >> 2) & 3, (c0 >> 4) & 3, (c0 >> 6) & 3,
+                (c0 >> 8) & 3, t.width, t.height, int32_t(c3 << 6) >> 26);
+    }
     return t;
 }
 

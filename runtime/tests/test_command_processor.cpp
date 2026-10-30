@@ -3,6 +3,7 @@
 #include "guest_memory.h"
 #include <command_processor.h>
 #include <gpu/frame_queue.h>
+#include <gpu/gamma_ramp.h>
 #include <gpu_state.h>
 #include <runtime.h>
 
@@ -357,4 +358,24 @@ TEST(cp_constant_packets_reach_registers)
     CHECK_EQ(GpuRegister(0x4008), 0x700u);
     CHECK_EQ(GpuRegister(0x400B), 0x703u);
     CHECK_EQ(st.skipped, 0ull);
+}
+
+// Review Focus: the display gamma ramp (index 0x1922, 10:10:10 entry 0x1925, index auto-increments)
+// is captured for the blit; untouched entries stay identity.
+TEST(cp_gamma_ramp_captured)
+{
+    SetupRing();
+    const uint32_t before = DisplayGammaRamp().version.load();
+    g_w = 0;
+    Emit(0x00001922); Emit(1);              // index 1
+    Emit(0x00001925); Emit(0x00100401);     // entry 1 = 1,1,1
+    Emit(0x00001925); Emit(0x3FFFFFFF);     // entry 2 = 1023
+    Publish();
+    CpStats st{};
+    Tick(&st);
+    const auto e = DisplayGammaRamp().Copy();
+    CHECK_EQ(e[1], 0x00100401u);
+    CHECK_EQ(e[2], 0x3FFFFFFFu);
+    CHECK_EQ(e[255], 0x3FFFFFFFu);          // identity: 255 -> 1023
+    CHECK_EQ(DisplayGammaRamp().version.load(), before + 2);
 }

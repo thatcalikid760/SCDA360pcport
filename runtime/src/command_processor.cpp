@@ -13,6 +13,7 @@
 #include <command_processor.h>
 #include <gpu/draw_state.h>
 #include <gpu/frame_queue.h>
+#include <gpu/gamma_ramp.h>
 #include <gpu/shader_compiler.h>
 #include <gpu/shader_cache.h>
 #include <gpu_state.h>
@@ -76,6 +77,18 @@ static void BumpEpoch();
 static void SetGpuRegister(uint32_t index, uint32_t v)
 {
     index &= 0x7FFF;
+    if (index == kRegDcLutIndex)
+        DisplayGammaRamp().SetIndex(v);
+    else if (index == kRegDcLutColor)
+        DisplayGammaRamp().Write(v);
+    // SCDA_TRACE_GAMMA=1: display-controller range writes (gamma ramp / PWL LUT), first 64 per register.
+    static const bool traceGamma = getenv("SCDA_TRACE_GAMMA") != nullptr;
+    if (traceGamma && index >= 0x1800 && index < 0x2000)
+    {
+        static uint8_t counts[0x800];
+        if ((index == 0x1922 || index == 0x1925 || counts[index - 0x1800] < 64) && ++counts[index - 0x1800] | 1)
+            RuntimeLog("[gamma] reg %04X = %08X\n", index, v);
+    }
     GuestStore32(kGpuRegBase + index * 4, v);
     g_shadow.Set(index, v);
     g_pendingWrites.push_back({ index, v });

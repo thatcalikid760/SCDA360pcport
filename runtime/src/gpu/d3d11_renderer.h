@@ -60,7 +60,8 @@ private:
     void ApplyRegisterWrites(const Frame& frame, size_t end);
     void UploadVertexMemory(const DrawCall& d, const Frame& frame);
     void Blit(ID3D11ShaderResourceView* source);
-    void Dump(const std::string& path, ID3D11Texture2D* source);
+    // ramp: apply the display gamma ramp (presented frames, so dumps match the window).
+    void Dump(const std::string& path, ID3D11Texture2D* source, bool ramp = false);
     HWND m_hwnd = nullptr;
     uint32_t m_width = 0, m_height = 0;
     ID3D11Device* m_device = nullptr;
