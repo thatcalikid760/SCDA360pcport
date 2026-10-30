@@ -31,6 +31,10 @@ stands in for the console:
 
 ## Recent progress
 
+- **Missions end for real.** The game's own mission-ending script now runs end to end. 01_Intro shows MISSION
+  COMPLETE, saves campaign progress to the profile, plays the Iceland-to-Jail cutscene and relaunches straight into
+  Ellsworth Penitentiary, all in one session. Inside a mission, the move to the next part (for example Sea of
+  Okhotsk part 1 to part 2) carries Sam's state across (`TRAVELDATA`).
 - **Higher internal resolution.** `Scale=2..4` in `settings.ini` renders at 2560x1440 to 5120x2880 and box-filters
   down to the window, which acts as supersampling anti-aliasing. Kinshasa, the heaviest map, holds the game's 30 fps
   cap at `Scale=2`.
@@ -43,8 +47,6 @@ stands in for the console:
   input. Stick values inside the XInput deadzone now count as idle. Mouse direction is checked in game.
 - **Shader census clean.** With an empty shader cache, every map translates and compiles its shaders (490 in all) with
   no failures.
-- **Mission-to-mission travel traced.** The path that carries Sam's state into the next mission (`TRAVELDATA`) is
-  mapped and tested in a forced run. It has not yet run from a real mission ending.
 
 ![Scale 1 vs Scale 3](docs/images/scale_compare.jpg)
 
@@ -63,17 +65,17 @@ resolution setting; the rest are at the console's 1280x720.
 | ![Iceland: night vision](docs/images/iceland_nightvision.jpg) | ![Iceland: intake pipe](docs/images/iceland_pipe_dive.jpg) |
 | **Iceland**: night vision under the ice | **Iceland**: swimming through the plant's intake pipe |
 | ![Iceland: surfacing at the plant](docs/images/iceland_plant_surface.jpg) | ![Iceland: Osprey bay](docs/images/iceland_osprey.jpg) |
-| **Iceland**: surfacing at the geothermal plant | **Iceland**: Osprey bay before the drop |
-| ![Ellsworth Penitentiary](docs/images/jail_cell.jpg) | |
-| **Ellsworth Penitentiary**: helping Jamie escape (*Scale 3*) | |
+| **Iceland**: surfacing at the geothermal plant | **Iceland**: Osprey bay before the drop (*Scale 2*) |
+| ![Mission complete](docs/images/mission_complete.jpg) | ![Ellsworth Penitentiary](docs/images/jail_cell.jpg) |
+| **MISSION COMPLETE** after Iceland, then on to the next mission | **Ellsworth Penitentiary**: helping Jamie escape (*Scale 3*) |
 | ![Sea of Okhotsk: skydive](docs/images/okhotsk_skydive.jpg) | ![Sea of Okhotsk: under the ice](docs/images/okhotsk_ice_dive.jpg) |
-| **Sea of Okhotsk**: HALO jump toward the supertanker | **Sea of Okhotsk**: diving under the ice |
-| ![Cozumel](docs/images/cozumel_cruise_ship.jpg) | ![Kinshasa](docs/images/kinshasa_city.jpg) |
-| **Cozumel**: cruise ship at dawn | **Kinshasa**: the city under fire |
-| ![Kinshasa courtyard](docs/images/kinshasa_courtyard.jpg) | ![Kinshasa tunnel](docs/images/kinshasa_tunnel.jpg) |
-| **Kinshasa**: courtyard in daylight | **Kinshasa**: JBA hideout |
-| ![New York harbor](docs/images/newyork_harbor.jpg) | ![Mission briefing](docs/images/mission_briefing.jpg) |
-| **New York**: disarming the bomb on the boat | Mission briefing screen |
+| **Sea of Okhotsk**: HALO jump toward the supertanker (*Scale 2*) | **Sea of Okhotsk**: diving under the ice (*Scale 2*) |
+| ![Cozumel: cabin](docs/images/cozumel_cabin.jpg) | ![Cozumel: cruise ship](docs/images/cozumel_cruise_ship.jpg) |
+| **Cozumel**: Sam's cabin on the cruise ship (*Scale 2*) | **Cozumel**: climbing the hull (*Scale 2*) |
+| ![Kinshasa](docs/images/kinshasa_city.jpg) | ![Kinshasa streets](docs/images/kinshasa_courtyard.jpg) |
+| **Kinshasa**: retrieving the plans from the camp (*Scale 2*) | **Kinshasa**: the ruined streets (*Scale 2*) |
+| ![Kinshasa garage](docs/images/kinshasa_tunnel.jpg) | ![New York harbor](docs/images/newyork_harbor.jpg) |
+| **Kinshasa**: underground garage (*Scale 2*) | **New York**: the bomb boat at Liberty Island (*Scale 2*) |
 
 ## Status
 
@@ -83,6 +85,7 @@ resolution setting; the rest are at the console's 1280x720.
 | Missions | ✅ All 18 single-player maps load and play, at the game's 30 fps cap |
 | In-mission flow | ✅ Checkpoint reload after failure, restart mission, quit to menu, load from pause |
 | Menu to mission transitions | ✅ In-process title relaunch with launch data (no restart) |
+| Mission to mission | ✅ MISSION COMPLETE, progress saved, cutscene, next mission loads (tested with a debug trigger, not a full playthrough) |
 | Save / load | ✅ Saves to `%LOCALAPPDATA%\SCDARecomp`; position and difficulty restore |
 | Graphics | 🟡 Most scenes match the console. Some glitches remain (see below). Internal resolution up to 4x, mipmaps, anisotropic filtering |
 | Audio | ✅ Music, 3D sound effects, dialogue (XMA) and Bink video audio |
@@ -92,18 +95,18 @@ resolution setting; the rest are at the console's 1280x720.
 **Known issues**
 - Small differences from the console in fog, light shafts and some edges of the under-ice sky.
 - The renderer is a straightforward D3D11 path. No ultrawide support yet.
-- Above `Scale=1`, some post-processing passes can miss one pixel row/column at the screen edge.
+- Above `Scale=1`, some post-processing passes can miss one pixel row/column at the screen edge, and a faint
+  horizontal line can appear about a third of the way down the screen (where the GPU splits the frame into tiles).
 
 ## What to look forward to
 
 Planned next, roughly in order:
 
-1. **Full campaign flow.** Play a mission through to its real ending and check that Sam's state carries into the next
-   mission. The relaunch path works, but no real mission ending has driven it yet.
-2. **New York at full speed.** `10_newyork_02` runs at about 28 fps, the only map under the 30 fps cap. Profiling comes next.
-3. **Closer to the console's look.** The Xenos GPU clamps each blend write, and Direct3D 11 does not. Matching this
+1. **New York at full speed.** `10_newyork_02` runs at about 28 fps, the only map under the 30 fps cap. Profiling comes next.
+2. **Closer to the console's look.** The Xenos GPU clamps each blend write, and Direct3D 11 does not. Matching this
    should fix the remaining small differences in fog and light shafts.
-4. **Seamless music loops.** A short seam (512 samples) remains where some music tracks loop.
+3. **Seamless music loops.** A short seam (512 samples) remains where some music tracks loop.
+4. **Full campaign playthrough.** Play every mission through by hand, start to finish.
 5. **Prebuilt releases.** An installer release for people who don't want to build from source.
 6. **Ultrawide and more PC options**, once the renderer is stable.
 
