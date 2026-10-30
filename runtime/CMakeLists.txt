@@ -47,6 +47,7 @@ add_executable(scda
     src/audio.cpp
     src/xma.cpp
     src/xma_xaudio.cpp
+    src/travel_trace.cpp
     src/audio_trace.cpp
     src/memory.cpp
     src/module.cpp
