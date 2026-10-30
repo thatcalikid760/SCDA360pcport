@@ -398,9 +398,10 @@ static bool TraceResolveOnce(uint64_t key)
 // SCDA_TRACE_RESOLVE=<n>[/<period>]: also log every resolve and texture fetch of presented frame n
 // (and every period-th one after it) in order.
 static bool g_tracingDump = false; // SCDA_TRACE_DUMPED=1: trace every SCDA_DUMP_FRAME present
+static int g_traceJumpPresents = 0; // SCDA_DUMP_ON_JUMP: presents left to trace after a jump
 static bool TraceResolveFrame(uint64_t presented)
 {
-    if (g_tracingDump)
+    if (g_tracingDump || g_traceJumpPresents > 0)
         return true;
     static const char* v = getenv("SCDA_TRACE_RESOLVE");
     static const long long frame = v && strcmp(v, "1") ? atoll(v) : -1;
@@ -1709,6 +1710,45 @@ void D3D11Renderer::Present(const Frame& frame)
                 RuntimeLog("[dump] present #%llu guest frame %llu black: dumping the next frame\n", (unsigned long long)m_presented, (unsigned long long)frame.stats.frame);
             }
         }
+        // SCDA_DUMP_ON_JUMP=<diff>[:<count>[:<from>]]: from guest frame <from>, when the presented image's mean luma difference from the
+        // previous present (1/8 samples) exceeds <diff> (0-255), dump this frame and the next, and
+        // trace the next two presents like SCDA_TRACE_RESOLVE (flicker / alternating-frame hunting).
+        static const char* dumpOnJump = getenv("SCDA_DUMP_ON_JUMP");
+        static double jumpThreshold = 0;
+        static uint64_t jumpCount = 1, jumpArmed = 0, jumpFrom = 0;
+        static const bool jumpParsed = dumpOnJump && sscanf(dumpOnJump, "%lf:%llu:%llu", &jumpThreshold, &jumpCount, &jumpFrom) >= 1;
+        static std::vector<uint8_t> lastLuma;
+        if (jumpParsed && shown && frame.stats.frame >= jumpFrom)
+        {
+            D3D11_TEXTURE2D_DESC td;
+            shown->GetDesc(&td);
+            std::vector<uint32_t> texels = ReadTarget(m_device, m_context, shown);
+            std::vector<uint8_t> luma;
+            luma.reserve(size_t(td.Width / 8 + 1) * (td.Height / 8 + 1));
+            for (uint32_t y = 0; y < td.Height; y += 8)
+                for (uint32_t x = 0; x < td.Width; x += 8)
+                {
+                    const uint32_t c = texels[size_t(y) * td.Width + x];
+                    luma.push_back(uint8_t((((c >> 16) & 0xFF) * 77 + ((c >> 8) & 0xFF) * 151 + (c & 0xFF) * 28) >> 8));
+                }
+            if (luma.size() == lastLuma.size() && !luma.empty())
+            {
+                uint64_t sum = 0;
+                for (size_t i = 0; i < luma.size(); i++)
+                    sum += uint64_t(std::abs(int(luma[i]) - int(lastLuma[i])));
+                const double diff = double(sum) / double(luma.size());
+                if (diff > jumpThreshold && jumpArmed < jumpCount && m_dumpPath.empty())
+                {
+                    jumpArmed++;
+                    RuntimeLog("[jump] present #%llu guest frame %llu: luma diff %.1f from the previous present (fb %08X %s): dumping this + next frame, tracing 2\n",
+                        (unsigned long long)m_presented, (unsigned long long)frame.stats.frame, diff, frame.frontbuffer, m_lastFrontbuffer ? "frontbuffer" : "target");
+                    Dump("scda_frame_" + std::to_string(frame.stats.frame) + ".bmp", shown);
+                    m_dumpPath = "scda_frame_" + std::to_string(frame.stats.frame + 1) + ".bmp";
+                    g_traceJumpPresents = 2;
+                }
+            }
+            lastLuma = std::move(luma);
+        }
         if (shownSrv)
             Blit(shownSrv);
         else
@@ -1725,6 +1765,8 @@ void D3D11Renderer::Present(const Frame& frame)
         return;
     }
     m_presented++;
+    if (g_traceJumpPresents > 0)
+        g_traceJumpPresents--;
     ComPtr<ID3D11InfoQueue> queue;
     if (getenv("SCDA_D3D_DEBUG") && SUCCEEDED(m_device->QueryInterface(IID_PPV_ARGS(&queue))))
     {

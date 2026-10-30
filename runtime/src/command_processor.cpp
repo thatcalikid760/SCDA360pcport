@@ -1,6 +1,7 @@
 // PM4 packet semantics follow Xenia's command processor (BSD) and TTT2's notes (reference only).
 #include <windows.h>
 #include <atomic>
+#include <deque>
 #include <map>
 #include <cstring>
 #include <mutex>
@@ -71,6 +72,10 @@ static RegisterFile g_shadow;
 static std::vector<RegisterWrite> g_pendingWrites; // writes since the last draw (Frame::regWrites)
 // Bumped on every write the CPU can observe (see FrameQueue::SetEpoch).
 static uint64_t g_epoch = 1;
+// SCDA_QUERY_DEFER=<n>: occlusion query ends leave the title's 0xFFFFFEED marker in place and the
+// result is written n swaps later (experiment: does the title poll the block inside the frame?).
+static const long g_queryDefer = getenv("SCDA_QUERY_DEFER") ? atol(getenv("SCDA_QUERY_DEFER")) : 0;
+static std::deque<std::vector<std::pair<uint32_t, uint32_t>>> g_deferredQueries; // per swap: (block, samples)
 static void BumpEpoch();
 static void SetGpuRegister(uint32_t index, uint32_t v)
 {
@@ -350,14 +355,23 @@ static bool ExecutePacket(uint32_t h, const Pm4Payload& p, int depth, CpStats& s
             return true;
         bool end = (GuestLoad32(a + 16) == kQueryEnd && GuestLoad32(a + 20) == kQueryEnd) ||
                    (GuestLoad32(a + 8) == kQueryEnd && GuestLoad32(a + 12) == kQueryEnd);
-        for (uint32_t i = 0; i < 8; i++)
-            GuestStore32(a + i * 4, 0);
+        if (!(end && g_queryDefer > 0))
+            for (uint32_t i = 0; i < 8; i++)
+                GuestStore32(a + i * 4, 0);
         Frames().AddQuery(a, end);
         if (end)
         {
             const uint32_t samples = fakeSamples >= 0 ? uint32_t(fakeSamples) : OcclusionSamples(a);
             if (traceQuery)
                 RuntimeLog("[query] end %08X -> %u samples\n", a, samples);
+            if (g_queryDefer > 0)
+            {
+                if (g_deferredQueries.empty())
+                    g_deferredQueries.emplace_back();
+                g_deferredQueries.back().push_back({ a, samples });
+                BumpEpoch();
+                return true;
+            }
             // SCDA_OCCLUSION_TOTAL=<n>: Total_A = max(n, passed) (A/B: does the title scale by ZPass / Total?).
             static const long totalOverride = getenv("SCDA_OCCLUSION_TOTAL") ? atol(getenv("SCDA_OCCLUSION_TOTAL")) : -1;
             GuestStore32(a, _byteswap_ulong(totalOverride >= 0 ? std::max(uint32_t(totalOverride), samples) : samples));
@@ -413,6 +427,21 @@ static bool ExecutePacket(uint32_t h, const Pm4Payload& p, int depth, CpStats& s
             Gpu().swapCounter++;
             Gpu().pendingSwaps++;
             Frames().EndFrame(count >= 2 ? p(1) & 0x1FFFFFFF : 0); // VdSwap: frontbuffer address
+            if (g_queryDefer > 0)
+            {
+                g_deferredQueries.emplace_back();
+                while (g_deferredQueries.size() > size_t(g_queryDefer) + 1)
+                {
+                    for (auto [block, samples] : g_deferredQueries.front())
+                    {
+                        for (uint32_t i = 0; i < 8; i++)
+                            GuestStore32(block + i * 4, 0);
+                        GuestStore32(block, _byteswap_ulong(samples));
+                        GuestStore32(block + 16, _byteswap_ulong(samples));
+                    }
+                    g_deferredQueries.pop_front();
+                }
+            }
             BumpEpoch();
         }
         return true;

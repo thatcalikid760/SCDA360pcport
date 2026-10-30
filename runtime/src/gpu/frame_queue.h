@@ -139,6 +139,15 @@ public:
         m_done.push_back(std::move(m_open));
         m_open = Frame{};
         m_latest.clear();
+        // SCDA_DROP_FRAMES=<n>: drop every n-th finished frame (reproduces a renderer that falls
+        // behind): its register writes lead the next frame, like a frame dropped below.
+        static const long dropEvery = getenv("SCDA_DROP_FRAMES") ? atol(getenv("SCDA_DROP_FRAMES")) : 0;
+        if (dropEvery > 0 && m_next % uint64_t(dropEvery) == 0)
+        {
+            m_open.regWrites = std::move(m_done.back().regWrites);
+            m_done.pop_back();
+            m_dropped++;
+        }
         while (m_done.size() > m_max)
         {
             // Its register writes still happened: they lead the next frame's log.

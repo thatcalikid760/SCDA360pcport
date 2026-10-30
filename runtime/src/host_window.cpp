@@ -233,6 +233,12 @@ static void RenderThread(DisplaySettings s)
         static uint64_t presents = 0;
         static const ULONGLONG startTick = GetTickCount64();
         presents++;
+        // SCDA_TRACE_PRESENT=1: one line per present (frame, draws, frontbuffer address, fallback).
+        static const bool tracePresent = getenv("SCDA_TRACE_PRESENT") != nullptr;
+        if (tracePresent)
+            RuntimeLog("[present] %llu draws %u drawn %u skipped %u resolves %u fb %08X %s\n", (unsigned long long)frame.stats.frame, frame.stats.draws,
+                renderer.LastDrawn(), renderer.LastSkipped(), frame.stats.resolves, frame.frontbuffer,
+                renderer.LastPresentedFrontbuffer() ? "frontbuffer" : "target");
         if (dumping || tracing)
             RuntimeLog("[frame] %llu: drawn %u skipped %u resolved %u presented %s (present #%llu, %.1f s)\n", (unsigned long long)frame.stats.frame,
                 renderer.LastDrawn(), renderer.LastSkipped(), renderer.LastResolved(), renderer.LastPresentedFrontbuffer() ? "frontbuffer" : "target",
