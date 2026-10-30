@@ -39,6 +39,12 @@ stands in for the console:
 - **Auto-exposure fixed at higher scales.** Scenes no longer turn twice as bright above `Scale=1`.
 - **In-mission flow verified.** Load last checkpoint after ASSIGNMENT FAILED, Restart Mission, Quit to the main menu
   and loading a save from the pause menu all work, repeatedly, in one session.
+- **Mouse look fixed with a controller plugged in.** A pad's resting stick drift used to block mouse and keyboard
+  input. Stick values inside the XInput deadzone now count as idle. Mouse direction is checked in game.
+- **Shader census clean.** With an empty shader cache, every map translates and compiles its shaders (490 in all) with
+  no failures.
+- **Mission-to-mission travel traced.** The path that carries Sam's state into the next mission (`TRAVELDATA`) is
+  mapped and tested in a forced run. It has not yet run from a real mission ending.
 
 ![Scale 1 vs Scale 3](docs/images/scale_compare.jpg)
 
@@ -54,8 +60,12 @@ resolution setting; the rest are at the console's 1280x720.
 |:-:|:-:|
 | ![Kinshasa at Scale 3](docs/images/kinshasa_scale3.jpg) | ![Kinshasa gate at Scale 2](docs/images/kinshasa_gate.jpg) |
 | **Kinshasa**: retrieving the plans (*Scale 3*) | **Kinshasa**: through the gate (*Scale 2, 16x anisotropic*) |
-| ![Iceland: Osprey bay](docs/images/iceland_osprey.jpg) | ![Ellsworth Penitentiary](docs/images/jail_cell.jpg) |
-| **Iceland**: Osprey bay before the drop | **Ellsworth Penitentiary**: helping Jamie escape (*Scale 3*) |
+| ![Iceland: night vision](docs/images/iceland_nightvision.jpg) | ![Iceland: intake pipe](docs/images/iceland_pipe_dive.jpg) |
+| **Iceland**: night vision under the ice | **Iceland**: swimming through the plant's intake pipe |
+| ![Iceland: surfacing at the plant](docs/images/iceland_plant_surface.jpg) | ![Iceland: Osprey bay](docs/images/iceland_osprey.jpg) |
+| **Iceland**: surfacing at the geothermal plant | **Iceland**: Osprey bay before the drop |
+| ![Ellsworth Penitentiary](docs/images/jail_cell.jpg) | |
+| **Ellsworth Penitentiary**: helping Jamie escape (*Scale 3*) | |
 | ![Sea of Okhotsk: skydive](docs/images/okhotsk_skydive.jpg) | ![Sea of Okhotsk: under the ice](docs/images/okhotsk_ice_dive.jpg) |
 | **Sea of Okhotsk**: HALO jump toward the supertanker | **Sea of Okhotsk**: diving under the ice |
 | ![Cozumel](docs/images/cozumel_cruise_ship.jpg) | ![Kinshasa](docs/images/kinshasa_city.jpg) |
@@ -83,6 +93,19 @@ resolution setting; the rest are at the console's 1280x720.
 - Small differences from the console in fog, light shafts and some edges of the under-ice sky.
 - The renderer is a straightforward D3D11 path. No ultrawide support yet.
 - Above `Scale=1`, some post-processing passes can miss one pixel row/column at the screen edge.
+
+## What to look forward to
+
+Planned next, roughly in order:
+
+1. **Full campaign flow.** Play a mission through to its real ending and check that Sam's state carries into the next
+   mission. The relaunch path works, but no real mission ending has driven it yet.
+2. **New York at full speed.** `10_newyork_02` runs at about 28 fps, the only map under the 30 fps cap. Profiling comes next.
+3. **Closer to the console's look.** The Xenos GPU clamps each blend write, and Direct3D 11 does not. Matching this
+   should fix the remaining small differences in fog and light shafts.
+4. **Seamless music loops.** A short seam (512 samples) remains where some music tracks loop.
+5. **Prebuilt releases.** An installer release for people who don't want to build from source.
+6. **Ultrawide and more PC options**, once the renderer is stable.
 
 ## Getting started
 
