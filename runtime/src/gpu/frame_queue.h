@@ -10,6 +10,24 @@
 #include <gpu/draw.h>
 #include <runtime.h>
 
+// Occlusion query results (passed samples, guest pixels) by sample-count block address. The
+// renderer stores a host query's result when it completes; the command processor reports the
+// latest one at the next query end on that address (a frame or two behind, like a GPU running
+// ahead of the CPU). Unknown addresses read as 0 (nothing visible).
+inline std::mutex& OcclusionMutex() { static std::mutex m; return m; }
+inline std::unordered_map<uint32_t, uint32_t>& OcclusionResults() { static std::unordered_map<uint32_t, uint32_t> m; return m; }
+inline uint32_t OcclusionSamples(uint32_t address)
+{
+    std::lock_guard lock(OcclusionMutex());
+    auto it = OcclusionResults().find(address);
+    return it == OcclusionResults().end() ? 0 : it->second;
+}
+inline void SetOcclusionSamples(uint32_t address, uint32_t samples)
+{
+    std::lock_guard lock(OcclusionMutex());
+    OcclusionResults()[address] = samples;
+}
+
 struct FrameStats
 {
     uint32_t draws = 0, resolves = 0, shaders = 0;
@@ -20,6 +38,7 @@ struct Frame
 {
     std::vector<DrawCall> draws;
     std::vector<Resolve> resolves; // in stream order; Resolve::drawIndex places each among draws
+    std::vector<OcclusionQuery> queries; // in stream order, like resolves
     // Register writes in stream order; DrawCall::regWritesEnd says how many precede each draw. The
     // renderer replays them into its own RegisterFile (state carries over from frame to frame).
     std::vector<RegisterWrite> regWrites;
@@ -90,6 +109,11 @@ public:
         statCopy++; statCopyBytes += bytes;
         m_open.memory.push_back({ key, std::vector<uint8_t>(data, data + bytes) });
         return it->second.index;
+    }
+    void AddQuery(uint32_t address, bool end)
+    {
+        std::lock_guard lock(m_mutex);
+        m_open.queries.push_back({ uint32_t(m_open.draws.size()), address, end });
     }
     void AddResolve(Resolve r)
     {

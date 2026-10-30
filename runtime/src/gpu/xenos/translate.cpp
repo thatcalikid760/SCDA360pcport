@@ -29,6 +29,7 @@ cbuffer SharedConstants : register(b2)
     uint g_ColorClamp;       // bit n: oCn goes to a 7e3 target (clamped like the EDRAM store)
     uint g_AlphaFunc;        // RB_COLORCONTROL bits 0-2 (never, <, ==, <=, >, !=, >=, always)
     float g_PositionScale;   // 1 / internal resolution scale: SV_Position -> guest pixels
+    uint g_Tex3DIs2D;        // bit n: fetch constant n is not a 3D texture (tfetch3D samples g_Tex2D)
 };
 uint g_SpecConstants() { return g_SpecConstantsValue; }
 // Alpha test against RB_ALPHA_REF: < 0 = kill (fed to clip()).
@@ -98,7 +99,8 @@ float2 Dims2D(Texture2D<float4> t)
 #define tfetch2D(t, s, uv, off) SAMPLE(g_Tex2D[t], g_Samp[(s) & 15], (uv) + (off) / Dims2D(g_Tex2D[t]))
 #define tfetch2DBicubic(t, s, uv, off) tfetch2D(t, s, uv, off)
 #define getWeights2D(t, s, uv, off) (isnan(uv) ? 0.0 : frac((uv) * Dims2D(g_Tex2D[t]) + (off) - 0.5))
-#define tfetch3D(t, s, uvw) SAMPLE(g_Tex3D[t], g_Samp[(s) & 15], uvw)
+// A 3D fetch of a 2D texture reads slice 0: the 2D binding (g_Tex3D itself is never bound).
+#define tfetch3D(t, s, uvw) ((g_Tex3DIs2D >> (t)) & 1 ? SAMPLE(g_Tex2D[t], g_Samp[(s) & 15], (uvw).xy) : SAMPLE(g_Tex3D[t], g_Samp[(s) & 15], uvw))
 #define tfetchCube(t, s, uvw, cmd) SAMPLE(g_TexCube[t], g_Samp[(s) & 15], (uvw).z ? (cmd).cubeMapDirections[1] : (cmd).cubeMapDirections[0])
 #define getPixelCoord(t, uv) (Dims2D(g_Tex2D[t]) * (uv))
 

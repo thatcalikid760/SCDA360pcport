@@ -30,7 +30,7 @@ struct SharedConstants
     uint32_t colorClamp; // bit n: RT n is 7e3 (clamp oCn)
     uint32_t alphaFunc;  // RB_COLORCONTROL bits 0-2
     float positionScale; // 1 / internal resolution scale: host pixel position -> guest
-    uint32_t pad;
+    uint32_t tex3DIs2D;  // bit n: tfetch3D on slot n samples the 2D binding (fetch constant not 3D)
 };
 static_assert(sizeof(SharedConstants) == 1008 && sizeof(SharedConstants) % 16 == 0);
 static_assert(offsetof(SharedConstants, fetch) == 160 && offsetof(SharedConstants, specConstants) == 928);
@@ -71,6 +71,7 @@ struct TextureFetch
     // dword 5: dimension (0 1D, 1 2D/stacked, 2 3D, 3 cube), packed_mips, mip_address; dword 1 bit
     // 10 stacked. mipMaxLevel = dword 4 mip_max_level clamped to the size, 0 without mip_address.
     uint32_t dimension = 1, mipPhysical = 0, mipMaxLevel = 0;
+    uint32_t depth = 1; // dword 2 bits 26-31 + 1: 2D array layers (stacked) or 3D depth
     bool stacked = false, packedMips = false;
 };
 TextureFetch DecodeTextureFetch(const RegisterFile& regs, uint32_t slot);

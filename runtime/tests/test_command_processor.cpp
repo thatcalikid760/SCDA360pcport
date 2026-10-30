@@ -2,6 +2,7 @@
 #include <vector>
 #include "guest_memory.h"
 #include <command_processor.h>
+#include <gpu/frame_queue.h>
 #include <gpu_state.h>
 #include <runtime.h>
 
@@ -211,11 +212,12 @@ TEST(cp_event_write_zpd_completes_occlusion_query)
     Emit(0x00002325); Emit(0x00681940);
     Emit(0xC0005B00); Emit(0x15);
     Publish();
+    SetOcclusionSamples(GuestPhysical(0x00681900), 123); // the renderer's last result for this block
     CpStats st{};
     CommandProcessorTick(&st);
-    CHECK_EQ(GuestLoad32(end + 0), _byteswap_ulong(1000));  // Total_A (little-endian)
-    CHECK_EQ(GuestLoad32(end + 8), 0u);                     // ZFail_A
-    CHECK_EQ(GuestLoad32(end + 16), _byteswap_ulong(1000)); // ZPass_A
+    CHECK_EQ(GuestLoad32(end + 0), _byteswap_ulong(123));  // Total_A (little-endian)
+    CHECK_EQ(GuestLoad32(end + 8), 0u);                    // ZFail_A
+    CHECK_EQ(GuestLoad32(end + 16), _byteswap_ulong(123)); // ZPass_A
     CHECK_EQ(GuestLoad32(begin + 0), 0u);
     CHECK_EQ(GuestLoad32(begin + 16), 0u);
 }

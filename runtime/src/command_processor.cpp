@@ -336,10 +336,15 @@ static bool ExecutePacket(uint32_t h, const Pm4Payload& p, int depth, CpStats& s
     {
     case kOpEventWriteZpd:
     {
-        // Occlusion query (Xenia's fake): sample counts {Total, ZFail, ZPass, StencilFail} x {A, B},
-        // little-endian, at RB_SAMPLE_COUNT_ADDR. D3D marks an issued end with 0xFFFFFEED in the
-        // ZPass or ZFail pair and polls until it is replaced; report kFakeSamples passed samples.
-        constexpr uint32_t kQueryEnd = 0xFFFFFEED, kFakeSamples = 1000;
+        // Occlusion query: sample counts {Total, ZFail, ZPass, StencilFail} x {A, B}, little-endian,
+        // at RB_SAMPLE_COUNT_ADDR. D3D marks an issued end with 0xFFFFFEED in the ZPass or ZFail
+        // pair and polls until it is replaced. The renderer runs a host occlusion query between the
+        // begin and end (Frame::queries); an end reports the latest completed result for its block
+        // (OcclusionSamples), i.e. a frame or two old. SCDA_FAKE_OCCLUSION=<n>: constant n instead
+        // (Xenia's fake, formerly always 1000: every corona fully visible, even behind walls).
+        constexpr uint32_t kQueryEnd = 0xFFFFFEED;
+        static const long fakeSamples = getenv("SCDA_FAKE_OCCLUSION") ? atol(getenv("SCDA_FAKE_OCCLUSION")) : -1;
+        static const bool traceQuery = getenv("SCDA_TRACE_QUERY") != nullptr;
         uint32_t a = GuestPhysical(GpuRegister(kRegSampleCountAddr));
         if (!Committed(a, 32))
             return true;
@@ -347,10 +352,16 @@ static bool ExecutePacket(uint32_t h, const Pm4Payload& p, int depth, CpStats& s
                    (GuestLoad32(a + 8) == kQueryEnd && GuestLoad32(a + 12) == kQueryEnd);
         for (uint32_t i = 0; i < 8; i++)
             GuestStore32(a + i * 4, 0);
+        Frames().AddQuery(a, end);
         if (end)
         {
-            GuestStore32(a, _byteswap_ulong(kFakeSamples));
-            GuestStore32(a + 16, _byteswap_ulong(kFakeSamples));
+            const uint32_t samples = fakeSamples >= 0 ? uint32_t(fakeSamples) : OcclusionSamples(a);
+            if (traceQuery)
+                RuntimeLog("[query] end %08X -> %u samples\n", a, samples);
+            // SCDA_OCCLUSION_TOTAL=<n>: Total_A = max(n, passed) (A/B: does the title scale by ZPass / Total?).
+            static const long totalOverride = getenv("SCDA_OCCLUSION_TOTAL") ? atol(getenv("SCDA_OCCLUSION_TOTAL")) : -1;
+            GuestStore32(a, _byteswap_ulong(totalOverride >= 0 ? std::max(uint32_t(totalOverride), samples) : samples));
+            GuestStore32(a + 16, _byteswap_ulong(samples));
         }
         BumpEpoch();
         return true;

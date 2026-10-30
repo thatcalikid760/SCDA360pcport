@@ -50,6 +50,8 @@ private:
     bool CreateDrawResources();
     void ExecuteDraw(const DrawCall& d, const Frame& frame);
     void ExecuteResolve(const Resolve& r);
+    void ExecuteQuery(const OcclusionQuery& q);
+    void PollQueries();
     void BindRegisterState(const RegisterFile& regs, uint32_t texSlots);
     void ApplyRegisterWrites(const Frame& frame, size_t end);
     void UploadVertexMemory(const DrawCall& d, const Frame& frame);

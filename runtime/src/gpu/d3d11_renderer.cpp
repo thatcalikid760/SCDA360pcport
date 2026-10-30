@@ -135,6 +135,16 @@ struct DrawResources
     ComPtr<ID3D11Buffer> indexRing;
     uint32_t indexRingBytes = 0, indexRingPos = 0;
     std::vector<uint8_t> indexScratch; // reused per draw
+    // Occlusion queries: the one begun by the last EVENT_WRITE_ZPD begin, and ended ones whose
+    // results are still on the GPU (polled each present, see PollQueries).
+    ComPtr<ID3D11Query> activeQuery;
+    struct PendingQuery
+    {
+        ComPtr<ID3D11Query> query;
+        uint32_t address;
+        uint64_t present;
+    };
+    std::vector<PendingQuery> pendingQueries;
     std::unordered_map<uint64_t, ComPtr<ID3D11VertexShader>> vs;
     std::unordered_map<uint64_t, ComPtr<ID3D11PixelShader>> ps;
     // Fixed-function state by the registers it is built from.
@@ -370,8 +380,11 @@ static bool TraceResolveOnce(uint64_t key)
 
 // SCDA_TRACE_RESOLVE=<n>[/<period>]: also log every resolve and texture fetch of presented frame n
 // (and every period-th one after it) in order.
+static bool g_tracingDump = false; // SCDA_TRACE_DUMPED=1: trace every SCDA_DUMP_FRAME present
 static bool TraceResolveFrame(uint64_t presented)
 {
+    if (g_tracingDump)
+        return true;
     static const char* v = getenv("SCDA_TRACE_RESOLVE");
     static const long long frame = v && strcmp(v, "1") ? atoll(v) : -1;
     static const long long period = v && strchr(v, '/') ? std::max(1ll, atoll(strchr(v, '/') + 1)) : 0;
@@ -697,8 +710,8 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs, uint32_t texSlot
         if (TraceResolveFrame(m_presented))
         {
             auto hit = r.resolved.find(t.physical);
-            RuntimeLog("[rtrace] draw %u slot %u fetch %08X fmt %u %ux%u tiled %d resolve %ux%u fmt %u\n", m_lastDrawn + m_lastSkipped, slot, t.physical,
-                t.format, t.width, t.height, t.tiled, hit != r.resolved.end() ? hit->second.width : 0, hit != r.resolved.end() ? hit->second.height : 0,
+            RuntimeLog("[rtrace] draw %u slot %u fetch %08X fmt %u %ux%ux%u dim %u st %d tiled %d resolve %ux%u fmt %u\n", m_lastDrawn + m_lastSkipped, slot, t.physical,
+                t.format, t.width, t.height, t.depth, t.dimension, t.stacked, t.tiled, hit != r.resolved.end() ? hit->second.width : 0, hit != r.resolved.end() ? hit->second.height : 0,
                 hit != r.resolved.end() ? hit->second.destFormat : 0);
         }
         // A resolve target: guest memory there does not hold the image, the host copy does.
@@ -1011,14 +1024,125 @@ void D3D11Renderer::ExecuteDraw(const DrawCall& d, const Frame& frame)
             m_lastDrawn + m_lastSkipped, (unsigned long long)d.vs->hash, (unsigned long long)d.ps->hash, r.regs[kRegRbSurfaceInfo],
             r.regs[kRegRbColorInfo], r.regs[0x2104], r.regs[0x2200], r.regs[kRegRbDepthInfo], r.regs[0x2206], r.regs[0x2113],
             r.regs[0x2114], r.regs[0x2080], r.regs[0x2205], r.regs[0x2202], r.regs[0x210E], d.indexBase, d.indexCount, used.c_str());
-        // SCDA_TRACE_PS=<ps hash hex>: draws with that PS also log PS c0-c7 and blend control.
-        static const uint64_t tracePs = getenv("SCDA_TRACE_PS") ? strtoull(getenv("SCDA_TRACE_PS"), nullptr, 16) : 0;
-        if (tracePs && d.ps->hash == tracePs)
+        // SCDA_TRACE_PS=<ps hash hex>[,..]: draws with one of those PS also log PS c0-c7 and blend control.
+        static const std::vector<uint64_t> tracePsList = []
+        {
+            std::vector<uint64_t> v;
+            for (const char* p = getenv("SCDA_TRACE_PS"); p && *p; p += strcspn(p, ",") + (p[strcspn(p, ",")] ? 1 : 0))
+                v.push_back(strtoull(p, nullptr, 16));
+            return v;
+        }();
+        const bool tracePs = std::find(tracePsList.begin(), tracePsList.end(), d.ps->hash) != tracePsList.end();
+        if (tracePs)
             for (uint32_t c = 0; c < 8; c++)
             {
                 auto f = [&](uint32_t i) { return std::bit_cast<float>(r.regs[kRegAluConstants + 1024 + c * 4 + i]); };
                 RuntimeLog("[rtrace]   ps c%u %g %g %g %g blend %08X\n", c, f(0), f(1), f(2), f(3), r.regs[0x2201]);
             }
+        // SCDA_TRACE_PS also logs PS c255, VS c0-c31 and the 6 fetch dwords of each texture slot.
+        if (tracePs)
+        {
+            auto pf = [&](uint32_t i) { return std::bit_cast<float>(r.regs[kRegAluConstants + 1024 + 255 * 4 + i]); };
+            RuntimeLog("[rtrace]   ps c255 %g %g %g %g\n", pf(0), pf(1), pf(2), pf(3));
+            for (uint32_t c = 0; c < 32; c++)
+            {
+                auto f = [&](uint32_t i) { return std::bit_cast<float>(r.regs[kRegAluConstants + c * 4 + i]); };
+                RuntimeLog("[rtrace]   vs c%u %g %g %g %g\n", c, f(0), f(1), f(2), f(3));
+            }
+            // Vertex fetch slot 95 (the usual position stream): first 8 vertices as float3 at stride
+            // 28 bytes (big-endian), to identify the mesh.
+            {
+                const uint32_t f0 = r.regs[kRegFetchConstants + 95 * 2], f1 = r.regs[kRegFetchConstants + 95 * 2 + 1];
+                const uint8_t* vb = (f0 & 3) == 3 ? PhysicalPtr(f0 & 0x1FFFFFFC) : nullptr;
+                RuntimeLog("[rtrace]   vfetch95 %08X %08X ib %08X n %u\n", f0, f1, d.indexBase, d.indexCount);
+                std::string idx;
+                if (d.source == IndexSource::Dma && d.indexSnapshot >= 0 && size_t(d.indexSnapshot) < frame.memory.size())
+                {
+                    const std::vector<uint8_t>& b = frame.memory[d.indexSnapshot].bytes;
+                    for (uint32_t k = 0; k < std::min<uint32_t>(d.indexCount, 12); k++)
+                    {
+                        uint32_t v = 0;
+                        if (d.index32 && (k + 1) * 4 <= b.size())
+                            v = _byteswap_ulong(*(const uint32_t*)&b[k * 4]);
+                        else if (!d.index32 && (k + 1) * 2 <= b.size())
+                            v = _byteswap_ushort(*(const uint16_t*)&b[k * 2]);
+                        idx += " " + std::to_string(v);
+                    }
+                }
+                RuntimeLog("[rtrace]   prim %u source %u index32 %d endian %u indices:%s\n", d.primType, unsigned(d.source), int(d.index32), d.indexEndian, idx.c_str());
+                // The draw's vertex snapshots (what the GPU reads): key and first 4 float3s at stride 28.
+                for (uint32_t mi : d.memory)
+                {
+                    if (mi >= frame.memory.size())
+                        continue;
+                    const auto& snap = frame.memory[mi];
+                    std::string vs;
+                    for (uint32_t v = 0; (v + 1) * 28 <= snap.bytes.size() && v < 4; v++)
+                    {
+                        char buf[96];
+                        float xyz[3];
+                        for (uint32_t k = 0; k < 3; k++)
+                        {
+                            uint32_t w;
+                            memcpy(&w, &snap.bytes[v * 28 + k * 4], 4);
+                            w = _byteswap_ulong(w);
+                            memcpy(&xyz[k], &w, 4);
+                        }
+                        snprintf(buf, sizeof(buf), " (%g %g %g)", xyz[0], xyz[1], xyz[2]);
+                        vs += buf;
+                    }
+                    RuntimeLog("[rtrace]   snapshot %08X +%u B:%s\n", uint32_t(snap.key >> 32), uint32_t(snap.key), vs.c_str());
+                }
+                // Vertex fetch slot 0 too (clears and HUD quads): first 4 vertices as float3, stride 28.
+                {
+                    const uint32_t s0 = r.regs[kRegFetchConstants], s1 = r.regs[kRegFetchConstants + 1];
+                    const uint8_t* vb0 = (s0 & 3) == 3 ? PhysicalPtr(s0 & 0x1FFFFFFC) : nullptr;
+                    RuntimeLog("[rtrace]   vfetch0 %08X %08X\n", s0, s1);
+                    for (uint32_t v = 0; vb0 && GuestRangeReadable(vb0, 4 * 28) && v < 4; v++)
+                    {
+                        float xyz[3];
+                        for (uint32_t k = 0; k < 3; k++)
+                        {
+                            uint32_t w;
+                            memcpy(&w, vb0 + v * 28 + k * 4, 4);
+                            w = _byteswap_ulong(w);
+                            memcpy(&xyz[k], &w, 4);
+                        }
+                        RuntimeLog("[rtrace]   s0v%u %g %g %g\n", v, xyz[0], xyz[1], xyz[2]);
+                    }
+                }
+                // The vertices the first indices reference (or 0-7 for auto-indexed draws).
+                std::vector<uint32_t> first;
+                for (const char* q = idx.c_str(); *q; )
+                {
+                    const uint32_t v = strtoul(q, (char**)&q, 10);
+                    if (v != 0xFFFF && v != 0xFFFFFFFF && first.size() < 8)
+                        first.push_back(v);
+                    while (*q == ' ') q++;
+                }
+                for (uint32_t v = 0; first.empty() && v < 8; v++)
+                    first.push_back(v);
+                for (uint32_t v : first)
+                {
+                    if (!vb || !GuestRangeReadable(vb + v * 28, 12))
+                        break;
+                    float xyz[3];
+                    for (uint32_t k = 0; k < 3; k++)
+                    {
+                        uint32_t w;
+                        memcpy(&w, vb + v * 28 + k * 4, 4);
+                        w = _byteswap_ulong(w);
+                        memcpy(&xyz[k], &w, 4);
+                    }
+                    RuntimeLog("[rtrace]   v%u %g %g %g\n", v, xyz[0], xyz[1], xyz[2]);
+                }
+            }
+            for (uint32_t slot = 0; slot < 16; slot++)
+                if (r.regs[kRegFetchConstants + slot * 6] & 3)
+                    RuntimeLog("[rtrace]   fetch %u: %08X %08X %08X %08X %08X %08X\n", slot, r.regs[kRegFetchConstants + slot * 6],
+                        r.regs[kRegFetchConstants + slot * 6 + 1], r.regs[kRegFetchConstants + slot * 6 + 2], r.regs[kRegFetchConstants + slot * 6 + 3],
+                        r.regs[kRegFetchConstants + slot * 6 + 4], r.regs[kRegFetchConstants + slot * 6 + 5]);
+        }
         // SCDA_TRACE_CONSTS=<index base hex>: draws with that index base also log their vertex/index
         // snapshot hashes, draw state, PS c0, bool and vertex fetch constants and VS c0-c255.
         static const uint32_t constsIb = getenv("SCDA_TRACE_CONSTS") ? strtoul(getenv("SCDA_TRACE_CONSTS"), nullptr, 16) : 0;
@@ -1177,6 +1301,48 @@ void D3D11Renderer::ExecuteDraw(const DrawCall& d, const Frame& frame)
 }
 
 // EDRAM resolve: copy the source surface to the host texture for the destination, then clear it.
+// EVENT_WRITE_ZPD begin/end: a host occlusion query around the draws in between. Ends queue the
+// query for PollQueries; a begin while one is active drops the active one.
+void D3D11Renderer::ExecuteQuery(const OcclusionQuery& q)
+{
+    DrawResources& r = *m_draw;
+    if (r.activeQuery)
+    {
+        m_context->End(r.activeQuery.Get());
+        if (q.end)
+            r.pendingQueries.push_back({ r.activeQuery, q.address, m_presented });
+        r.activeQuery.Reset();
+    }
+    if (q.end)
+        return;
+    D3D11_QUERY_DESC qd{ D3D11_QUERY_OCCLUSION, 0 };
+    if (SUCCEEDED(m_device->CreateQuery(&qd, &r.activeQuery)))
+        m_context->Begin(r.activeQuery.Get());
+}
+
+// Completed host queries -> OcclusionSamples (host samples / scale^2 = guest pixels). Never
+// waits; a query still pending after 8 presents is dropped. SCDA_TRACE_QUERY=1 logs results.
+void D3D11Renderer::PollQueries()
+{
+    DrawResources& r = *m_draw;
+    static const bool trace = getenv("SCDA_TRACE_QUERY") != nullptr;
+    std::erase_if(r.pendingQueries, [&](DrawResources::PendingQuery& p)
+    {
+        UINT64 samples = 0;
+        const HRESULT hr = m_context->GetData(p.query.Get(), &samples, sizeof(samples), D3D11_ASYNC_GETDATA_DONOTFLUSH);
+        if (hr == S_OK)
+        {
+            const uint32_t guest = uint32_t(std::min<UINT64>(samples / (uint64_t(r.scale) * r.scale), 0x7FFFFFFF));
+            SetOcclusionSamples(p.address, guest);
+            if (trace)
+                RuntimeLog("[query] present %llu block %08X: %llu host samples -> %u\n", (unsigned long long)m_presented, p.address,
+                    (unsigned long long)samples, guest);
+            return true;
+        }
+        return hr != S_FALSE || m_presented - p.present > 8;
+    });
+}
+
 void D3D11Renderer::ExecuteResolve(const Resolve& res)
 {
     DrawResources& r = *m_draw;
@@ -1307,7 +1473,7 @@ void D3D11Renderer::ExecuteResolve(const Resolve& res)
                 if (dumpResolves && !m_dumpPath.empty())
                 {
                     char name[96];
-                    snprintf(name, sizeof(name), "/res_%02u_%08X_y%u.bmp", m_lastResolved, base, dy);
+                    snprintf(name, sizeof(name), "/p%llu_res_%02u_%08X_y%u.bmp", (unsigned long long)m_presented, m_lastResolved, base, dy);
                     RuntimeLog("[resolve] dump #%u src fmt %u dest fmt %u\n", m_lastResolved, (res.colorInfo >> 16) & 0xF, (res.destInfo >> 7) & 0x3F);
                     Dump(std::string(dumpResolves) + name, dst.texture.Get());
                 }
@@ -1353,6 +1519,8 @@ void D3D11Renderer::Blit(ID3D11ShaderResourceView* source)
     m_context->PSSetShaderResources(0, 1, &none);
 }
 
+static std::vector<uint32_t> ReadTarget(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Texture2D* target);
+
 void D3D11Renderer::Present(const Frame& frame)
 {
     // Lost back buffer (failed resize) or device: rebuild everything for the current size.
@@ -1364,6 +1532,8 @@ void D3D11Renderer::Present(const Frame& frame)
     }
     m_lastDrawn = m_lastSkipped = m_lastResolved = 0;
     m_lastFrontbuffer = false;
+    static const bool traceDumped = getenv("SCDA_TRACE_DUMPED") != nullptr;
+    g_tracingDump = traceDumped && !m_dumpPath.empty();
     if (TraceResolveFrame(m_presented))
         RuntimeLog("[rtrace] present #%llu guest frame %llu\n", (unsigned long long)m_presented, (unsigned long long)frame.stats.frame);
     // No draws: a dark colour that pulses with the frame number, so a running game is visibly
@@ -1409,11 +1579,14 @@ void D3D11Renderer::Present(const Frame& frame)
         // SCDA_DRAW_LIMIT=<n>: run only draws [0, n) (and the resolves before them), then show the
         // last RT0 instead of the frontbuffer (bisecting which pass draws what).
         static const size_t drawLimit = getenv("SCDA_DRAW_LIMIT") ? size_t(atoll(getenv("SCDA_DRAW_LIMIT"))) : SIZE_MAX;
-        size_t next = 0;
+        PollQueries();
+        size_t next = 0, nextQuery = 0;
         for (size_t i = 0; i <= std::min(frame.draws.size(), drawLimit); i++)
         {
             for (; next < frame.resolves.size() && frame.resolves[next].drawIndex <= i; next++)
                 ExecuteResolve(frame.resolves[next]);
+            for (; nextQuery < frame.queries.size() && frame.queries[nextQuery].drawIndex <= i; nextQuery++)
+                ExecuteQuery(frame.queries[nextQuery]);
             if (i < std::min(frame.draws.size(), drawLimit))
                 ExecuteDraw(frame.draws[i], frame);
             // SCDA_DUMP_DRAWS=<dir>,<step>[,<first>,<last>]: on a SCDA_DUMP_FRAME frame, RT0 after every
@@ -1430,8 +1603,8 @@ void D3D11Renderer::Present(const Frame& frame)
             (void)parsed;
             if (dumpDraws && !m_dumpPath.empty() && r.last && i % step == 0 && i >= first && i <= last)
             {
-                char name[64];
-                snprintf(name, sizeof(name), "/draw_%04zu.bmp", i);
+                char name[96];
+                snprintf(name, sizeof(name), "/p%llu_draw_%04zu.bmp", (unsigned long long)m_presented, i);
                 Dump(std::string(dumpDraws, strcspn(dumpDraws, ",")) + name, r.last->texture.Get());
                 // SCDA_DUMP_DEPTH=1: also the bound depth target (z_<n>.bmp, see TexelToRgba8).
                 static const bool dumpDepth = getenv("SCDA_DUMP_DEPTH") != nullptr;
@@ -1443,13 +1616,18 @@ void D3D11Renderer::Present(const Frame& frame)
                     z->second->GetResource(&res);
                     if (SUCCEEDED(res.As(&tex)))
                     {
-                        snprintf(name, sizeof(name), "/z_%04zu.bmp", i);
+                        snprintf(name, sizeof(name), "/p%llu_z_%04zu.bmp", (unsigned long long)m_presented, i);
                         Dump(std::string(dumpDraws, strcspn(dumpDraws, ",")) + name, tex.Get());
                     }
                 }
             }
         }
         ApplyRegisterWrites(frame, frame.regWrites.size()); // draws past SCDA_DRAW_LIMIT still wrote registers
+        if (r.activeQuery) // begun but never ended this frame: drop it
+        {
+            m_context->End(r.activeQuery.Get());
+            r.activeQuery.Reset();
+        }
         r.uploaded.clear();
         // SCDA_TRACE_TEXHASH=1: texture checks and fully hashed guest bytes, every 100 presents.
         static const bool traceTexHash = getenv("SCDA_TRACE_TEXHASH") != nullptr;
@@ -1471,6 +1649,27 @@ void D3D11Renderer::Present(const Frame& frame)
         {
             Dump(m_dumpPath, shown);
             m_dumpPath.clear();
+        }
+        // SCDA_DUMP_ON_BLACK=<from>:<to>[:<count>]: in guest frames [from, to], when the presented
+        // image's middle rows are all black, dump the next frame (as if it were a SCDA_DUMP_FRAME).
+        static const char* dumpOnBlack = getenv("SCDA_DUMP_ON_BLACK");
+        static uint64_t blackFrom = 0, blackTo = 0, blackCount = 1, blackArmed = 0;
+        static const bool blackParsed = dumpOnBlack && sscanf(dumpOnBlack, "%llu:%llu:%llu", &blackFrom, &blackTo, &blackCount) >= 2;
+        if (blackParsed && shown && m_dumpPath.empty() && blackArmed < blackCount && frame.stats.frame >= blackFrom && frame.stats.frame <= blackTo)
+        {
+            D3D11_TEXTURE2D_DESC td;
+            shown->GetDesc(&td);
+            std::vector<uint32_t> texels = ReadTarget(m_device, m_context, shown);
+            uint32_t mx = 0;
+            for (uint32_t y = td.Height / 8; y < td.Height * 7 / 8; y += 4)
+                for (uint32_t x = 0; x < td.Width; x += 4)
+                    mx |= texels[size_t(y) * td.Width + x] & 0xFFFFFF;
+            if (mx == 0)
+            {
+                blackArmed++;
+                m_dumpPath = "scda_frame_" + std::to_string(frame.stats.frame + 1) + ".bmp";
+                RuntimeLog("[dump] present #%llu guest frame %llu black: dumping the next frame\n", (unsigned long long)m_presented, (unsigned long long)frame.stats.frame);
+            }
         }
         if (shownSrv)
             Blit(shownSrv);

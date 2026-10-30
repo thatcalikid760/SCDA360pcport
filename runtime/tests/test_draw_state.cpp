@@ -240,6 +240,21 @@ TEST(texture_fetch_slots_from_hlsl)
 
 // RB_BLENDCONTROL0 / RB_COLOR_MASK / RB_BLEND_* -> D3D11 blend enums; PA_SU_SC_MODE_CNTL -> cull.
 // RB_COLOR_CLEAR is packed in the target's format: C0000000 on a 7e3 target is alpha 1, not 0.75.
+TEST(shared_constants_tex3d_is_2d)
+{
+    // tfetch3D samples the 2D binding unless the fetch constant says the texture is 3D.
+    RegisterFile r;
+    r.Set(kRegFetchConstants + 0 * 6, 2);                 // slot 0: texture, dimension 2D
+    r.Set(kRegFetchConstants + 0 * 6 + 5, 1u << 9);
+    r.Set(kRegFetchConstants + 5 * 6, 2);                 // slot 5: texture, dimension 3D
+    r.Set(kRegFetchConstants + 5 * 6 + 5, 2u << 9);
+    r.Set(kRegFetchConstants + 9 * 6 + 5, 1u << 9);       // slot 9: not a texture constant
+    r.Set(kRegFetchConstants + 11 * 6, 2);                // slot 11: texture, dimension cube
+    r.Set(kRegFetchConstants + 11 * 6 + 5, 3u << 9);
+    SharedConstants c = BuildSharedConstants(r, 1280, 720);
+    CHECK_EQ(c.tex3DIs2D, 1u);
+}
+
 TEST(color_clear_unpacks_per_format)
 {
     float c[4];

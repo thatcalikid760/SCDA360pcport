@@ -55,6 +55,17 @@ SharedConstants BuildSharedConstants(const RegisterFile& r, uint32_t rtWidth, ui
         if (format == 3 || format == 0xC)
             c.colorClamp |= 1u << i;
     }
+    // tfetch3D honours the fetch constant's dimension (dword 5 bits 9-10): a 2D texture (1) sampled
+    // with a 3D fetch reads slice 0, i.e. the 2D binding. Other dimensions and non-texture constants
+    // keep the (unbound, zero) 3D binding.
+    // SCDA_TEX3D_ZERO=1: old behaviour (every tfetch3D reads the unbound 3D binding = 0).
+    static const bool tex3dZero = getenv("SCDA_TEX3D_ZERO") != nullptr;
+    for (uint32_t slot = 0; slot < 32 && !tex3dZero; slot++)
+    {
+        const uint32_t c0 = r[kRegFetchConstants + slot * 6], c5 = r[kRegFetchConstants + slot * 6 + 5];
+        if ((c0 & 3) == 2 && ((c5 >> 9) & 3) == 1)
+            c.tex3DIs2D |= 1u << slot;
+    }
     return c;
 }
 
@@ -220,6 +231,7 @@ TextureFetch DecodeTextureFetch(const RegisterFile& r, uint32_t slot)
         t.pitch = t.width;
     const uint32_t c4 = r[kRegFetchConstants + slot * 6 + 4], c5 = r[kRegFetchConstants + slot * 6 + 5];
     t.stacked = (c1 >> 10) & 1;
+    t.depth = ((c2 >> 26) & 0x3F) + 1;
     t.dimension = (c5 >> 9) & 3;
     t.packedMips = (c5 >> 11) & 1;
     t.mipPhysical = (c5 & 0xFFFFF000) & 0x1FFFFFFF;

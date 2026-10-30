@@ -59,6 +59,15 @@ struct DrawCall
     uint32_t regWritesEnd = 0;                  // Frame::regWrites[0, regWritesEnd) precede this draw
 };
 
+// EVENT_WRITE_ZPD: an occlusion query begin or end (D3D marks ends with a sentinel in the block),
+// placed among the draws like a resolve; address = the RB_SAMPLE_COUNT_ADDR block (physical).
+struct OcclusionQuery
+{
+    uint32_t drawIndex = 0;
+    uint32_t address = 0;
+    bool end = false;
+};
+
 struct Resolve
 {
     // colorInfo: RB_COLOR<n>_INFO of the source render target (copy_src_select, bits 0-2, 0-3).

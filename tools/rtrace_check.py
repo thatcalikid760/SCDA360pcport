@@ -8,7 +8,7 @@ for line in open(sys.argv[1], errors='replace'):
     if m:
         cur = int(m.group(1)); samples[cur] = (m.group(2), [int(x) for x in m.group(3).split()])
         continue
-    m = re.match(r'\[rtrace\] draw (\d+) slot (\d+) fetch (\S+) fmt (\d+) (\d+)x(\d+) tiled (\d) resolve (\d+)x(\d+) fmt (\d+)', line)
+    m = re.match(r'\[rtrace\] draw (\d+) slot (\d+) fetch (\S+) fmt (\d+) (\d+)x(\d+)(?:x\d+ dim \d st \d)? tiled (\d) resolve (\d+)x(\d+) fmt (\d+)', line)
     if m:
         fetch.setdefault(int(m.group(1)), {})[int(m.group(2))] = m.groups()[2:]
 last = {}

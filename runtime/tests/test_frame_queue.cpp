@@ -27,6 +27,27 @@ TEST(frame_queue_keeps_order)
     CHECK(!q.PopFrame(f));
 }
 
+TEST(occlusion_queries_sit_between_draws)
+{
+    FrameQueue q(3);
+    q.AddDraw(DrawCall{}, none);
+    q.AddQuery(0x1000, false);
+    q.AddDraw(DrawCall{}, none);
+    q.AddQuery(0x1000, true);
+    q.EndFrame();
+    Frame f;
+    CHECK(q.PopFrame(f));
+    CHECK_EQ(f.queries.size(), (size_t)2);
+    CHECK_EQ(f.queries[0].drawIndex, 1u);
+    CHECK(!f.queries[0].end);
+    CHECK_EQ(f.queries[1].drawIndex, 2u);
+    CHECK(f.queries[1].end);
+    // Results by sample-count address: 0 until the renderer reports one.
+    CHECK_EQ(OcclusionSamples(0x1000), 0u);
+    SetOcclusionSamples(0x1000, 37);
+    CHECK_EQ(OcclusionSamples(0x1000), 37u);
+}
+
 // Review Focus: a slow renderer never blocks the CP; the oldest frames are dropped.
 TEST(frame_queue_drops_oldest_when_full)
 {
