@@ -14,9 +14,9 @@ struct DrawResources;
 class D3D11Renderer : public Renderer
 {
 public:
-    // Size of every host EDRAM surface (colour and depth targets, one per EdramColorKey /
-    // EdramDepthKey): the widest guest pitch, tall enough for square shadow maps.
-    // Guest units: the host textures are scale times larger (Init).
+    // Largest resolve destination (guest pixels): the widest guest pitch, tall enough for square
+    // shadow maps. Host EDRAM targets are sized per key (EdramSurfaceLayout: sample pitch x
+    // EdramSampleRows); every host texture is scale times larger (Init).
     static constexpr uint32_t kTargetWidth = 1280, kTargetHeight = 1280;
 
     D3D11Renderer();

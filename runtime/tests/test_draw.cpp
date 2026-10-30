@@ -96,6 +96,21 @@ TEST(resolve_source_and_edram_keys)
     CHECK_EQ(EdramColorKey(0x00000000, 0x14020500), EdramColorKey(0x00010000, 0x14020500));
     CHECK(EdramColorKey(0x00030000, 0x14020500) != EdramColorKey(0x00070000, 0x14020500));
     CHECK_EQ(EdramDepthKey(0x00010278, 0x0A000280), 0x02800278u);
+    // MSAA surfaces key by sample pitch: 4x pitch 320 (05020140) is the tile alias of 1x pitch 640
+    // (the D3D fast clear of the half-res glow surface), 4x 640 that of 1x 1280; the 4x scene
+    // (pitch 1280) is its own 2560-sample target.
+    CHECK_EQ(EdramColorKey(0x00000000, 0x05020140), EdramColorKey(0x00000000, 0x0A000280));
+    CHECK_EQ(EdramColorKey(0x00000000, 0x0A020280), EdramColorKey(0x00000000, 0x14000500));
+    CHECK_EQ(EdramDepthKey(0x00000000, 0x04020118), EdramDepthKey(0x00000000, 0x08000230));
+    CHECK_EQ(EdramColorKey(0x00030000, 0x14020500), 0x0A003000u);
+    CHECK(EdramColorKey(0x00000000, 0x14020500) != EdramColorKey(0x00000000, 0x14000500));
+    SurfaceLayout l = EdramSurfaceLayout(0x14020500);
+    CHECK(l.pitch == 1280 && l.samplesX == 2 && l.samplesY == 2 && l.samplePitch == 2560 && l.sampleRows == 1024);
+    l = EdramSurfaceLayout(0x0A000280);
+    CHECK(l.pitch == 640 && l.samplesX == 1 && l.samplesY == 1 && l.samplePitch == 640 && l.sampleRows == 1280);
+    l = EdramSurfaceLayout(0x00010280); // 2x: 1x2 samples, same sample pitch
+    CHECK(l.samplesX == 1 && l.samplesY == 2 && l.samplePitch == 640);
+    CHECK_EQ(EdramSurfaceLayout(0).samplePitch, 80u); // garbage pitch 0 still gets a target
 }
 
 // Resolve rect: bounds of the 3 big-endian float2 vertices (8in32), rounded, plus the window offset.

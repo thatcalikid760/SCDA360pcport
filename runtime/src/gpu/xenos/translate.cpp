@@ -28,8 +28,10 @@ cbuffer SharedConstants : register(b2)
     float4 g_WindowToNdc;    // x, y: 2 / render target size; z, w: window offset in pixels
     uint g_ColorClamp;       // bit n: oCn goes to a 7e3 target (clamped like the EDRAM store)
     uint g_AlphaFunc;        // RB_COLORCONTROL bits 0-2 (never, <, ==, <=, >, !=, >=, always)
-    float g_PositionScale;   // 1 / internal resolution scale: SV_Position -> guest pixels
     uint g_Tex3DIs2D;        // bit n: fetch constant n is not a 3D texture (tfetch3D samples g_Tex2D)
+    uint g_Pad0;
+    float2 g_PositionScale;  // 1 / (internal resolution scale x MSAA samples) per axis: SV_Position -> guest pixels
+    float2 g_Pad1;
 };
 uint g_SpecConstants() { return g_SpecConstantsValue; }
 // Alpha test against RB_ALPHA_REF: < 0 = kill (fed to clip()).

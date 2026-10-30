@@ -1,5 +1,6 @@
 // Draws and EDRAM resolves decoded from PM4 packets, with the register state they use.
 #pragma once
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -95,8 +96,35 @@ inline uint32_t ResolveHeight(const Resolve& r) { return (r.destPitch >> 16) & 0
 // copy_src_select 4: the depth buffer is the source.
 inline bool ResolveFromDepth(const Resolve& r) { return (r.copyControl & 7) == 4; }
 
-// EDRAM surfaces as host targets: one per (base in tiles, format, pitch) from RB_COLOR_INFO /
-// RB_DEPTH_INFO (bits 0-11 base, 16-19 format) and RB_SURFACE_INFO (bits 0-13 pitch).
+// EDRAM surface layout from RB_SURFACE_INFO (bits 0-13 pitch in pixels, 16-17 MSAA: 0 1x, 1 2x,
+// 2 4x). EDRAM holds samples in 80x16 tiles, so a 2x surface takes the tiles of a 1x one with
+// twice the rows and a 4x surface of pitch P those of a 1x one of pitch 2P: host targets are
+// supersampled (samplesX x samplesY host texels per guest pixel, times the internal scale) and
+// keyed by the sample pitch, so aliases share one target. The game's D3D clears a 1x surface
+// through its 4x half-pitch alias (320x176 4x = 640x352 1x), which only works this way.
+// sampleRows: host rows (before the internal scale) the target gets: 1280, or fewer when the
+// sample pitch could not fill them from the 2048 EDRAM tiles (4x 1280: 2560 x 1024).
+struct SurfaceLayout
+{
+    uint32_t pitch, samplesX, samplesY, samplePitch, sampleRows;
+};
+inline uint32_t EdramSampleRows(uint32_t samplePitch) { return std::min(1280u, 2048u * 80 * 16 / samplePitch); }
+inline SurfaceLayout EdramSurfaceLayout(uint32_t surfaceInfo)
+{
+    const uint32_t msaa = (surfaceInfo >> 16) & 3;
+    SurfaceLayout l;
+    l.pitch = surfaceInfo & 0x3FFF;
+    l.samplesX = msaa == 2 ? 2 : 1;
+    l.samplesY = msaa ? 2 : 1;
+    l.samplePitch = std::max(l.pitch * l.samplesX, 80u);
+    l.sampleRows = EdramSampleRows(l.samplePitch);
+    return l;
+}
+// Sample pitch an EdramColorKey / EdramDepthKey was made with (host target width before the scale).
+inline uint32_t EdramKeySamplePitch(uint32_t key) { return (key >> 16) & 0x3FFF; }
+
+// EDRAM surfaces as host targets: one per (base in tiles, format, sample pitch) from RB_COLOR_INFO /
+// RB_DEPTH_INFO (bits 0-11 base, 16-19 format) and RB_SURFACE_INFO (EdramSurfaceLayout).
 // The key keeps the base format (Xenia GetBaseColorFormat): 8_8_8_8_GAMMA (1), 2_10_10_10_AS_10_10_10_10
 // (0xA) and 2_10_10_10_FLOAT_AS_16_16_16_16 (0xC) are views of the 0, 2 and 3 surface (blending
 // precision), which the scene switches between at one base.
@@ -105,9 +133,9 @@ inline uint32_t EdramColorKey(uint32_t colorInfo, uint32_t surfaceInfo)
 {
     uint32_t format = (colorInfo >> 16) & 0xF;
     format = format == 1 ? 0 : format == 0xA ? 2 : format == 0xC ? 3 : format;
-    return (colorInfo & 0xFFF) | (format << 12) | ((surfaceInfo & 0x3FFF) << 16);
+    return (colorInfo & 0xFFF) | (format << 12) | (EdramSurfaceLayout(surfaceInfo).samplePitch << 16);
 }
-inline uint32_t EdramDepthKey(uint32_t depthInfo, uint32_t surfaceInfo) { return (depthInfo & 0xFFF) | ((surfaceInfo & 0x3FFF) << 16); }
+inline uint32_t EdramDepthKey(uint32_t depthInfo, uint32_t surfaceInfo) { return (depthInfo & 0xFFF) | (EdramSurfaceLayout(surfaceInfo).samplePitch << 16); }
 
 DrawCall DecodeDrawIndx(const Pm4Payload& p, uint32_t payloadDwords);  // opcode 0x22
 DrawCall DecodeDrawIndx2(const Pm4Payload& p, uint32_t payloadDwords); // opcode 0x36

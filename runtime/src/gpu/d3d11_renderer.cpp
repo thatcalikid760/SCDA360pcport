@@ -55,18 +55,32 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target
 }
 )HLSL";
 
-// Resolve copy into a fixed-point destination format: the EDRAM -> memory conversion saturates,
-// but float host targets hold values past [0, 1] (FP16 7e3 blending overflows the 2-bit alpha).
+// Resolve copy: rect = destination host texels (x0 y0 x1 y1), written dy rows down; each reads the
+// samples.x x samples.y source texels of its guest pixel (MSAA supersampling), averaged (flags
+// bit 0, copy_sample_select 4+) or sample 0. flags bit 1: fixed-point destination format, so
+// saturate like the EDRAM -> memory conversion (float host targets hold values past [0, 1]: FP16
+// 7e3 blending overflows the 2-bit alpha).
 static const char kSaturateCs[] = R"HLSL(
 Texture2D<float4> src : register(t0);
 RWTexture2D<float4> dst : register(u0);
-cbuffer Rect : register(b0) { int4 rect; int dy; };
+cbuffer Rect : register(b0) { int4 rect; int dy; int2 samples; int flags; };
 [numthreads(8, 8, 1)]
 void main(uint3 id : SV_DispatchThreadID)
 {
     int2 p = int2(rect.xy) + int2(id.xy);
-    if (p.x < rect.z && p.y < rect.w)
-        dst[p + int2(0, dy)] = saturate(src[p]);
+    if (p.x >= rect.z || p.y >= rect.w)
+        return;
+    float4 c = 0;
+    if (flags & 1)
+    {
+        for (int y = 0; y < samples.y; y++)
+            for (int x = 0; x < samples.x; x++)
+                c += src[p * samples + int2(x, y)];
+        c /= float(samples.x * samples.y);
+    }
+    else
+        c = src[p * samples];
+    dst[p + int2(0, dy)] = (flags & 2) ? saturate(c) : c;
 }
 )HLSL";
 
@@ -104,13 +118,14 @@ struct ColorTarget
     ComPtr<ID3D11Texture2D> texture;
     ComPtr<ID3D11RenderTargetView> rtv;
     ComPtr<ID3D11ShaderResourceView> srv;
+    uint32_t width = 0, height = 0; // host texels
 };
 
 // Device objects for executing draws; rebuilt with the device.
 struct DrawResources
 {
-    // EDRAM surfaces, kTargetWidth x kTargetHeight (x scale) each, kept across frames like EDRAM.
-    // Depth is float with stencil: it holds both guest formats (D24S8, D24FS8).
+    // EDRAM surfaces, sample pitch x EdramSampleRows (x scale) each (EdramSurfaceLayout), kept across
+    // frames like EDRAM. Depth is float with stencil: it holds both guest formats (D24S8, D24FS8).
     uint32_t scale = 1; // host texels per guest pixel, each axis (targets and resolve copies)
     uint32_t anisotropy = 1; // settings minimum for linear-filtered textures
     std::unordered_map<uint32_t, ColorTarget> colorTargets;
@@ -118,6 +133,7 @@ struct DrawResources
     uint32_t boundKeys[5] = {}; // RT0-3 + depth keys bound now; ~0u = none
     bool bound = false;         // boundKeys valid (false after the blit or a new frame)
     ColorTarget* last = nullptr; // RT0 of the last draw or resolve: presented when there is no frontbuffer
+    SurfaceLayout lastLayout{ 1280, 1, 1, 1280, 1280 }; // surface layout `last` was bound with
     ComPtr<ID3D11VertexShader> blitVs;
     ComPtr<ID3D11PixelShader> blitPs;
     ComPtr<ID3D11GeometryShader> rectListGs;
@@ -143,6 +159,7 @@ struct DrawResources
         ComPtr<ID3D11Query> query;
         uint32_t address;
         uint64_t present;
+        uint32_t samplesPerPixel; // host samples per guest pixel: scale^2 x MSAA samples of the surface
     };
     std::vector<PendingQuery> pendingQueries;
     std::unordered_map<uint64_t, ComPtr<ID3D11VertexShader>> vs;
@@ -475,8 +492,8 @@ static ColorTarget* ColorTargetFor(ID3D11Device* device, ID3D11DeviceContext* co
     if (r.colorTargets.size() >= kMaxEdramTargets)
         return nullptr;
     D3D11_TEXTURE2D_DESC td{};
-    td.Width = D3D11Renderer::kTargetWidth * r.scale;
-    td.Height = D3D11Renderer::kTargetHeight * r.scale;
+    td.Width = EdramKeySamplePitch(key) * r.scale;
+    td.Height = EdramSampleRows(EdramKeySamplePitch(key)) * r.scale;
     td.MipLevels = td.ArraySize = 1;
     td.Format = DXGI_FORMAT(HostColorFormat((key >> 12) & 0xF));
     td.SampleDesc.Count = 1;
@@ -486,6 +503,8 @@ static ColorTarget* ColorTargetFor(ID3D11Device* device, ID3D11DeviceContext* co
         FAILED(device->CreateRenderTargetView(t.texture.Get(), nullptr, &t.rtv)) ||
         FAILED(device->CreateShaderResourceView(t.texture.Get(), nullptr, &t.srv)))
         return nullptr;
+    t.width = td.Width;
+    t.height = td.Height;
     const float zero[4] = {};
     context->ClearRenderTargetView(t.rtv.Get(), zero);
     return &r.colorTargets.emplace(key, std::move(t)).first->second;
@@ -498,8 +517,8 @@ static ID3D11DepthStencilView* DepthTargetFor(ID3D11Device* device, ID3D11Device
     if (r.depthTargets.size() >= kMaxEdramTargets)
         return nullptr;
     D3D11_TEXTURE2D_DESC td{};
-    td.Width = D3D11Renderer::kTargetWidth * r.scale;
-    td.Height = D3D11Renderer::kTargetHeight * r.scale;
+    td.Width = EdramKeySamplePitch(key) * r.scale;
+    td.Height = EdramSampleRows(EdramKeySamplePitch(key)) * r.scale;
     td.MipLevels = td.ArraySize = 1;
     td.Format = DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
     td.SampleDesc.Count = 1;
@@ -606,13 +625,18 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs, uint32_t texSlot
         m_context->UpdateSubresource(r.constants[pixel].Get(), 0, nullptr, alu, 0, 0);
         r.aluDirty[pixel] = false;
     }
-    SharedConstants shared = BuildSharedConstants(regs, kTargetWidth, kTargetHeight);
-    shared.positionScale = 1.0f / float(r.scale);
+    // Window pixels -> the host target: guest pitch x rows wide (EdramSurfaceLayout), MSAA surfaces
+    // supersampled samplesX x samplesY, so the full-target viewport maps 1 guest pixel to
+    // samples x scale host texels.
+    const uint32_t surface = regs[kRegRbSurfaceInfo];
+    const SurfaceLayout layout = EdramSurfaceLayout(surface);
+    SharedConstants shared = BuildSharedConstants(regs, layout.pitch, layout.sampleRows / layout.samplesY);
+    shared.positionScale[0] = 1.0f / float(r.scale * layout.samplesX);
+    shared.positionScale[1] = 1.0f / float(r.scale * layout.samplesY);
     m_context->UpdateSubresource(r.constants[2].Get(), 0, nullptr, &shared, 0, 0);
 
     // Render targets: RT0, RT1-3 with a colour mask (MRT), and the depth surface.
     static constexpr uint32_t kInfo[4] = { kRegRbColorInfo, kRegRbColor1Info, kRegRbColor2Info, kRegRbColor3Info };
-    const uint32_t surface = regs[kRegRbSurfaceInfo];
     uint32_t keys[5] = { ~0u, ~0u, ~0u, ~0u, EdramDepthKey(regs[kRegRbDepthInfo], surface) };
     ID3D11RenderTargetView* rtvs[4] = {};
     UINT count = 0;
@@ -627,12 +651,17 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs, uint32_t texSlot
             rtvs[n] = t->rtv.Get();
             count = n + 1;
             if (!n)
+            {
                 r.last = t;
+                r.lastLayout = layout;
+            }
         }
     }
     if (!r.bound || !std::equal(keys, keys + 5, r.boundKeys))
     {
         m_context->OMSetRenderTargets(count, rtvs, DepthTargetFor(m_device, m_context, r, keys[4]));
+        D3D11_VIEWPORT vp{ 0, 0, float(layout.samplePitch * r.scale), float(layout.sampleRows * r.scale), 0, 1 };
+        m_context->RSSetViewports(1, &vp);
         std::copy(keys, keys + 5, r.boundKeys);
         r.bound = true;
     }
@@ -1310,7 +1339,10 @@ void D3D11Renderer::ExecuteQuery(const OcclusionQuery& q)
     {
         m_context->End(r.activeQuery.Get());
         if (q.end)
-            r.pendingQueries.push_back({ r.activeQuery, q.address, m_presented });
+        {
+            const SurfaceLayout l = EdramSurfaceLayout(r.regs[kRegRbSurfaceInfo]);
+            r.pendingQueries.push_back({ r.activeQuery, q.address, m_presented, r.scale * r.scale * l.samplesX * l.samplesY });
+        }
         r.activeQuery.Reset();
     }
     if (q.end)
@@ -1320,7 +1352,7 @@ void D3D11Renderer::ExecuteQuery(const OcclusionQuery& q)
         m_context->Begin(r.activeQuery.Get());
 }
 
-// Completed host queries -> OcclusionSamples (host samples / scale^2 = guest pixels). Never
+// Completed host queries -> OcclusionSamples (host samples / samplesPerPixel = guest pixels). Never
 // waits; a query still pending after 8 presents is dropped. SCDA_TRACE_QUERY=1 logs results.
 void D3D11Renderer::PollQueries()
 {
@@ -1332,7 +1364,7 @@ void D3D11Renderer::PollQueries()
         const HRESULT hr = m_context->GetData(p.query.Get(), &samples, sizeof(samples), D3D11_ASYNC_GETDATA_DONOTFLUSH);
         if (hr == S_OK)
         {
-            const uint32_t guest = uint32_t(std::min<UINT64>(samples / (uint64_t(r.scale) * r.scale), 0x7FFFFFFF));
+            const uint32_t guest = uint32_t(std::min<UINT64>(samples / std::max(p.samplesPerPixel, 1u), 0x7FFFFFFF));
             SetOcclusionSamples(p.address, guest);
             if (trace)
                 RuntimeLog("[query] present %llu block %08X: %llu host samples -> %u\n", (unsigned long long)m_presented, p.address,
@@ -1393,12 +1425,14 @@ void D3D11Renderer::ExecuteResolve(const Resolve& res)
                 td.MipLevels = td.ArraySize = 1;
                 td.Format = sd.Format;
                 td.SampleDesc.Count = 1;
-                const bool floatTarget = sd.Format != DXGI_FORMAT_R8G8B8A8_UNORM && sd.Format != DXGI_FORMAT_R10G10B10A2_UNORM;
-                td.BindFlags = D3D11_BIND_SHADER_RESOURCE | (floatTarget ? D3D11_BIND_UNORDERED_ACCESS : 0);
+                // A UAV for the resolve shader (saturation, MSAA sample averaging) where the format allows.
+                UINT support = 0;
+                const bool uav = SUCCEEDED(m_device->CheckFormatSupport(sd.Format, &support)) && (support & D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW);
+                td.BindFlags = D3D11_BIND_SHADER_RESOURCE | (uav ? D3D11_BIND_UNORDERED_ACCESS : 0);
                 dst = {};
                 if (SUCCEEDED(m_device->CreateTexture2D(&td, nullptr, &dst.texture)) &&
                     SUCCEEDED(m_device->CreateShaderResourceView(dst.texture.Get(), nullptr, &dst.srv)) &&
-                    (!floatTarget || SUCCEEDED(m_device->CreateUnorderedAccessView(dst.texture.Get(), nullptr, &dst.uav))))
+                    (!uav || SUCCEEDED(m_device->CreateUnorderedAccessView(dst.texture.Get(), nullptr, &dst.uav))))
                 {
                     dst.width = w;
                     dst.height = h;
@@ -1427,17 +1461,23 @@ void D3D11Renderer::ExecuteResolve(const Resolve& res)
             y1 = std::min(y1, int32_t(kTargetHeight));
             if (x1 > x0 && y1 > y0)
             {
-                // Host texels from here on.
+                // Destination host texels from here on (scale per guest pixel); the source also has the
+                // surface's MSAA samples per pixel, averaged when copy_sample_select (RB_COPY_CONTROL bits
+                // 4-6) is 4+ (0-3 = that sample: sample 0 here).
                 const int32_t s = int32_t(r.scale);
                 x0 *= s, y0 *= s, x1 *= s, y1 *= s;
                 const uint32_t hostDy = dy * r.scale;
                 const uint32_t destFormat = (res.destInfo >> 7) & 0x3F;
-                if (dst.uav && r.saturateCs && !IsFloatTextureFormat(destFormat))
+                const SurfaceLayout layout = EdramSurfaceLayout(res.surfaceInfo);
+                const bool multisampled = layout.samplesX * layout.samplesY > 1;
+                const bool saturate = !IsFloatTextureFormat(destFormat);
+                if (dst.uav && r.saturateCs && (saturate || multisampled))
                 {
                     // The source is bound as a render target: unbind it before reading it.
                     m_context->OMSetRenderTargets(0, nullptr, nullptr);
                     r.bound = false;
-                    const int32_t rect[8] = { x0, y0, x1, y1, int32_t(hostDy) };
+                    const int32_t rect[8] = { x0, y0, x1, y1, int32_t(hostDy), int32_t(layout.samplesX), int32_t(layout.samplesY),
+                        (((res.copyControl >> 4) & 7) >= 4 ? 1 : 0) | (saturate ? 2 : 0) };
                     m_context->UpdateSubresource(r.saturateRect.Get(), 0, nullptr, rect, 0, 0);
                     ID3D11ShaderResourceView* srv = source->srv.Get();
                     ID3D11UnorderedAccessView* uav = dst.uav.Get();
@@ -1560,9 +1600,7 @@ void D3D11Renderer::Present(const Frame& frame)
             r.aluDirty[0] = r.aluDirty[1] = true;
         }
         // EDRAM surfaces persist across frames; only guest clears (resolves) clear them.
-        r.bound = false;
-        D3D11_VIEWPORT vp{ 0, 0, float(kTargetWidth * r.scale), float(kTargetHeight * r.scale), 0, 1 };
-        m_context->RSSetViewports(1, &vp);
+        r.bound = false; // the first bind sets the targets and their viewport
         m_context->RSSetState(r.rasterizer.Get());
         m_context->IASetInputLayout(nullptr);
         ID3D11SamplerState* samplers[16];
@@ -1796,8 +1834,11 @@ uint32_t D3D11Renderer::ReadTargetTexel(uint32_t x, uint32_t y)
     if (!m_draw || !m_draw->last || x >= kTargetWidth || y >= kTargetHeight)
         return 0;
     std::vector<uint32_t> texels = ReadTarget(m_device, m_context, m_draw->last->texture.Get());
-    const uint32_t s = m_draw->scale;
-    return texels.empty() ? 0 : texels[size_t(y * s) * kTargetWidth * s + x * s];
+    const ColorTarget& t = *m_draw->last;
+    const uint32_t sx = m_draw->scale * m_draw->lastLayout.samplesX, sy = m_draw->scale * m_draw->lastLayout.samplesY;
+    if (texels.empty() || x * sx >= t.width || y * sy >= t.height)
+        return 0;
+    return texels[size_t(y * sy) * t.width + x * sx];
 }
 
 void D3D11Renderer::Dump(const std::string& path, ID3D11Texture2D* source)

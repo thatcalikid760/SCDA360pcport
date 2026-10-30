@@ -29,10 +29,13 @@ struct SharedConstants
     float windowToNdc[4];
     uint32_t colorClamp; // bit n: RT n is 7e3 (clamp oCn)
     uint32_t alphaFunc;  // RB_COLORCONTROL bits 0-2
-    float positionScale; // 1 / internal resolution scale: host pixel position -> guest
     uint32_t tex3DIs2D;  // bit n: tfetch3D on slot n samples the 2D binding (fetch constant not 3D)
+    uint32_t pad0;
+    // 1 / (internal resolution scale x MSAA samples per pixel) per axis: host pixel position -> guest.
+    float positionScale[2];
+    float pad1[2];
 };
-static_assert(sizeof(SharedConstants) == 1008 && sizeof(SharedConstants) % 16 == 0);
+static_assert(sizeof(SharedConstants) == 1024 && sizeof(SharedConstants) % 16 == 0);
 static_assert(offsetof(SharedConstants, fetch) == 160 && offsetof(SharedConstants, specConstants) == 928);
 static_assert(offsetof(SharedConstants, vte) == 944 && offsetof(SharedConstants, vpOffset) == 960);
 
