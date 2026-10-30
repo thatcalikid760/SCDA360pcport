@@ -50,7 +50,7 @@ static void Profile(unsigned startS, unsigned durationS)
         }
         Sleep(1);
     }
-    SymSetOptions(SYMOPT_UNDNAME);
+    SymSetOptions(SYMOPT_UNDNAME | SYMOPT_LOAD_LINES);
     SymInitialize(GetCurrentProcess(), nullptr, TRUE);
     RuntimeLog("[profile] %u rounds over %u s\n", rounds, durationS);
     for (auto& [id, rips] : hits)
@@ -78,6 +78,26 @@ static void Profile(unsigned startS, unsigned durationS)
         RuntimeLog("[profile] thread %lu: %u samples\n", id, total);
         for (size_t i = 0; i < top.size() && i < 20; i++)
             RuntimeLog("[profile]   %5.1f%% %s\n", 100.0 * top[i].first / total, top[i].second.c_str());
+        // SCDA_PROFILE_LINES=1: also the hottest source lines (inlined helpers show up here).
+        static const bool lines = getenv("SCDA_PROFILE_LINES") != nullptr;
+        if (!lines)
+            continue;
+        std::map<std::string, uint32_t> byLine;
+        for (auto& [rip, n] : rips)
+        {
+            IMAGEHLP_LINE64 line{ sizeof(line) };
+            DWORD disp = 0;
+            if (!SymGetLineFromAddr64(GetCurrentProcess(), rip, &disp, &line))
+                continue;
+            const char* file = strrchr(line.FileName, '\\');
+            byLine[std::string(file ? file + 1 : line.FileName) + ":" + std::to_string(line.LineNumber)] += n;
+        }
+        std::vector<std::pair<uint32_t, std::string>> topLines;
+        for (auto& [name, n] : byLine)
+            topLines.push_back({ n, name });
+        std::sort(topLines.rbegin(), topLines.rend());
+        for (size_t i = 0; i < topLines.size() && i < 25; i++)
+            RuntimeLog("[profile]     line %5.1f%% %s\n", 100.0 * topLines[i].first / total, topLines[i].second.c_str());
     }
     for (auto& [id, h] : threads)
         if (h)

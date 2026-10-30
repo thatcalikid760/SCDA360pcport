@@ -150,6 +150,8 @@ struct DrawResources
     {
         ComPtr<ID3D11ShaderResourceView> srv;
         uint64_t hash = 0, lastUsed = 0;
+        uint64_t probe = 0, fullAt = 0; // ProbeBytes of level 0 and present number at the last full hash
+        uint32_t stable = 0; // consecutive full hashes equal to hash
         // Guest bytes of level 0, 1, ...: fixed by the fetch constant (the key), so computed once.
         std::vector<uint32_t> levelBytes;
     };
@@ -402,6 +404,20 @@ static uint64_t HashBytes(const uint8_t* p, size_t n)
         r = (r ^ h[l]) * 0x9E3779B97F4A7C15ull;
     return r | 1;
 }
+
+// Per-present texture check: first and last 4 KB plus 16 strided 256-byte runs (all of small ones); never 0.
+static uint64_t ProbeBytes(const uint8_t* p, size_t n)
+{
+    if (n <= 16384)
+        return HashBytes(p, n);
+    uint64_t h = HashBytes(p, 4096) ^ HashBytes(p + n - 4096, 4096) * 3;
+    for (size_t i = 1; i <= 16; i++)
+        h = (h ^ HashBytes(p + (n * i / 17 & ~size_t(255)), 256)) * 1099511628211ull;
+    return h | 1;
+}
+
+constexpr uint32_t kTexStableFrames = 4, kTexFullEvery = 16;
+static struct { uint32_t probes = 0, skips = 0; uint64_t bytes = 0; } g_texHash; // SCDA_TRACE_TEXHASH counters (render thread)
 
 // The resolve's view for a w x h fetch: the whole texture, or a top-left crop copied after each resolve.
 static ID3D11ShaderResourceView* ResolvedView(ID3D11Device* device, ID3D11DeviceContext* context, DrawResources::Resolved& res, uint32_t w, uint32_t h)
@@ -752,19 +768,47 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs, uint32_t texSlot
                     cached.levelBytes.push_back(TextureGuestBytes(TextureMipLevel(t, level)));
             }
             const uint32_t guestBytes = cached.levelBytes[0];
-            uint64_t hash = GuestRangeReadable(guest, guestBytes) ? HashBytes(guest, guestBytes) : 0;
-            // Authored mip levels (2D only): part of the hash; unreadable ones fall back to generated mips.
-            bool guestMips = hash && t.mipMaxLevel && HasGuestMips(t);
-            for (uint32_t level = 1; guestMips && level <= t.mipMaxLevel; level++)
+            static const bool noCache = getenv("SCDA_NO_TEXCACHE") != nullptr; // debug: convert every frame
+            // A texture whose full hash held for kTexStableFrames presents is only probed (sparse
+            // sample of level 0) per present; its full hash still runs at its key phase of every kTexFullEvery
+            // presents (staggered), and at least once per kTexFullEvery presents. newyork_02 hashed ~115 MB per present before.
+            // shortcut: a CPU write outside the probed bytes shows up to kTexFullEvery presents late.
+            // SCDA_TEXHASH_COMPARE=1: always full-hash, log each change the probe alone would have missed.
+            static const bool compare = getenv("SCDA_TEXHASH_COMPARE") != nullptr;
+            const bool readable = GuestRangeReadable(guest, guestBytes);
+            const uint64_t probe = readable ? ProbeBytes(guest, guestBytes) : 0;
+            const bool probeOnly = cached.srv && !noCache && probe && probe == cached.probe && cached.stable >= kTexStableFrames &&
+                m_presented < cached.fullAt + kTexFullEvery && (m_presented + (key * 0x9E3779B97F4A7C15ull >> 32)) % kTexFullEvery != 0;
+            uint64_t hash = cached.hash;
+            bool guestMips = false;
+            g_texHash.probes++;
+            g_texHash.skips += probeOnly;
+            if (!probeOnly || compare)
             {
-                const uint8_t* g = PhysicalPtr(TextureMipLevel(t, level).physical);
-                const uint32_t n = cached.levelBytes[level];
-                guestMips = GuestRangeReadable(g, n);
-                if (guestMips)
-                    hash = (hash ^ HashBytes(g, n)) * 1099511628211ull;
+                hash = readable ? HashBytes(guest, guestBytes) : 0;
+                g_texHash.bytes += guestBytes;
+                // Authored mip levels (2D only): part of the hash; unreadable ones fall back to generated mips.
+                guestMips = hash && t.mipMaxLevel && HasGuestMips(t);
+                for (uint32_t level = 1; guestMips && level <= t.mipMaxLevel; level++)
+                {
+                    const uint8_t* g = PhysicalPtr(TextureMipLevel(t, level).physical);
+                    const uint32_t n = cached.levelBytes[level];
+                    guestMips = GuestRangeReadable(g, n);
+                    if (guestMips)
+                        hash = (hash ^ HashBytes(g, n)) * 1099511628211ull;
+                    g_texHash.bytes += n;
+                }
+                if (probeOnly && hash != cached.hash)
+                    RuntimeLog("[texhash] MISS present %llu fetch %08X fmt %u %ux%u tiled %d: guest bytes changed, probe unchanged (stable %u)\n",
+                        m_presented, t.physical, t.format, t.width, t.height, t.tiled, cached.stable);
+                if (!probeOnly || hash != cached.hash) // compare mode: keep the probe-only schedule
+                {
+                    cached.stable = hash && hash == cached.hash ? cached.stable + 1 : 0;
+                    cached.probe = probe;
+                    cached.fullAt = m_presented;
+                }
             }
             cached.lastUsed = m_presented;
-            static const bool noCache = getenv("SCDA_NO_TEXCACHE") != nullptr; // debug: convert every frame
             if (hash && cached.srv && cached.hash == hash && !noCache)
                 srv = cached.srv;
             else if (hash)
@@ -1394,6 +1438,11 @@ void D3D11Renderer::Present(const Frame& frame)
         }
         ApplyRegisterWrites(frame, frame.regWrites.size()); // draws past SCDA_DRAW_LIMIT still wrote registers
         r.uploaded.clear();
+        // SCDA_TRACE_TEXHASH=1: texture checks and fully hashed guest bytes, every 100 presents.
+        static const bool traceTexHash = getenv("SCDA_TRACE_TEXHASH") != nullptr;
+        if (traceTexHash && m_presented % 100 == 0)
+            RuntimeLog("[texhash] present %llu: %u checks, %u probe-only, %.1f MB hashed\n", m_presented, g_texHash.probes, g_texHash.skips, g_texHash.bytes / 1048576.0);
+        g_texHash = {};
         r.textures.clear();
         if (m_presented % 60 == 0) // drop textures unused for ~10 s
             std::erase_if(r.textureCache, [&](auto& e) { return e.second.lastUsed + 600 < m_presented; });
