@@ -67,7 +67,12 @@ float4 XenosViewport(float4 p)
     if (vte & 0x08) s.y += g_VpOffset.y;
     if (vte & 0x10) s.z *= g_VpScale.z;
     if (vte & 0x20) s.z += g_VpOffset.z;
-    s.xy += g_HalfPixelOffset + g_WindowToNdc.zw;
+    // D3D9 half-pixel offset at internal scale > 1: exact (0.5 guest) except on integer edges,
+    // which take 0.5 host pixel so integer-edged rects (the 1x1..16x16 luminance chain) cover
+    // exactly the host pixels of the guest pixels they cover at scale 1. Half-integer edges (D3D9
+    // quads, e.g. -0.5..255.5 per predicated tile) then keep their last host row/column.
+    float2 onEdge = step(abs(s.xy - round(s.xy)), 1e-3);
+    s.xy += g_HalfPixelOffset * lerp(1.0, g_PositionScale, onEdge) + g_WindowToNdc.zw;
     return float4((s.x * g_WindowToNdc.x - 1.0) * w, (1.0 - s.y * g_WindowToNdc.y) * w, s.z * w, w);
 }
 

@@ -576,12 +576,6 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs, uint32_t texSlot
     }
     SharedConstants shared = BuildSharedConstants(regs, kTargetWidth, kTargetHeight);
     shared.positionScale = 1.0f / float(r.scale);
-    // The D3D9 half-pixel offset in host pixels (0.5 / scale guest pixels): integer-edged rects
-    // (the 1x1..16x16 luminance chain) then cover exactly the host pixels of the guest pixels whose
-    // centres lie on their left/top edges, as at scale 1. shortcut: a half-integer-edged quad loses
-    // its last host column/row at scale > 1.
-    shared.halfPixelOffset[0] *= shared.positionScale;
-    shared.halfPixelOffset[1] *= shared.positionScale;
     m_context->UpdateSubresource(r.constants[2].Get(), 0, nullptr, &shared, 0, 0);
 
     // Render targets: RT0, RT1-3 with a colour mask (MRT), and the depth surface.
