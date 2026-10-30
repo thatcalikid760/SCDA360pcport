@@ -150,6 +150,8 @@ struct DrawResources
     {
         ComPtr<ID3D11ShaderResourceView> srv;
         uint64_t hash = 0, lastUsed = 0;
+        // Guest bytes of level 0, 1, ...: fixed by the fetch constant (the key), so computed once.
+        std::vector<uint32_t> levelBytes;
     };
     std::unordered_map<uint64_t, CachedTexture> textureCache;
     // Register state replayed from Frame::regWrites; applied = writes of the current frame done.
@@ -748,20 +750,25 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs, uint32_t texSlot
         {
             ComPtr<ID3D11ShaderResourceView> srv;
             const uint8_t* guest = PhysicalPtr(t.physical);
-            const uint32_t guestBytes = TextureGuestBytes(t);
+            auto& cached = r.textureCache[key];
+            if (cached.levelBytes.empty())
+            {
+                cached.levelBytes.push_back(TextureGuestBytes(t));
+                for (uint32_t level = 1; level <= t.mipMaxLevel && HasGuestMips(t); level++)
+                    cached.levelBytes.push_back(TextureGuestBytes(TextureMipLevel(t, level)));
+            }
+            const uint32_t guestBytes = cached.levelBytes[0];
             uint64_t hash = GuestRangeReadable(guest, guestBytes) ? HashBytes(guest, guestBytes) : 0;
             // Authored mip levels (2D only): part of the hash; unreadable ones fall back to generated mips.
             bool guestMips = hash && t.mipMaxLevel && HasGuestMips(t);
             for (uint32_t level = 1; guestMips && level <= t.mipMaxLevel; level++)
             {
-                const TextureFetch m = TextureMipLevel(t, level);
-                const uint8_t* g = PhysicalPtr(m.physical);
-                const uint32_t n = TextureGuestBytes(m);
+                const uint8_t* g = PhysicalPtr(TextureMipLevel(t, level).physical);
+                const uint32_t n = cached.levelBytes[level];
                 guestMips = GuestRangeReadable(g, n);
                 if (guestMips)
                     hash = (hash ^ HashBytes(g, n)) * 1099511628211ull;
             }
-            auto& cached = r.textureCache[key];
             cached.lastUsed = m_presented;
             static const bool noCache = getenv("SCDA_NO_TEXCACHE") != nullptr; // debug: convert every frame
             if (hash && cached.srv && cached.hash == hash && !noCache)
@@ -782,6 +789,12 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs, uint32_t texSlot
                     char name[96];
                     snprintf(name, sizeof(name), "\\%08X_%u_%ux%u.bmp", t.physical, t.format, t.width, t.height);
                     WriteBmp(dumpDir + std::string(name), texels, t.width, t.height);
+                    if ((t.offsetX | t.offsetY) && !isFloat) // packed-tail base: also as read from (0, 0)
+                    {
+                        TextureFetch origin = t;
+                        origin.offsetX = origin.offsetY = 0;
+                        WriteBmp(dumpDir + std::string(name).replace(strlen(name) - 4, 4, "_at0.bmp"), ConvertTexture(origin, guest), t.width, t.height);
+                    }
                     uint32_t bytes = TextureGuestBytes(t), nonFF = 0;
                     for (uint32_t i = 0; i < bytes; i++)
                         nonFF += guest[i] != 0xFF;
@@ -804,6 +817,10 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs, uint32_t texSlot
                 // Guest mip chain (dword 4 mip_max_level, levels at dword 5 mip_address): the authored
                 // levels when readable as 2D, else generated on the GPU from level 0.
                 const uint32_t levels = t.mipMaxLevel + 1;
+                static const bool mipCheckBase = getenv("SCDA_MIP_CHECK") != nullptr;
+                if (mipCheckBase && (t.offsetX | t.offsetY))
+                    RuntimeLog("[mip] base %08X fmt %u %ux%u tiled %d at +(%u,%u) levels %u dword5 %08X\n", t.physical, t.format, t.width, t.height,
+                        t.tiled, t.offsetX, t.offsetY, levels, regs[kRegFetchConstants + slot * 6 + 5]);
                 if (guestMips)
                 {
                     std::vector<std::vector<float>> mipFloats(levels);
@@ -825,7 +842,7 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs, uint32_t texSlot
                         const uint32_t uw = std::max(t.width >> (level - 1), 1u), uh = std::max(t.height >> (level - 1), 1u);
                         if (mipCheck && !isFloat && up.size() == size_t(uw) * uh)
                         {
-                            uint64_t sum = 0;
+                            uint64_t sum = 0, alphaSum = 0;
                             for (uint32_t y = 0; y < m.height; y++)
                                 for (uint32_t x = 0; x < m.width; x++)
                                     for (uint32_t c = 0; c < 32; c += 8)
@@ -833,11 +850,13 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs, uint32_t texSlot
                                         uint32_t box = 0;
                                         for (uint32_t k = 0; k < 4; k++)
                                             box += (up[size_t(std::min(y * 2 + k / 2, uh - 1)) * uw + std::min(x * 2 + k % 2, uw - 1)] >> c) & 0xFF;
-                                        sum += uint32_t(std::abs(int((mipTexels[level][size_t(y) * m.width + x] >> c) & 0xFF) - int(box / 4)));
+                                        const uint32_t d = uint32_t(std::abs(int((mipTexels[level][size_t(y) * m.width + x] >> c) & 0xFF) - int(box / 4)));
+                                        sum += d;
+                                        alphaSum += c == 24 ? d : 0;
                                     }
-                            RuntimeLog("[mip] %08X fmt %u %ux%u tiled %d packed %d level %u %ux%u at %08X +(%u,%u) diff %.1f\n", t.physical, t.format,
-                                t.width, t.height, t.tiled, t.packedMips, level, m.width, m.height, m.physical, m.offsetX, m.offsetY,
-                                double(sum) / (m.width * m.height * 4.0));
+                            RuntimeLog("[mip] %08X fmt %u %ux%u tiled %d packed %d level %u %ux%u at %08X +(%u,%u) diff %.1f alpha %.1f\n", t.physical,
+                                t.format, t.width, t.height, t.tiled, t.packedMips, level, m.width, m.height, m.physical, m.offsetX, m.offsetY,
+                                double(sum) / (m.width * m.height * 4.0), double(alphaSum) / (m.width * m.height));
                         }
                     }
                     td.MipLevels = levels;
