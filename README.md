@@ -34,8 +34,8 @@ stands in for the console:
 - **Higher internal resolution.** `Scale=2..4` in `settings.ini` renders at 2560x1440 to 5120x2880 and box-filters
   down to the window, which acts as supersampling anti-aliasing. Kinshasa, the heaviest map, holds the game's 30 fps
   cap at `Scale=2`.
-- **Texture mipmaps and anisotropic filtering.** Textures the game gives a mip chain now have one, so distant surfaces
-  no longer shimmer. `Anisotropy=16` sharpens floors and walls seen at an angle.
+- **Texture mipmaps and anisotropic filtering.** Textures use the game's own authored mip levels (including the packed
+  mip tail of small textures), so distant surfaces no longer shimmer. `Anisotropy=16` sharpens floors and walls seen at an angle.
 - **Auto-exposure fixed at higher scales.** Scenes no longer turn twice as bright above `Scale=1`.
 - **In-mission flow verified.** Load last checkpoint after ASSIGNMENT FAILED, Restart Mission, Quit to the main menu
   and loading a save from the pause menu all work, repeatedly, in one session.
@@ -82,7 +82,6 @@ resolution setting; the rest are at the console's 1280x720.
 **Known issues**
 - Small differences from the console in fog, light shafts and some edges of the under-ice sky.
 - The renderer is a straightforward D3D11 path. No ultrawide support yet.
-- Mipmaps are generated from the full-size texture rather than taken from the game's own smaller versions.
 - Above `Scale=1`, some post-processing passes can miss one pixel row/column at the screen edge.
 
 ## Getting started
