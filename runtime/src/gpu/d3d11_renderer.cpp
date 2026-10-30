@@ -749,7 +749,18 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs, uint32_t texSlot
             ComPtr<ID3D11ShaderResourceView> srv;
             const uint8_t* guest = PhysicalPtr(t.physical);
             const uint32_t guestBytes = TextureGuestBytes(t);
-            const uint64_t hash = GuestRangeReadable(guest, guestBytes) ? HashBytes(guest, guestBytes) : 0;
+            uint64_t hash = GuestRangeReadable(guest, guestBytes) ? HashBytes(guest, guestBytes) : 0;
+            // Authored mip levels (2D only): part of the hash; unreadable ones fall back to generated mips.
+            bool guestMips = hash && t.mipMaxLevel && HasGuestMips(t);
+            for (uint32_t level = 1; guestMips && level <= t.mipMaxLevel; level++)
+            {
+                const TextureFetch m = TextureMipLevel(t, level);
+                const uint8_t* g = PhysicalPtr(m.physical);
+                const uint32_t n = TextureGuestBytes(m);
+                guestMips = GuestRangeReadable(g, n);
+                if (guestMips)
+                    hash = (hash ^ HashBytes(g, n)) * 1099511628211ull;
+            }
             auto& cached = r.textureCache[key];
             cached.lastUsed = m_presented;
             static const bool noCache = getenv("SCDA_NO_TEXCACHE") != nullptr; // debug: convert every frame
@@ -790,12 +801,50 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs, uint32_t texSlot
                 const UINT rowPitch = t.width * (isFloat ? 16 : 4);
                 D3D11_SUBRESOURCE_DATA init{ data, rowPitch, 0 };
                 ComPtr<ID3D11Texture2D> tex;
-                // Guest mip chain (dword 4 mip_max_level, levels at dword 5 mip_address): generated on
-                // the GPU from level 0. shortcut: generated mips, not the guest's packed authored ones.
-                uint32_t levels = 1;
-                for (uint32_t m = (regs[kRegFetchConstants + slot * 6 + 4] >> 6) & 0xF; m && ((t.width >> levels) | (t.height >> levels)); m--)
-                    levels++;
-                if (levels > 1)
+                // Guest mip chain (dword 4 mip_max_level, levels at dword 5 mip_address): the authored
+                // levels when readable as 2D, else generated on the GPU from level 0.
+                const uint32_t levels = t.mipMaxLevel + 1;
+                if (guestMips)
+                {
+                    std::vector<std::vector<float>> mipFloats(levels);
+                    std::vector<std::vector<uint32_t>> mipTexels(levels);
+                    std::vector<D3D11_SUBRESOURCE_DATA> mipInit{ init };
+                    static const bool mipCheck = getenv("SCDA_MIP_CHECK") != nullptr;
+                    for (uint32_t level = 1; level < levels; level++)
+                    {
+                        const TextureFetch m = TextureMipLevel(t, level);
+                        const uint8_t* g = PhysicalPtr(m.physical);
+                        if (isFloat)
+                            mipFloats[level] = ConvertTextureFloat(m, g);
+                        else
+                            mipTexels[level] = ConvertTexture(m, g);
+                        mipInit.push_back({ isFloat ? (const void*)mipFloats[level].data() : mipTexels[level].data(), m.width * (isFloat ? 16 : 4), 0 });
+                        // SCDA_MIP_CHECK: mean |authored - 2x2 box of the level above| per channel (0-255);
+                        // a wrong layout reads unrelated bytes and scores far above a real downsample.
+                        const std::vector<uint32_t>& up = level == 1 ? texels : mipTexels[level - 1];
+                        const uint32_t uw = std::max(t.width >> (level - 1), 1u), uh = std::max(t.height >> (level - 1), 1u);
+                        if (mipCheck && !isFloat && up.size() == size_t(uw) * uh)
+                        {
+                            uint64_t sum = 0;
+                            for (uint32_t y = 0; y < m.height; y++)
+                                for (uint32_t x = 0; x < m.width; x++)
+                                    for (uint32_t c = 0; c < 32; c += 8)
+                                    {
+                                        uint32_t box = 0;
+                                        for (uint32_t k = 0; k < 4; k++)
+                                            box += (up[size_t(std::min(y * 2 + k / 2, uh - 1)) * uw + std::min(x * 2 + k % 2, uw - 1)] >> c) & 0xFF;
+                                        sum += uint32_t(std::abs(int((mipTexels[level][size_t(y) * m.width + x] >> c) & 0xFF) - int(box / 4)));
+                                    }
+                            RuntimeLog("[mip] %08X fmt %u %ux%u tiled %d packed %d level %u %ux%u at %08X +(%u,%u) diff %.1f\n", t.physical, t.format,
+                                t.width, t.height, t.tiled, t.packedMips, level, m.width, m.height, m.physical, m.offsetX, m.offsetY,
+                                double(sum) / (m.width * m.height * 4.0));
+                        }
+                    }
+                    td.MipLevels = levels;
+                    if (SUCCEEDED(m_device->CreateTexture2D(&td, mipInit.data(), &tex)))
+                        m_device->CreateShaderResourceView(tex.Get(), nullptr, &srv);
+                }
+                else if (levels > 1)
                 {
                     td.MipLevels = levels;
                     td.Usage = D3D11_USAGE_DEFAULT;

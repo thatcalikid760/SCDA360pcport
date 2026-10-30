@@ -390,3 +390,68 @@ TEST(sampler_mip_range_and_aniso)
     CHECK_EQ(s.maxLod, 1u);
     CHECK_EQ(s.anisotropy, 1u);
 }
+
+// Guest mip layout (values hand-computed from Xenia texture_util GetGuestTextureLayout).
+TEST(texture_mip_layout)
+{
+    TextureFetch t;
+    t.valid = t.tiled = t.packedMips = true;
+    t.format = 18; // DXT1, 8 bytes per 4x4 block
+    t.width = t.height = t.pitch = 256;
+    t.mipPhysical = 0x100000;
+    t.mipMaxLevel = 8;
+    TextureFetch m = TextureMipLevel(t, 1);
+    CHECK_EQ(m.physical, 0x100000u);
+    CHECK_EQ(m.width, 128u);
+    CHECK_EQ(m.pitch, 128u); // 32 blocks
+    CHECK_EQ(TextureMipLevel(t, 2).physical, 0x102000u);
+    CHECK_EQ(TextureMipLevel(t, 3).physical, 0x104000u);
+    m = TextureMipLevel(t, 4); // first packed level: tail after levels 1-3
+    CHECK_EQ(m.physical, 0x106000u);
+    CHECK_EQ(m.offsetX, 4u);
+    CHECK_EQ(m.offsetY, 0u);
+    m = TextureMipLevel(t, 6);
+    CHECK_EQ(m.physical, 0x106000u);
+    CHECK_EQ(m.offsetX, 1u);
+    m = TextureMipLevel(t, 7);
+    CHECK_EQ(m.offsetX, 0u);
+    CHECK_EQ(m.offsetY, 2u);
+
+    // 2x2 linear k_8_8_8_8 with packed mips: base at (16, 0), 1x1 mip at (8, 0) of its own tail.
+    TextureFetch s;
+    s.valid = s.packedMips = true;
+    s.format = 6;
+    s.width = s.height = 2;
+    s.pitch = 64;
+    s.mipPhysical = 0x200000;
+    s.mipMaxLevel = 1;
+    m = TextureMipLevel(s, 1);
+    CHECK_EQ(m.physical, 0x200000u);
+    CHECK_EQ(m.offsetX, 8u);
+    CHECK_EQ(m.pitch, 64u); // 32 texels x 4 B aligned to 256 B
+    CHECK_EQ(TextureGuestBytes(m), (8u + 1u) * 4u);
+
+    // Unpacked: small levels keep their own 4 KB-aligned slots.
+    t.packedMips = false;
+    CHECK_EQ(TextureMipLevel(t, 5).physical, 0x108000u);
+    CHECK_EQ(TextureMipLevel(t, 5).offsetX, 0u);
+}
+
+TEST(decode_texture_fetch_packed_base)
+{
+    RegisterFile r;
+    const uint32_t f = kRegFetchConstants;
+    r.Set(f, 2 | (1u << 22));               // texture, pitch 32
+    r.Set(f + 1, 6 | (0x1234u << 12));       // k_8_8_8_8
+    r.Set(f + 2, 15 | (15u << 13));          // 16x16
+    r.Set(f + 4, 4u << 6);                   // mip_max_level 4
+    r.Set(f + 5, (1u << 9) | (1u << 11) | (0x5678u << 12)); // 2D, packed, mip address
+    TextureFetch t = DecodeTextureFetch(r, 0);
+    CHECK(t.packedMips);
+    CHECK_EQ(t.mipPhysical, 0x5678000u);
+    CHECK_EQ(t.mipMaxLevel, 4u);
+    CHECK_EQ(t.offsetX, 16u);
+    CHECK_EQ(t.offsetY, 0u);
+    r.Set(f + 4, 15u << 6); // clamped to log2(16)
+    CHECK_EQ(DecodeTextureFetch(r, 0).mipMaxLevel, 4u);
+}

@@ -65,8 +65,21 @@ struct TextureFetch
 {
     bool valid = false, tiled = false;
     uint32_t format = 0, endian = 0, physical = 0, width = 0, height = 0, pitch = 0, swizzle = 0;
+    // Element (texel or 4x4 block) offset of the image inside its storage: non-zero for levels in a
+    // packed mip tail (dword 5 bit 11), including a base of 16 texels or less.
+    uint32_t offsetX = 0, offsetY = 0;
+    // dword 5: dimension (0 1D, 1 2D/stacked, 2 3D, 3 cube), packed_mips, mip_address; dword 1 bit
+    // 10 stacked. mipMaxLevel = dword 4 mip_max_level clamped to the size, 0 without mip_address.
+    uint32_t dimension = 1, mipPhysical = 0, mipMaxLevel = 0;
+    bool stacked = false, packedMips = false;
 };
 TextureFetch DecodeTextureFetch(const RegisterFile& regs, uint32_t slot);
+// True when the guest mip chain can be read as plain 2D levels (not 1D, 3D, cube or stacked).
+bool HasGuestMips(const TextureFetch& t);
+// Mip level `level` (1..mipMaxLevel) of t as its own fetch: address, size, row pitch and
+// packed-tail offset follow Xenia texture_util GetGuestTextureLayout / GetPackedMipOffset
+// (BSD-licensed, xenia-project/xenia).
+TextureFetch TextureMipLevel(const TextureFetch& t, uint32_t level);
 
 // Bytes per element (texel, or 4x4 block for DXT) for the formats ConvertTexture supports
 // (k_8, k_8_8_8_8, DXT1, DXT2_3, DXT4_5) and IsFloatTextureFormat ones; 0 = unsupported.

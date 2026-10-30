@@ -142,6 +142,63 @@ bool GuestRangeReadable(const uint8_t* p, size_t n)
     return true;
 }
 
+static bool IsBlockCompressed(uint32_t format);
+static uint32_t Log2Ceil(uint32_t v) { return v > 1 ? uint32_t(std::bit_width(v - 1)) : 0; }
+
+bool HasGuestMips(const TextureFetch& t) { return t.dimension == 1 && !t.stacked; }
+
+// First level stored in the packed mip tail (the shorter side is 16 texels or less from there).
+static uint32_t PackedMipLevel(const TextureFetch& t)
+{
+    const uint32_t log2 = Log2Ceil(std::min(t.width, t.height));
+    return log2 > 4 ? log2 - 4 : 0;
+}
+
+// Element offset of `level` inside the packed tail (Xenia GetPackedMipOffset, 2D only): levels
+// tile into one 32x32 block; t holds the base size.
+static void PackedMipOffset(const TextureFetch& t, uint32_t level, uint32_t& x, uint32_t& y)
+{
+    const uint32_t log2W = Log2Ceil(t.width), log2H = Log2Ceil(t.height), log2 = std::min(log2W, log2H);
+    const uint32_t base = log2 > 4 ? log2 - 4 : 0, packed = level - base;
+    x = y = 0;
+    if (packed < 3)
+        (log2W > log2H ? y : x) = 16 >> packed;
+    else if (log2W > log2H)
+        x = (1u << (log2W - base)) >> (packed - 2);
+    else
+        y = (1u << (log2H - base)) >> (packed - 2);
+    if (IsBlockCompressed(t.format))
+        x /= 4, y /= 4;
+}
+
+TextureFetch TextureMipLevel(const TextureFetch& t, uint32_t level)
+{
+    TextureFetch m = t;
+    const uint32_t blockSize = IsBlockCompressed(t.format) ? 4 : 1, bytes = TextureElementBytes(t.format);
+    const uint32_t packedLevel = t.packedMips ? PackedMipLevel(t) : 32;
+    // Mip strides come from the base size rounded up to powers of two, rows and pitch aligned to 32
+    // elements (linear rows also to 256 bytes), each level aligned to 4 KB.
+    auto rowElements = [&](uint32_t l) {
+        uint32_t e = ((std::max(std::bit_ceil(t.width) >> l, 1u) + blockSize - 1) / blockSize + 31) & ~31u;
+        return t.tiled || !bytes ? e : (((e * bytes + 255) & ~255u) / bytes);
+    };
+    auto rows = [&](uint32_t l) { return ((std::max(std::bit_ceil(t.height) >> l, 1u) + blockSize - 1) / blockSize + 31) & ~31u; };
+    // With packedLevel 0 the mips have their own tail at mip_address laid out like level 0.
+    const uint32_t stored = packedLevel == 0 ? 0 : std::min(level, packedLevel);
+    uint32_t offset = 0;
+    for (uint32_t l = 1; l < stored; l++)
+        offset += (rowElements(l) * bytes * rows(l) + 0xFFF) & ~0xFFFu;
+    m.physical = t.mipPhysical + offset;
+    m.width = std::max(t.width >> level, 1u);
+    m.height = std::max(t.height >> level, 1u);
+    m.pitch = rowElements(stored) * blockSize;
+    m.offsetX = m.offsetY = 0;
+    if (level >= packedLevel)
+        PackedMipOffset(t, level, m.offsetX, m.offsetY);
+    m.mipMaxLevel = 0;
+    return m;
+}
+
 TextureFetch DecodeTextureFetch(const RegisterFile& r, uint32_t slot)
 {
     TextureFetch t;
@@ -161,6 +218,15 @@ TextureFetch DecodeTextureFetch(const RegisterFile& r, uint32_t slot)
     t.swizzle = (c3 >> 1) & 0xFFF;
     if (!t.pitch)
         t.pitch = t.width;
+    const uint32_t c4 = r[kRegFetchConstants + slot * 6 + 4], c5 = r[kRegFetchConstants + slot * 6 + 5];
+    t.stacked = (c1 >> 10) & 1;
+    t.dimension = (c5 >> 9) & 3;
+    t.packedMips = (c5 >> 11) & 1;
+    t.mipPhysical = (c5 & 0xFFFFF000) & 0x1FFFFFFF;
+    if (t.mipPhysical)
+        t.mipMaxLevel = std::min((c4 >> 6) & 0xF, uint32_t(std::bit_width(std::max(t.width, t.height)) - 1));
+    if (t.packedMips && HasGuestMips(t) && PackedMipLevel(t) == 0) // base of 16 texels or less: own packed tail
+        PackedMipOffset(t, 0, t.offsetX, t.offsetY);
     t.valid = t.physical != 0;
     return t;
 }
@@ -207,8 +273,12 @@ uint32_t TextureGuestBytes(const TextureFetch& t)
 {
     uint32_t bytes = TextureElementBytes(t.format), pitch, height;
     ElementGrid(t, pitch, height);
+    height += t.offsetY;
     if (!t.tiled)
-        return pitch * height * bytes;
+    {
+        const uint32_t b = IsBlockCompressed(t.format) ? 4 : 1;
+        return ((height - 1) * pitch + t.offsetX + (t.width + b - 1) / b) * bytes;
+    }
     // Small elements interleave past the 32x32 tile (8 bpp: up to 2.5x), so take the highest
     // element index of the last macro-tile row.
     uint32_t log2 = Log2(bytes), last = 0, rows = Align32(height);
@@ -299,7 +369,8 @@ std::vector<uint32_t> ConvertTexture(const TextureFetch& t, const uint8_t* guest
         for (uint32_t by = 0; by < height; by++)
             for (uint32_t bx = 0; bx < (t.width + 3) / 4; bx++)
             {
-                uint32_t index = t.tiled ? TiledTexelIndex(bx, by, pitch, log2) : by * pitch + bx, d[4], texels[16][4];
+                uint32_t ex = bx + t.offsetX, ey = by + t.offsetY;
+                uint32_t index = t.tiled ? TiledTexelIndex(ex, ey, pitch, log2) : ey * pitch + ex, d[4], texels[16][4];
                 memcpy(d, guest + size_t(index) * bytes, bytes);
                 for (uint32_t i = 0; i < bytes / 4; i++)
                     d[i] = SwapDword(d[i], t.endian);
@@ -316,7 +387,8 @@ std::vector<uint32_t> ConvertTexture(const TextureFetch& t, const uint8_t* guest
     for (uint32_t y = 0; y < t.height; y++)
         for (uint32_t x = 0; x < t.width; x++)
         {
-            uint32_t index = t.tiled ? TiledTexelIndex(x, y, pitch, log2) : y * pitch + x;
+            uint32_t ex = x + t.offsetX, ey = y + t.offsetY;
+            uint32_t index = t.tiled ? TiledTexelIndex(ex, ey, pitch, log2) : ey * pitch + ex;
             uint32_t byteOffset = index * bytes, d;
             memcpy(&d, guest + (byteOffset & ~3u), 4);
             d = SwapDword(d, t.endian);
@@ -351,7 +423,8 @@ std::vector<float> ConvertTextureFloat(const TextureFetch& t, const uint8_t* gue
     for (uint32_t y = 0; y < t.height; y++)
         for (uint32_t x = 0; x < t.width; x++)
         {
-            const uint32_t index = t.tiled ? TiledTexelIndex(x, y, pitch, log2) : y * pitch + x;
+            const uint32_t ex = x + t.offsetX, ey = y + t.offsetY;
+            const uint32_t index = t.tiled ? TiledTexelIndex(ex, ey, pitch, log2) : ey * pitch + ex;
             const uint32_t byteOffset = index * bytes;
             // Endian swap per dword (a 2-byte element shares its dword with a neighbour).
             uint32_t d[4] = {};
