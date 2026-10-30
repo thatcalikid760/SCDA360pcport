@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstring>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 #include <vector>
 #include <runtime.h>
@@ -321,6 +322,69 @@ SCDA_IMPORT(RtlInitAnsiString)
     GuestStore32(dst + 4, src);
 }
 
+// RtlInitUnicodeString(UNICODE_STRING* Dest, const u16* Src): ANSI_STRING layout, lengths in bytes.
+SCDA_IMPORT(RtlInitUnicodeString)
+{
+    uint32_t dst = ctx.r3.u32, src = ctx.r4.u32;
+    uint32_t chars = 0;
+    while (src && GuestLoad16(src + chars * 2))
+        chars++;
+    GuestStore16(dst, uint16_t(chars * 2));
+    GuestStore16(dst + 2, src ? uint16_t(chars * 2 + 2) : 0);
+    GuestStore32(dst + 4, src);
+}
+
+// RtlUnicodeStringToAnsiString(ANSI_STRING* Dest, const UNICODE_STRING* Src, BOOLEAN Allocate)
+SCDA_IMPORT(RtlUnicodeStringToAnsiString)
+{
+    uint32_t dst = ctx.r3.u32, src = ctx.r4.u32;
+    uint32_t chars = GuestLoad16(src) / 2, wide = GuestLoad32(src + 4);
+    uint32_t buffer = GuestLoad32(dst + 4), room = GuestLoad16(dst + 2);
+    if (ctx.r5.u8)
+    {
+        room = chars + 1;
+        buffer = GuestAllocVirtual(room, 0x10);
+        if (!buffer)
+        {
+            ctx.r3.u64 = 0xC0000017; // STATUS_NO_MEMORY
+            return;
+        }
+        GuestStore32(dst + 4, buffer);
+        GuestStore16(dst + 2, uint16_t(room));
+    }
+    else if (chars >= room)
+    {
+        ctx.r3.u64 = 0x80000005; // STATUS_BUFFER_OVERFLOW
+        return;
+    }
+    for (uint32_t i = 0; i < chars; i++)
+    {
+        uint16_t c = GuestLoad16(wide + i * 2);
+        g_base[buffer + i] = c < 0x100 ? uint8_t(c) : '?';
+    }
+    g_base[buffer + chars] = 0;
+    GuestStore16(dst, uint16_t(chars));
+    ctx.r3.u64 = 0;
+}
+
+// RtlFreeAnsiString(ANSI_STRING*). shortcut: the buffer is not returned to the heap (XamFree
+// does not free either); the string is emptied.
+SCDA_IMPORT(RtlFreeAnsiString)
+{
+    GuestStore16(ctx.r3.u32, 0);
+    GuestStore16(ctx.r3.u32 + 2, 0);
+    GuestStore32(ctx.r3.u32 + 4, 0);
+}
+
+// RtlCompareMemoryUlong(Source, Length, Pattern) -> bytes matching before the first mismatch.
+SCDA_IMPORT(RtlCompareMemoryUlong)
+{
+    uint32_t src = ctx.r3.u32, len = ctx.r4.u32 & ~3u, pattern = ctx.r5.u32, n = 0;
+    while (n < len && GuestLoad32(src + n) == pattern)
+        n += 4;
+    ctx.r3.u64 = n;
+}
+
 SCDA_IMPORT(DbgPrint)
 {
     RuntimeLog("[DbgPrint] %s", ctx.r3.u32 ? (const char*)GuestPtr(ctx.r3.u32) : "(null)\n");
@@ -337,4 +401,85 @@ SCDA_IMPORT(NtClose)
     if (!CloseGuestFile(ctx.r3.u32))
         CloseKernelHandle(ctx.r3.u32);
     ctx.r3.u64 = 0;
+}
+
+// ObLookupThreadByThreadId(ThreadId, PVOID* Thread) / ObOpenObjectByPointer(Object, u32* Handle):
+// only reached from sub_821E2118 (OpenThread); thread ids are not tracked, so the lookup fails.
+SCDA_IMPORT(ObLookupThreadByThreadId)
+{
+    GuestStore32(ctx.r4.u32, 0);
+    ctx.r3.u64 = 0xC000000B; // STATUS_INVALID_CID
+}
+
+SCDA_IMPORT(ObOpenObjectByPointer)
+{
+    GuestStore32(ctx.r4.u32, 0);
+    ctx.r3.u64 = 0xC0000008; // STATUS_INVALID_HANDLE
+}
+
+static std::string AnsiStringText(uint32_t s)
+{
+    return s ? std::string((const char*)GuestPtr(GuestLoad32(s + 4)), GuestLoad16(s)) : "(null)";
+}
+
+// ObCreateSymbolicLink(ANSI_STRING* Link, ANSI_STRING* Target): sub_82207D08 links a drive
+// to the directory of a path it builds at run time. shortcut: links are logged, not resolved by fs.
+SCDA_IMPORT(ObCreateSymbolicLink)
+{
+    RuntimeLog("[kernel] ObCreateSymbolicLink(\"%s\" -> \"%s\") not resolved\n",
+        AnsiStringText(ctx.r3.u32).c_str(), AnsiStringText(ctx.r4.u32).c_str());
+    ctx.r3.u64 = 0;
+}
+SCDA_IMPORT(ObDeleteSymbolicLink) { ctx.r3.u64 = 0; }
+
+// ---- Memory / volume queries ----
+
+// NtQueryVirtualMemory(BaseAddress, MEMORY_BASIC_INFORMATION*): only VirtualQuery (sub_821E2D70)
+// calls it; region tables are not kept, so it fails and VirtualQuery returns 0.
+SCDA_IMPORT(NtQueryVirtualMemory) { ctx.r3.u64 = 0xC000000D; } // STATUS_INVALID_PARAMETER
+
+// NtQueryVolumeInformationFile(Handle, IO_STATUS_BLOCK*, Info, Length, Class): not supported.
+SCDA_IMPORT(NtQueryVolumeInformationFile)
+{
+    GuestStore32(ctx.r4.u32, 0xC0000002);
+    GuestStore32(ctx.r4.u32 + 4, 0);
+    ctx.r3.u64 = 0xC0000002; // STATUS_NOT_IMPLEMENTED
+}
+
+// ---- Cache / debugger ----
+
+SCDA_IMPORT(KeLockL2) { ctx.r3.u64 = 0; }
+SCDA_IMPORT(KeUnlockL2) {}
+SCDA_IMPORT(DbgBreakPoint) { RuntimeLog("[kernel] DbgBreakPoint lr=0x%08X (ignored)\n", uint32_t(ctx.lr)); }
+
+// ---- Fatal paths: the console stops here, so the process does too ----
+
+[[noreturn]] static void GuestFatal(const char* what, PPCContext& ctx)
+{
+    RuntimeLog("[fatal] %s(0x%08X, 0x%08X, 0x%08X, 0x%08X, 0x%08X) lr=0x%08X\n", what, ctx.r3.u32,
+        ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, uint32_t(ctx.lr));
+    fflush(nullptr);
+    ExitProcess(3);
+}
+
+SCDA_IMPORT(KeBugCheck) { GuestFatal("KeBugCheck", ctx); }
+SCDA_IMPORT(KeBugCheckEx) { GuestFatal("KeBugCheckEx", ctx); }
+SCDA_IMPORT(HalReturnToFirmware) { GuestFatal("HalReturnToFirmware", ctx); }
+// No SEH: an unwind means a C++ throw or __except is live, which nothing handles yet.
+SCDA_IMPORT(RtlUnwind) { GuestFatal("RtlUnwind", ctx); }
+
+// RtlRaiseException(EXCEPTION_RECORD*): code @0, NumberParameters @0x10, ExceptionInformation @0x14.
+// 0x406D1388 is the debugger thread-name convention; without a debugger the title's __except
+// swallows it, so returning is the same. Anything else is fatal.
+SCDA_IMPORT(RtlRaiseException)
+{
+    uint32_t record = ctx.r3.u32, code = GuestLoad32(record);
+    if (code == 0x406D1388)
+    {
+        uint32_t name = GuestLoad32(record + 0x14 + 4);
+        RuntimeLog("[kernel] thread name \"%s\"\n", name ? (const char*)GuestPtr(name) : "(null)");
+        return;
+    }
+    RuntimeLog("[fatal] exception 0x%08X at 0x%08X\n", code, GuestLoad32(record + 0xC));
+    GuestFatal("RtlRaiseException", ctx);
 }

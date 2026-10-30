@@ -372,6 +372,63 @@ SCDA_IMPORT(XamShowSigninUI)
     ctx.r3.u64 = kErrorSuccess;
 }
 
+// Guest UTF-16 BE string as ASCII, for logs.
+static std::string GuestWideToAscii(uint32_t s)
+{
+    std::string out;
+    for (; s && out.size() < 256; s += 2)
+    {
+        uint16_t c = GuestLoad16(s);
+        if (!c)
+            break;
+        out += c < 0x80 ? char(c) : '?';
+    }
+    return out;
+}
+
+// XamShowMessageBoxUIEx(User, Title, Text, ButtonCount, ButtonText, FocusButton, Flags, u32* Result,
+// XOVERLAPPED* @ r1+0x54): no UI; the focused button is pressed at once.
+SCDA_IMPORT(XamShowMessageBoxUIEx)
+{
+    uint32_t focus = ctx.r8.u32, result = ctx.r10.u32, ov = GuestLoad32(ctx.r1.u32 + 0x54);
+    RuntimeLog("[xam] message box \"%s\": \"%s\" -> button %u\n", GuestWideToAscii(ctx.r4.u32).c_str(),
+        GuestWideToAscii(ctx.r5.u32).c_str(), focus);
+    if (result)
+        GuestStore32(result, focus);
+    BroadcastNotification(kNotifySysUi, 1);
+    BroadcastNotification(kNotifySysUi, 0);
+    if (ov)
+    {
+        CompleteOverlapped(ov, kErrorSuccess, 0);
+        ctx.r3.u64 = kErrorIoPending;
+        return;
+    }
+    ctx.r3.u64 = kErrorSuccess;
+}
+
+// XamShowDirtyDiscErrorUI(User): the disc read failed on the console. Demo01 calls it once and
+// carries on when it returns, so log loudly and return.
+SCDA_IMPORT(XamShowDirtyDiscErrorUI)
+{
+    RuntimeLog("[xam] !!! XamShowDirtyDiscErrorUI(%u) lr=0x%08X: the title hit a disc read error\n",
+        ctx.r3.u32, uint32_t(ctx.lr));
+    ctx.r3.u64 = kErrorSuccess;
+}
+
+// XamUserCreateAchievementEnumerator(TitleId, User, u64 Xuid, Flags, Offset, Count, u32* BufferSize,
+// u32* Handle): no achievements; XACHIEVEMENT_DETAILS is 0x1C bytes plus its strings.
+SCDA_IMPORT(XamUserCreateAchievementEnumerator)
+{
+    uint32_t count = ctx.r8.u32 ? ctx.r8.u32 : 1;
+    if (ctx.r9.u32)
+        GuestStore32(ctx.r9.u32, count * (0x1C + 0x200));
+    GuestStore32(ctx.r10.u32, XamCreateItemEnumerator({}, 0x1C, count));
+    ctx.r3.u64 = kErrorSuccess;
+}
+
+SCDA_IMPORT(XGetLanguage) { ctx.r3.u64 = 1; } // English, as XCONFIG_USER_LANGUAGE
+SCDA_IMPORT(XGetAVPack) { ctx.r3.u64 = 0; }   // as Unleashed
+
 // XNotifyGetNext(Handle, MatchId, u32* Id, u32* Param) -> TRUE when a notification was dequeued
 SCDA_IMPORT(XNotifyGetNext)
 {

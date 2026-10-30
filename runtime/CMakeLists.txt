@@ -69,6 +69,7 @@ add_executable(scda
     src/settings.cpp
     src/host_window.cpp
     src/imports.cpp
+    src/net.cpp
     src/fs.cpp
     src/kernel.cpp
     src/imports_stubs.cpp

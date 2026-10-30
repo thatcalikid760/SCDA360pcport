@@ -270,3 +270,36 @@ TEST(xmp_get_status_reports_idle)
     CHECK_EQ(r.r3.u32, 0u);
     CHECK_EQ(GuestLoad32(0x40500108), 0u);
 }
+
+TEST(message_box_picks_focus_button_and_completes)
+{
+    TestGuestBase();
+    // XamShowMessageBoxUIEx(User, Title, Text, Buttons, ButtonText, Focus, Flags, u32* Result, XOVERLAPPED* @ r1+0x54)
+    const uint32_t sp = 0x40500400, ov = 0x40500480, result = 0x40500470;
+    GuestStore32(sp + 0x54, ov);
+    GuestStore32(ov + 0, 0xFFFFFFFF);
+    GuestStore32(ov + 0xC, 0);
+    GuestStore32(result, 0xDEADBEEF);
+    PPCContext ctx{};
+    ctx.r1.u64 = sp; ctx.r6.u64 = 2; ctx.r8.u64 = 1; ctx.r10.u64 = result;
+    __imp__XamShowMessageBoxUIEx(ctx, g_base);
+    CHECK_EQ(ctx.r3.u32, 997u); // ERROR_IO_PENDING
+    CHECK_EQ(GuestLoad32(result), 1u);
+    CHECK_EQ(GuestLoad32(ov + 0), 0u);
+}
+
+TEST(achievement_enumerator_is_empty)
+{
+    TestGuestBase();
+    // XamUserCreateAchievementEnumerator(TitleId, User, u64 Xuid, Flags, Offset, Count, u32* Size, u32* Handle)
+    PPCContext ctx{};
+    ctx.r3.u64 = 0; ctx.r4.u64 = 0; ctx.r8.u64 = 5; ctx.r9.u64 = 0x40500500; ctx.r10.u64 = 0x40500504;
+    __imp__XamUserCreateAchievementEnumerator(ctx, g_base);
+    CHECK_EQ(ctx.r3.u32, 0u);
+    CHECK(GuestLoad32(0x40500500) >= 5 * 0x1C);
+    uint32_t h = GuestLoad32(0x40500504);
+    CHECK(h != 0);
+    // XamEnumerate(Handle, Flags, Buffer, BufferSize, u32* ItemsReturned, XOVERLAPPED*)
+    auto r = Call5(__imp__XamEnumerate, h, 0, 0x40500600, 0x100, 0x40500508);
+    CHECK_EQ(r.r3.u32, 18u); // ERROR_NO_MORE_FILES
+}
