@@ -11,6 +11,9 @@
 // bit offsets. A loop keeps the decoder state across the jump, so the first frame after it
 // overlaps with the loop end frame instead of the one before loop start (as on hardware, if the
 // encoder did not plan for it: in-game music differs from straight decoding for 512 samples).
+// Priming with the frame before loop start instead (straight decode from loop start) was
+// measured worse: music ctx #0 seam step 4681 vs 2072 carried, the max elsewhere being ~2700
+// (scda_xma_tool --loop variant 101 vs 1).
 // The statically linked XAudio drives its own contexts without the XMA* exports beyond create /
 // release: it reads the array address from register 0x7FEA1800 and kicks / locks contexts with
 // one bit per context in registers 0x7FEA1940 / 0x7FEA1A40 (xma_xaudio.cpp).

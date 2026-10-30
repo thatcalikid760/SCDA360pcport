@@ -9,7 +9,8 @@
 //     loop [start, end) bits wraps times, decoder state carried across the jump; variant = what
 //     the frame at loop end plays: 0 nothing, 1 subframes 0..subEnd (the runtime's), 2 all,
 //     10 + n: n subframes from loop end on (may run past that frame). Prints each seam's
-//     step |x[j] - x[j-1]| against the median step.
+//     step |x[j] - x[j-1]| against the median step. variant + 100: after each jump, first decode
+//     the frame before loop start (output dropped) so the start frame overlaps with it.
 // Writes 16-bit PCM WAV if asked.
 #include <algorithm>
 #include <cmath>
@@ -70,18 +71,34 @@ std::vector<int16_t> DecodeFrames(ScdaXmaStream* s, int channels, const uint32_t
     static uint8_t bits[xma::kMaxFrameBits / 8 + 1];
     static int16_t out[512 * 2];
     uint32_t pos = loop ? xma::kHeaderBits : xma::FirstFrameBit(&g_data[0]);
-    uint32_t wraps = loop ? loop[5] : 0, skip = 0;
+    uint32_t wraps = loop ? loop[5] : 0, skip = 0, prime = ~0u;
+    const bool primed = loop && loop[4] >= 100;
+    const uint32_t variant = loop ? loop[4] % 100 : 0;
+    if (primed)
+        for (uint32_t p = xma::FirstFrameBit(&g_data[0]), next; xma::ReadFrame(Packet, p, bits, &next) >= 0; p = next)
+            if (next == loop[0])
+            {
+                prime = p;
+                break;
+            }
+    auto jump = [&] {
+        pos = loop[0], skip = loop[3], wraps--;
+        seams->push_back(pcm.size() / channels);
+        uint32_t next;
+        int n = prime != ~0u ? xma::ReadFrame(Packet, prime, bits, &next) : 0;
+        if (n > 0)
+            scda_xma_decode_frame(s, bits, n, out, 512);
+    };
     int budget = -1;
     *frames = *failed = 0;
     for (;;)
     {
         bool atEnd = loop && wraps && pos == loop[1];
-        if (atEnd && loop[4] >= 10) // research: play (variant - 10) subframes from loop end on
-            budget = int(loop[4] - 10) * 128;
-        if (atEnd && loop[4] == 0)
+        if (atEnd && variant >= 10) // research: play (variant - 10) subframes from loop end on
+            budget = int(variant - 10) * 128;
+        if (atEnd && variant == 0)
         {
-            pos = loop[0], skip = loop[3], wraps--;
-            seams->push_back(pcm.size() / channels);
+            jump();
             continue;
         }
         uint32_t next;
@@ -100,7 +117,7 @@ std::vector<int16_t> DecodeFrames(ScdaXmaStream* s, int channels, const uint32_t
         }
         int from = std::min<int>(got, int(skip * 128)), to = got;
         skip = 0;
-        if (atEnd && loop[4] == 1)
+        if (atEnd && variant == 1)
             to = std::min<int>(got, int(loop[2] + 1) * 128);
         if (budget >= 0)
         {
@@ -112,10 +129,7 @@ std::vector<int16_t> DecodeFrames(ScdaXmaStream* s, int channels, const uint32_t
         }
         pcm.insert(pcm.end(), out + from * channels, out + to * channels);
         if (atEnd)
-        {
-            pos = loop[0], skip = loop[3], wraps--;
-            seams->push_back(pcm.size() / channels);
-        }
+            jump();
     }
     return pcm;
 }
