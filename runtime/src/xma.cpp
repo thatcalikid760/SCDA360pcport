@@ -8,12 +8,10 @@
 // valid cleared) or the input runs out (each consumed buffer's valid bit cleared, then the
 // other buffer). Disable waits for a running pass, so the title can then rewrite the context.
 // Decoding is per frame (xma_frames.h): the read offset, loop start and loop end are frame
-// bit offsets. A loop keeps the decoder state across the jump, so the first frame after it
-// overlaps with the loop end frame instead of the one before loop start (as on hardware, if the
-// encoder did not plan for it: in-game music differs from straight decoding for 512 samples).
-// Priming with the frame before loop start instead (straight decode from loop start) was
-// measured worse: music ctx #0 seam step 4681 vs 2072 carried, the max elsewhere being ~2700
-// (scda_xma_tool --loop variant 101 vs 1).
+// bit offsets. At a loop jump the decoder is primed with the frame before loop start (output
+// dropped), so the start frame overlaps with it as in straight decoding. Carrying the loop end
+// frame's state over instead clicks: music ctx #0 seam step 2768 (24x local) vs 159 primed
+// (scda_xma_tool --loop ... 3 1 variant 1 vs 101).
 // The statically linked XAudio drives its own contexts without the XMA* exports beyond create /
 // release: it reads the array address from register 0x7FEA1800 and kicks / locks contexts with
 // one bit per context in registers 0x7FEA1940 / 0x7FEA1A40 (xma_xaudio.cpp).
@@ -165,8 +163,8 @@ bool DecodeFrame(uint32_t c, Decode& d)
                 d.pcm.push_back(uint8_t(uint16_t(samples[i]) >> 8));
                 d.pcm.push_back(uint8_t(samples[i]));
             }
-            // Loop: jump back with the decoder state carried over, as the hardware does. Count
-            // 255 loops forever.
+            // Loop: jump back, decoder primed with the frame before loop start. Count 255 loops
+            // forever.
             if (loopEnd)
             {
                 if (loops != 255)
@@ -185,7 +183,16 @@ bool DecodeFrame(uint32_t c, Decode& d)
                         fclose(f);
                     }
                 }
-                Set(c, kReadOffset, Get(c, kLoopStart));
+                const uint32_t start = Get(c, kLoopStart);
+                for (uint32_t p = xma::FirstFrameBit(packet(0)), at; p < start; p = at)
+                {
+                    const int n = xma::ReadFrame(packet, p, frame, &at);
+                    if (n < 0)
+                        break;
+                    if (n > 0 && at == start)
+                        scda_xma_decode_frame(d.stream, frame, n, samples, 512);
+                }
+                Set(c, kReadOffset, start);
                 d.skip = Get(c, kLoopSubSkip) * 128;
                 Trace("loop", c, 0);
                 return true;
