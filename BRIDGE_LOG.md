@@ -58,3 +58,8 @@
 - **Q:** Xbox 360 Xenos GPU render target formats. For ColorRenderTargetFormat k_2_10_10_10_FLOAT (3) and k_2_10_10_10_FLOAT_AS_16_16_16_16 (0xC): what range is a pixel shader color output clamped to when written (RGB 7e3 max value, alpha 2-bit unorm)? Is the blender result also clamped/quantized? How does X
 - **Files:** -
 - **A:** ### 1. Clamping Ranges (Xenos HW) #### `k_2_10_10_10_FLOAT` (3) / `k_2_10_10_10_FLOAT_AS_16_16_16_16` (0xC) * **RGB (7e3 Unsigned Float)**: * Range: `[0.0, 31.875]` (Bias = 3, Exp = 3 bits, Mantissa = 7 bits, No sign bit). * Values $< 0.0$ clamped to `0.0`. * Values $> 31.875$ (formula: $(1 + \frac{127}{128}) \times 2^{7 - 3} = 31.875$) clamped to `31.875`. Denorms flush to 0. * **Alpha (2-bit UNORM)**: * Range: `[0.0, 1.0]`. Quantized to $\{0.0, \frac{1}{3}, \frac{2}{3}, 1.0\}$. * **Blender**: * EDRAM ALU operates natively in 7e3/UNORM2 for this format. * Intermediate blending results clamped
+
+## 2026-10-30 18:10:27 via error
+- **Q:** Xbox 360 static recomp of Splinter Cell: Double Agent (UE2.5, D3D9-style Xenos driver). Host renderer: D3D11, runs 1-3 frames behind the guest command processor (CP), frames queued; renderer drops guest frames when busy. SYMPTOM: screen flicker seen ONLY while the user recorded the window with NVIDI
+- **Files:** runtime/src/gpu/frame_queue.h
+- **A:** The read operation timed out

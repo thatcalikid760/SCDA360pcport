@@ -22,6 +22,17 @@ static void SetupRing()
 static uint32_t g_w;
 static void Emit(uint32_t v) { GuestStore32(kRing + g_w++ * 4, v); }
 static void Publish() { GuestStore32(kGpuRegBase + kRegCpRbWptr * 4, g_w); }
+// A CP tick, then the renderer's part: fences are written when the renderer reaches them.
+static bool Tick(CpStats* st)
+{
+    const bool r = CommandProcessorTick(st);
+    Frames().FlushOpenNow();
+    Frame f;
+    while (Frames().PopFrame(f))
+        for (const auto& fence : f.fences)
+            WriteFence(fence);
+    return r;
+}
 
 // Review Focus: no ring yet (early boot) -> idle, nothing touched.
 // Review Focus: display registers D3D reads over MMIO have their Xenia values after reset
@@ -41,7 +52,7 @@ TEST(cp_idle_without_ring)
     CommandProcessorReset();
     Gpu().ringBase = 0;
     CpStats st{};
-    CHECK(!CommandProcessorTick(&st));
+    CHECK(!Tick(&st));
     CHECK_EQ(st.packets, 0ull);
 }
 
@@ -52,7 +63,7 @@ TEST(cp_fence_written_and_rptr_published)
     Emit(0xC0025800); Emit(4); Emit(0x0068130A); Emit(0xCAFE0001); // EVENT_WRITE_SHD, 8in32 endian
     Publish();
     CpStats st{};
-    CHECK(CommandProcessorTick(&st));
+    CHECK(Tick(&st));
     CHECK_EQ(GuestLoad32(0xA0681308), 0xCAFE0001u);
     CHECK_EQ(GuestLoad32(kRptr), 4u);
     CHECK_EQ(st.fences, 1ull);
@@ -65,7 +76,7 @@ TEST(cp_endian_mode_none_stores_byte_swapped)
     Emit(0xC0025800); Emit(4); Emit(0x00681310); Emit(0x11223344); // endian mode 0
     Publish();
     CpStats st{};
-    CommandProcessorTick(&st);
+    Tick(&st);
     CHECK_EQ(GuestLoad32(0xA0681310), 0x44332211u);
 }
 
@@ -77,7 +88,7 @@ TEST(cp_mem_write_and_type0_registers)
     Emit(0x00012000); Emit(0xAAAA); Emit(0xBBBB);                  // type 0: regs 0x2000, 0x2001
     Publish();
     CpStats st{};
-    CommandProcessorTick(&st);
+    Tick(&st);
     CHECK_EQ(GuestLoad32(0xA0681400), 0x111u);
     CHECK_EQ(GuestLoad32(0xA0681404), 0x222u);
     CHECK_EQ(GpuRegister(0x2000), 0xAAAAu);
@@ -96,7 +107,7 @@ TEST(cp_indirect_buffer_executes_and_bad_ib_skipped)
     Emit(0xC0013700); Emit(0x1F000000); Emit(4);   // INDIRECT_BUFFER at an untouched (uncommitted) page
     Publish();
     CpStats st{};
-    CommandProcessorTick(&st);
+    Tick(&st);
     CHECK_EQ(GuestLoad32(0xA0681508), 0x77u);
     CHECK_EQ(st.indirect, 1ull);
     CHECK_EQ(st.skipped, 1ull);
@@ -112,7 +123,7 @@ TEST(cp_indirect_nesting_limited)
     Emit(0xC0013700); Emit(0x00040000); Emit(3);
     Publish();
     CpStats st{};
-    CommandProcessorTick(&st);
+    Tick(&st);
     CHECK_EQ(st.indirect, 4ull);
     CHECK(st.skipped >= 1ull);
 }
@@ -133,13 +144,13 @@ TEST(cp_wait_inside_indirect_buffer_stalls_and_resumes)
     Emit(0xC0013F00); Emit(0x00050000); Emit(k);
     Publish();
     CpStats st{};
-    CommandProcessorTick(&st);
+    Tick(&st);
     CHECK_EQ(GuestLoad32(kRptr), 0u);
     CHECK_EQ(GuestLoad32(0xA068170C), 0u);
-    CommandProcessorTick(&st);
+    Tick(&st);
     CHECK_EQ(GuestLoad32(0xA068170C), 0u);
     GuestStore32(0xA0681700, 5);
-    CommandProcessorTick(&st);
+    Tick(&st);
     CHECK_EQ(GuestLoad32(0xA068170C), 0x99u);
     CHECK_EQ(GuestLoad32(kRptr), 3u);
     CHECK_EQ(st.interrupts, 1ull);
@@ -160,7 +171,7 @@ TEST(cp_scratch_register_writeback)
     Emit(0xC0025800); Emit(4); Emit(0x0068170E); Emit(0x42);
     Publish();
     CpStats st{};
-    CommandProcessorTick(&st);
+    Tick(&st);
     CHECK_EQ(GuestLoad32(0xA0681364), 1u);
     CHECK_EQ(GuestLoad32(0xA0681368), 0u);
     CHECK_EQ(GuestLoad32(0xA068170C), 0x42u);
@@ -182,7 +193,7 @@ TEST(cp_predicated_packets_follow_bin_mask)
     Emit(0xC0013D01); Emit(0x00681806); Emit(0x22);                // predicated MEM_WRITE: runs
     Publish();
     CpStats st{};
-    CommandProcessorTick(&st);
+    Tick(&st);
     CHECK_EQ(GuestLoad32(0xA0681800), 0u);
     CHECK_EQ(GuestLoad32(0xA0681804), 0x22u);
     CHECK_EQ(GuestLoad32(kRptr), g_w);
@@ -191,13 +202,14 @@ TEST(cp_predicated_packets_follow_bin_mask)
     g_w = 0;
     Emit(0xC0013D01); Emit(0x00681802); Emit(0x33);                // after reset: masks all-ones
     Publish();
-    CommandProcessorTick(&st);
+    Tick(&st);
     CHECK_EQ(GuestLoad32(0xA0681800), 0x33u);
 }
 
-// Review Focus: EVENT_WRITE_ZPD fakes occlusion results like Xenia. D3D marks an issued end with
-// 0xFFFFFEED in ZFail (or ZPass) A/B and polls until it is gone; begin blocks are just zeroed.
-TEST(cp_event_write_zpd_completes_occlusion_query)
+// Review Focus: EVENT_WRITE_ZPD. D3D marks an issued end with 0xFFFFFEED in ZFail (or ZPass) A/B
+// and polls until it is gone: the CP keeps the marker for the renderer's result; begin blocks are
+// zeroed. A result lands as Total_A + ZPass_A (little-endian) unless a newer begin owns the block.
+TEST(cp_event_write_zpd_keeps_marker_until_result)
 {
     SetupRing();
     const uint32_t end = 0xA0681900, begin = 0xA0681940;
@@ -212,14 +224,25 @@ TEST(cp_event_write_zpd_completes_occlusion_query)
     Emit(0x00002325); Emit(0x00681940);
     Emit(0xC0005B00); Emit(0x15);
     Publish();
-    SetOcclusionSamples(GuestPhysical(0x00681900), 123); // the renderer's last result for this block
     CpStats st{};
-    CommandProcessorTick(&st);
+    Tick(&st);
+    for (uint32_t i = 0; i < 4; i++)
+        CHECK_EQ(GuestLoad32(end + i * 4), 0xFFFFFEEDu); // marker kept
+    CHECK_EQ(GuestLoad32(begin + 0), 0u);
+    CHECK_EQ(GuestLoad32(begin + 16), 0u);
+    // The renderer's result for the pending end.
+    const uint32_t block = GuestPhysical(0x00681900), gen = OcclusionGeneration(block);
+    CHECK(WriteOcclusionResult(block, gen, 123));
     CHECK_EQ(GuestLoad32(end + 0), _byteswap_ulong(123));  // Total_A (little-endian)
     CHECK_EQ(GuestLoad32(end + 8), 0u);                    // ZFail_A
     CHECK_EQ(GuestLoad32(end + 16), _byteswap_ulong(123)); // ZPass_A
-    CHECK_EQ(GuestLoad32(begin + 0), 0u);
-    CHECK_EQ(GuestLoad32(begin + 16), 0u);
+    CHECK_EQ(GuestLoad32(end + 20), 0u);                   // ZPass_B
+    // A new begin on the block: a late result for the old generation is dropped.
+    BumpOcclusionGeneration(block);
+    CHECK(!WriteOcclusionResult(block, gen, 5));
+    CHECK_EQ(GuestLoad32(end + 16), _byteswap_ulong(123));
+    CHECK_EQ(Frames().UnansweredQueries(), 1u);
+    Frames().QueryAnswered();
 }
 
 TEST(cp_wait_reg_mem_blocks_until_satisfied)
@@ -232,11 +255,11 @@ TEST(cp_wait_reg_mem_blocks_until_satisfied)
     Emit(0xC0025800); Emit(4); Emit(0x0068160E); Emit(0x99);
     Publish();
     CpStats st{};
-    CommandProcessorTick(&st);
+    Tick(&st);
     CHECK_EQ(GuestLoad32(kRptr), 0u);
     CHECK_EQ(GuestLoad32(0xA068160C), 0u);
     GuestStore32(0xA0681600, 5);
-    CommandProcessorTick(&st);
+    Tick(&st);
     CHECK_EQ(GuestLoad32(kRptr), 10u);
     CHECK_EQ(GuestLoad32(0xA068160C), 0x99u);
 }
@@ -251,7 +274,7 @@ TEST(cp_interrupt_packet_reaches_sink)
     Emit(0xC0005400); Emit(0x5); // CP_INTERRUPT, cpu mask: cpus 0 and 2
     Publish();
     CpStats st{};
-    CommandProcessorTick(&st);
+    Tick(&st);
     CHECK_EQ(got.size(), size_t(2));
     CHECK_EQ(got[0], 0x100u);
     CHECK_EQ(got[1], 0x102u);
@@ -271,7 +294,7 @@ TEST(cp_cond_write_writes_only_when_condition_holds)
     Emit(0xC0054500); Emit(0x113); Emit(0x00681702); Emit(8); Emit(0xFFFFFFFF); Emit(0x00681722); Emit(0xCD); // == 8: no write
     Publish();
     CpStats st{};
-    CommandProcessorTick(&st);
+    Tick(&st);
     CHECK_EQ(GuestLoad32(0xA0681710), 0xABu);
     CHECK_EQ(GuestLoad32(0xA0681720), 0u);
     CHECK_EQ(GuestLoad32(kRptr), 14u);
@@ -286,13 +309,13 @@ TEST(cp_stalled_wait_makes_no_progress)
     Emit(0xC0043C00); Emit(0x13); Emit(0x00681802); Emit(5); Emit(0xFFFFFFFF); Emit(10);
     Publish();
     CpStats st{};
-    CommandProcessorTick(&st);
+    Tick(&st);
     uint64_t before = st.packets;
-    CommandProcessorTick(&st);
+    Tick(&st);
     CHECK_EQ(st.packets, before);
     CHECK_EQ(before, 0ull);
     GuestStore32(0xA0681800, 5);
-    CommandProcessorTick(&st);
+    Tick(&st);
 }
 
 // EVENT_WRITE_SHD with initiator bit 31 writes the swap counter (swaps the CP processed), not
@@ -306,7 +329,7 @@ TEST(cp_event_write_shd_swap_counter)
     Publish();
     uint32_t before = SwapCounter();
     CpStats st{};
-    CommandProcessorTick(&st);
+    Tick(&st);
     CHECK_EQ(GuestLoad32(0xA0681908), before + 1);
     Gpu().pendingSwaps = 0;
 }
@@ -326,7 +349,7 @@ TEST(cp_constant_packets_reach_registers)
     Emit(0xC0022F00); Emit(0x00681A00); Emit((0u << 16) | 8); Emit(4); // LOAD_ALU_CONSTANT -> 0x4008..
     Publish();
     CpStats st{};
-    CommandProcessorTick(&st);
+    Tick(&st);
     CHECK_EQ(GpuRegister(0x4004), 0x11u);
     CHECK_EQ(GpuRegister(0x4005), 0x22u);
     CHECK_EQ(GpuRegister(0x4806), 0x33u);

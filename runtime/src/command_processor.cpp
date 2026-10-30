@@ -72,10 +72,6 @@ static RegisterFile g_shadow;
 static std::vector<RegisterWrite> g_pendingWrites; // writes since the last draw (Frame::regWrites)
 // Bumped on every write the CPU can observe (see FrameQueue::SetEpoch).
 static uint64_t g_epoch = 1;
-// SCDA_QUERY_DEFER=<n>: occlusion query ends leave the title's 0xFFFFFEED marker in place and the
-// result is written n swaps later (experiment: does the title poll the block inside the frame?).
-static const long g_queryDefer = getenv("SCDA_QUERY_DEFER") ? atol(getenv("SCDA_QUERY_DEFER")) : 0;
-static std::deque<std::vector<std::pair<uint32_t, uint32_t>>> g_deferredQueries; // per swap: (block, samples)
 static void BumpEpoch();
 static void SetGpuRegister(uint32_t index, uint32_t v)
 {
@@ -341,12 +337,14 @@ static bool ExecutePacket(uint32_t h, const Pm4Payload& p, int depth, CpStats& s
     {
     case kOpEventWriteZpd:
     {
-        // Occlusion query: sample counts {Total, ZFail, ZPass, StencilFail} x {A, B}, little-endian,
-        // at RB_SAMPLE_COUNT_ADDR. D3D marks an issued end with 0xFFFFFEED in the ZPass or ZFail
-        // pair and polls until it is replaced. The renderer runs a host occlusion query between the
-        // begin and end (Frame::queries); an end reports the latest completed result for its block
-        // (OcclusionSamples), i.e. a frame or two old. SCDA_FAKE_OCCLUSION=<n>: constant n instead
-        // (Xenia's fake, formerly always 1000: every corona fully visible, even behind walls).
+        // Occlusion query: the sample-count block at RB_SAMPLE_COUNT_ADDR (layout in frame_queue.h).
+        // D3D marks an issued end with 0xFFFFFEED in the ZPass or ZFail pair and polls until it is
+        // replaced. A begin zeroes the block (Xenia memsets on every ZPD event). An end keeps the
+        // marker: the renderer runs a host occlusion query between the begin and end (Frame::queries)
+        // and writes the result when it completes (WriteOcclusionResult), or the fallback when the
+        // host query is lost. Reporting a result at the end itself (another block's or 0) made whole
+        // meshes vanish in alternating frames under GPU load. SCDA_FAKE_OCCLUSION=<n>: constant n
+        // written at the end (Xenia's fake, formerly always 1000: every corona fully visible).
         constexpr uint32_t kQueryEnd = 0xFFFFFEED;
         static const long fakeSamples = getenv("SCDA_FAKE_OCCLUSION") ? atol(getenv("SCDA_FAKE_OCCLUSION")) : -1;
         static const bool traceQuery = getenv("SCDA_TRACE_QUERY") != nullptr;
@@ -355,28 +353,22 @@ static bool ExecutePacket(uint32_t h, const Pm4Payload& p, int depth, CpStats& s
             return true;
         bool end = (GuestLoad32(a + 16) == kQueryEnd && GuestLoad32(a + 20) == kQueryEnd) ||
                    (GuestLoad32(a + 8) == kQueryEnd && GuestLoad32(a + 12) == kQueryEnd);
-        if (!(end && g_queryDefer > 0))
+        if (!end || fakeSamples >= 0)
             for (uint32_t i = 0; i < 8; i++)
                 GuestStore32(a + i * 4, 0);
-        Frames().AddQuery(a, end);
-        if (end)
+        if (fakeSamples >= 0)
         {
-            const uint32_t samples = fakeSamples >= 0 ? uint32_t(fakeSamples) : OcclusionSamples(a);
-            if (traceQuery)
-                RuntimeLog("[query] end %08X -> %u samples\n", a, samples);
-            if (g_queryDefer > 0)
+            if (end)
             {
-                if (g_deferredQueries.empty())
-                    g_deferredQueries.emplace_back();
-                g_deferredQueries.back().push_back({ a, samples });
-                BumpEpoch();
-                return true;
+                GuestStore32(a, _byteswap_ulong(uint32_t(fakeSamples)));
+                GuestStore32(a + 16, _byteswap_ulong(uint32_t(fakeSamples)));
             }
-            // SCDA_OCCLUSION_TOTAL=<n>: Total_A = max(n, passed) (A/B: does the title scale by ZPass / Total?).
-            static const long totalOverride = getenv("SCDA_OCCLUSION_TOTAL") ? atol(getenv("SCDA_OCCLUSION_TOTAL")) : -1;
-            GuestStore32(a, _byteswap_ulong(totalOverride >= 0 ? std::max(uint32_t(totalOverride), samples) : samples));
-            GuestStore32(a + 16, _byteswap_ulong(samples));
+            BumpEpoch();
+            return true;
         }
+        Frames().AddQuery(a, end);
+        if (traceQuery && end)
+            RuntimeLog("[query] end %08X pending\n", a);
         BumpEpoch();
         return true;
     }
@@ -405,10 +397,17 @@ static bool ExecutePacket(uint32_t h, const Pm4Payload& p, int depth, CpStats& s
         g_binSelect = (g_binSelect & 0xFFFFFFFFull) | uint64_t(p(0)) << 32;
         return true;
     case kOpEventWriteShd:
+    {
         // initiator, address, value; initiator bit 31 = write the swap counter instead.
-        GpuStore(p(1), (p(0) & 0x80000000u) ? Gpu().swapCounter.load() : p(2));
+        // A fence is written by the renderer when it reaches it (Frame::fences, see Fence): the
+        // title takes it as proof that everything before it, occlusion query counts included, is
+        // done. Written here at parse time (a GPU infinitely ahead) the Okhotsk precache read a
+        // query behind a passed fence, retried, and crashed on a null shader set.
+        const uint32_t value = (p(0) & 0x80000000u) ? Gpu().swapCounter.load() : p(2);
+        Frames().AddFence(GuestPhysical(p(1) & ~3u), GpuSwap(value, p(1)));
         st.fences++;
         return true;
+    }
     case kOpMemWrite:
         for (uint32_t i = 1; i < count; i++)
             GpuStore(p(0) + (i - 1) * 4, p(i));
@@ -427,21 +426,6 @@ static bool ExecutePacket(uint32_t h, const Pm4Payload& p, int depth, CpStats& s
             Gpu().swapCounter++;
             Gpu().pendingSwaps++;
             Frames().EndFrame(count >= 2 ? p(1) & 0x1FFFFFFF : 0); // VdSwap: frontbuffer address
-            if (g_queryDefer > 0)
-            {
-                g_deferredQueries.emplace_back();
-                while (g_deferredQueries.size() > size_t(g_queryDefer) + 1)
-                {
-                    for (auto [block, samples] : g_deferredQueries.front())
-                    {
-                        for (uint32_t i = 0; i < 8; i++)
-                            GuestStore32(block + i * 4, 0);
-                        GuestStore32(block, _byteswap_ulong(samples));
-                        GuestStore32(block + 16, _byteswap_ulong(samples));
-                    }
-                    g_deferredQueries.pop_front();
-                }
-            }
             BumpEpoch();
         }
         return true;
@@ -497,6 +481,10 @@ static bool ExecutePacket(uint32_t h, const Pm4Payload& p, int depth, CpStats& s
     {
         // SCDA_TRACE_CP: total time stalled per polled address/register (report every 10 s).
         bool done = WaitSatisfied(p);
+        // A memory wait may poll a fence of the open frame: hand the frame over so the renderer
+        // writes it (the ring is not idle while the CP stalls here, FlushOpenIfWaiting cannot).
+        if (!done && (p(0) & 0x10) && Frames().OpenHasFences())
+            Frames().FlushOpenNow();
         ULONGLONG now = GetTickCount64();
         if (!done && !g_waitSince)
             g_waitSince = now;
@@ -573,6 +561,7 @@ bool CommandProcessorTick(CpStats* stats)
     uint32_t write = GpuRegister(kRegCpRbWptr) % (size / 4);
     g_read = Pm4WalkRing({ base, size }, g_read, write,
         [&](uint32_t h, const Pm4Payload& p) { return Execute(h, p, 0, st); });
+    Frames().SetCpIdle(g_read == write); // a packet left behind = stalled in a wait
     if (uint32_t wb = Gpu().rptrWriteback.load())
     {
         GuestStore32(wb, g_read);
@@ -619,9 +608,9 @@ void CommandProcessorStart()
                 if (g_waitSince)
                     RuntimeLog("[cp] stalled %llu ms on wait info 0x%X poll 0x%08X ref 0x%X mask 0x%X\n", (unsigned long long)(GetTickCount64() - g_waitSince),
                         g_stalledWait[0].load(), g_stalledWait[1].load(), g_stalledWait[2].load(), g_stalledWait[3].load());
-                RuntimeLog("[cp] packets %llu fences %llu ib %llu irq %llu unhandled:%s\n",
+                RuntimeLog("[cp] packets %llu fences %llu ib %llu irq %llu partial frames %llu unhandled:%s\n",
                     (unsigned long long)st.packets, (unsigned long long)st.fences, (unsigned long long)st.indirect,
-                    (unsigned long long)st.interrupts, line.c_str());
+                    (unsigned long long)st.interrupts, (unsigned long long)Frames().Partials(), line.c_str());
             }
             uint64_t before = st.packets;
             if (!CommandProcessorTick(&st) || st.packets == before)

@@ -67,6 +67,7 @@ struct OcclusionQuery
     uint32_t drawIndex = 0;
     uint32_t address = 0;
     bool end = false;
+    uint32_t generation = 0; // of the block (frame_queue.h): a result for an older one is dropped
 };
 
 struct Resolve

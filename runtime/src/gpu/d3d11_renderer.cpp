@@ -158,10 +158,20 @@ struct DrawResources
     {
         ComPtr<ID3D11Query> query;
         uint32_t address;
-        uint64_t present;
+        uint32_t generation;
+        uint64_t ended; // GetTickCount64 at the end
         uint32_t samplesPerPixel; // host samples per guest pixel: scale^2 x MSAA samples of the surface
+        uint64_t seq;             // order among query ends (fences wait for the ends before them)
     };
     std::vector<PendingQuery> pendingQueries;
+    uint64_t querySeq = 0;
+    // Fences reached while a query ended before them is still pending (WritePendingFences).
+    struct PendingFence
+    {
+        Fence fence;
+        uint64_t seq; // querySeq when reached: written once no pending query has seq < this
+    };
+    std::vector<PendingFence> pendingFences;
     std::unordered_map<uint64_t, ComPtr<ID3D11VertexShader>> vs;
     std::unordered_map<uint64_t, ComPtr<ID3D11PixelShader>> ps;
     // Fixed-function state by the registers it is built from.
@@ -1332,19 +1342,31 @@ void D3D11Renderer::ExecuteDraw(const DrawCall& d, const Frame& frame)
 
 // EDRAM resolve: copy the source surface to the host texture for the destination, then clear it.
 // EVENT_WRITE_ZPD begin/end: a host occlusion query around the draws in between. Ends queue the
-// query for PollQueries; a begin while one is active drops the active one.
+// query for PollQueries; a begin while one is active drops the active one. An end without a begin
+// (the begin's frame was dropped) gets the fallback at once: the title polls the block.
 void D3D11Renderer::ExecuteQuery(const OcclusionQuery& q)
 {
     DrawResources& r = *m_draw;
+    static const bool trace = getenv("SCDA_TRACE_QUERY") != nullptr;
+    if (trace)
+        RuntimeLog("[query] present %llu %s %08X gen %u (active %d, pending %zu)\n", (unsigned long long)m_presented, q.end ? "end" : "begin",
+            q.address, q.generation, r.activeQuery ? 1 : 0, r.pendingQueries.size());
     if (r.activeQuery)
     {
         m_context->End(r.activeQuery.Get());
         if (q.end)
         {
             const SurfaceLayout l = EdramSurfaceLayout(r.regs[kRegRbSurfaceInfo]);
-            r.pendingQueries.push_back({ r.activeQuery, q.address, m_presented, r.scale * r.scale * l.samplesX * l.samplesY });
+            r.pendingQueries.push_back({ r.activeQuery, q.address, q.generation, GetTickCount64(), r.scale * r.scale * l.samplesX * l.samplesY, r.querySeq++ });
         }
         r.activeQuery.Reset();
+    }
+    else if (q.end)
+    {
+        const bool written = Frames().VisibleWrite([&] { return WriteOcclusionResult(q.address, q.generation, kOcclusionFallbackSamples); });
+        Frames().QueryAnswered();
+        if (trace)
+            RuntimeLog("[query] end %08X without a begin: fallback %s\n", q.address, written ? "written" : "dropped (older generation)");
     }
     if (q.end)
         return;
@@ -1353,27 +1375,74 @@ void D3D11Renderer::ExecuteQuery(const OcclusionQuery& q)
         m_context->Begin(r.activeQuery.Get());
 }
 
-// Completed host queries -> OcclusionSamples (host samples / samplesPerPixel = guest pixels). Never
-// waits; a query still pending after 8 presents is dropped. SCDA_TRACE_QUERY=1 logs results.
-void D3D11Renderer::PollQueries()
+// EVENT_WRITE_SHD: written now unless a query ended before it is still pending (then with its
+// answer, WritePendingFences). The title reads query counts behind a passed fence.
+void D3D11Renderer::ExecuteFence(const Fence& f)
 {
     DrawResources& r = *m_draw;
+    if (r.pendingQueries.empty() && r.pendingFences.empty())
+    {
+        Frames().VisibleWrite([&] { WriteFence(f); return true; });
+        return;
+    }
+    r.pendingFences.push_back({ f, r.querySeq });
+}
+
+void D3D11Renderer::WritePendingFences()
+{
+    DrawResources& r = *m_draw;
+    size_t n = 0;
+    for (; n < r.pendingFences.size(); n++)
+    {
+        const uint64_t seq = r.pendingFences[n].seq;
+        if (std::any_of(r.pendingQueries.begin(), r.pendingQueries.end(), [&](const DrawResources::PendingQuery& q) { return q.seq < seq; }))
+            break;
+    }
+    if (n)
+    {
+        Frames().VisibleWrite([&]
+        {
+            for (size_t i = 0; i < n; i++)
+                WriteFence(r.pendingFences[i].fence);
+            return true;
+        });
+        r.pendingFences.erase(r.pendingFences.begin(), r.pendingFences.begin() + n);
+    }
+}
+
+// Completed host queries -> the guest block (WriteOcclusionResult; host samples / samplesPerPixel =
+// guest pixels). Never waits; a query still pending after 2 s, or failed, gets the fallback (a
+// title that polls the marker must never wait forever). Runs at every present and while no frame
+// is queued (the title blocks on a result before swapping: the Jail map does after ~3 frames), so
+// GetData may flush. SCDA_TRACE_QUERY=1 logs results.
+void D3D11Renderer::PollQueries()
+{
+    if (!m_draw)
+        return;
+    DrawResources& r = *m_draw;
     static const bool trace = getenv("SCDA_TRACE_QUERY") != nullptr;
+    // SCDA_QUERY_LAG=<ms>: results are not read before this long after the end (simulates a loaded
+    // GPU, e.g. a desktop recorder: with results reported at the end event this made meshes flicker).
+    static const uint64_t lag = getenv("SCDA_QUERY_LAG") ? strtoull(getenv("SCDA_QUERY_LAG"), nullptr, 10) : 0;
+    const uint64_t now = GetTickCount64();
     std::erase_if(r.pendingQueries, [&](DrawResources::PendingQuery& p)
     {
+        if (now - p.ended < lag)
+            return false;
         UINT64 samples = 0;
-        const HRESULT hr = m_context->GetData(p.query.Get(), &samples, sizeof(samples), D3D11_ASYNC_GETDATA_DONOTFLUSH);
-        if (hr == S_OK)
-        {
-            const uint32_t guest = uint32_t(std::min<UINT64>(samples / std::max(p.samplesPerPixel, 1u), 0x7FFFFFFF));
-            SetOcclusionSamples(p.address, guest);
-            if (trace)
-                RuntimeLog("[query] present %llu block %08X: %llu host samples -> %u\n", (unsigned long long)m_presented, p.address,
-                    (unsigned long long)samples, guest);
-            return true;
-        }
-        return hr != S_FALSE || m_presented - p.present > 8;
+        const HRESULT hr = m_context->GetData(p.query.Get(), &samples, sizeof(samples), 0);
+        const bool lost = hr != S_OK && (hr != S_FALSE || now - p.ended > lag + 2000);
+        if (hr != S_OK && !lost)
+            return false;
+        const uint32_t guest = lost ? kOcclusionFallbackSamples : uint32_t(std::min<UINT64>(samples / std::max(p.samplesPerPixel, 1u), 0x7FFFFFFF));
+        const bool written = Frames().VisibleWrite([&] { return WriteOcclusionResult(p.address, p.generation, guest); });
+        Frames().QueryAnswered();
+        if (trace)
+            RuntimeLog("[query] present %llu block %08X gen %u: %llu host samples -> %u%s%s\n", (unsigned long long)m_presented, p.address,
+                p.generation, (unsigned long long)samples, guest, lost ? " (lost: fallback)" : "", written ? "" : " (older generation: dropped)");
+        return true;
     });
+    WritePendingFences();
 }
 
 void D3D11Renderer::ExecuteResolve(const Resolve& res)
@@ -1571,7 +1640,12 @@ void D3D11Renderer::Present(const Frame& frame)
         if (!m_hwnd || !Init(m_hwnd, m_width, m_height, m_vsync))
             return;
     }
-    m_lastDrawn = m_lastSkipped = m_lastResolved = 0;
+    // Counters cover the whole guest frame: its partial Frames plus the rest.
+    // (A partial whose rest was dropped starts a new count: the next Frame has another number.)
+    static uint64_t countedFrame = ~0ull;
+    if (frame.stats.frame != countedFrame)
+        m_lastDrawn = m_lastSkipped = m_lastResolved = 0;
+    countedFrame = frame.stats.frame;
     m_lastFrontbuffer = false;
     static const bool traceDumped = getenv("SCDA_TRACE_DUMPED") != nullptr;
     g_tracingDump = traceDumped && !m_dumpPath.empty();
@@ -1599,6 +1673,11 @@ void D3D11Renderer::Present(const Frame& frame)
             r.last = nullptr;
             r.stateDirty = true;
             r.aluDirty[0] = r.aluDirty[1] = true;
+            r.activeQuery.Reset(); // results would land in the relaunched title's memory
+            for (size_t i = 0; i < r.pendingQueries.size(); i++)
+                Frames().QueryAnswered();
+            r.pendingQueries.clear();
+            r.pendingFences.clear();
         }
         // EDRAM surfaces persist across frames; only guest clears (resolves) clear them.
         r.bound = false; // the first bind sets the targets and their viewport
@@ -1619,13 +1698,15 @@ void D3D11Renderer::Present(const Frame& frame)
         // last RT0 instead of the frontbuffer (bisecting which pass draws what).
         static const size_t drawLimit = getenv("SCDA_DRAW_LIMIT") ? size_t(atoll(getenv("SCDA_DRAW_LIMIT"))) : SIZE_MAX;
         PollQueries();
-        size_t next = 0, nextQuery = 0;
+        size_t next = 0, nextQuery = 0, nextFence = 0;
         for (size_t i = 0; i <= std::min(frame.draws.size(), drawLimit); i++)
         {
             for (; next < frame.resolves.size() && frame.resolves[next].drawIndex <= i; next++)
                 ExecuteResolve(frame.resolves[next]);
             for (; nextQuery < frame.queries.size() && frame.queries[nextQuery].drawIndex <= i; nextQuery++)
                 ExecuteQuery(frame.queries[nextQuery]);
+            for (; nextFence < frame.fences.size() && frame.fences[nextFence].drawIndex <= i; nextFence++)
+                ExecuteFence(frame.fences[nextFence]);
             if (i < std::min(frame.draws.size(), drawLimit))
                 ExecuteDraw(frame.draws[i], frame);
             // SCDA_DUMP_DRAWS=<dir>,<step>[,<first>,<last>]: on a SCDA_DUMP_FRAME frame, RT0 after every
@@ -1662,12 +1743,19 @@ void D3D11Renderer::Present(const Frame& frame)
             }
         }
         ApplyRegisterWrites(frame, frame.regWrites.size()); // draws past SCDA_DRAW_LIMIT still wrote registers
-        if (r.activeQuery) // begun but never ended this frame: drop it
+        for (; nextFence < frame.fences.size(); nextFence++) // past SCDA_DRAW_LIMIT
+            ExecuteFence(frame.fences[nextFence]);
+        if (r.activeQuery && !frame.partial) // begun but never ended this frame: drop it
         {
             m_context->End(r.activeQuery.Get());
             r.activeQuery.Reset();
         }
         r.uploaded.clear();
+        if (frame.partial) // the guest frame continues in the next Frame: no present
+        {
+            m_context->Flush(); // the title waits for the host queries ended above
+            return;
+        }
         // SCDA_TRACE_TEXHASH=1: texture checks and fully hashed guest bytes, every 100 presents.
         static const bool traceTexHash = getenv("SCDA_TRACE_TEXHASH") != nullptr;
         if (traceTexHash && m_presented % 100 == 0)

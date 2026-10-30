@@ -1,6 +1,8 @@
 // Frames handed from the command processor (producer) to the renderer (consumer).
 // Bounded: when the renderer falls behind the oldest frame is dropped; the CP never blocks.
 #pragma once
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -10,22 +12,44 @@
 #include <gpu/draw.h>
 #include <runtime.h>
 
-// Occlusion query results (passed samples, guest pixels) by sample-count block address. The
-// renderer stores a host query's result when it completes; the command processor reports the
-// latest one at the next query end on that address (a frame or two behind, like a GPU running
-// ahead of the CPU). Unknown addresses read as 0 (nothing visible).
+// Occlusion query results. D3D marks an issued end with 0xFFFFFEED (a big-endian CPU store) in the
+// block's ZPass A/B pair (older D3D: ZFail) and polls until it is replaced. The command processor
+// leaves the marker in place; the renderer writes the count when the host query completes, a frame
+// or two later (like a GPU running behind the CPU), or the fallback when the host query is lost.
+// Block layout (32 bytes at RB_SAMPLE_COUNT_ADDR, counts little-endian GPU writes): Total A/B at
+// +0/+4, ZFail A/B +8/+12, ZPass A/B +16/+20, StencilFail A/B +24/+28. ZPass_A, the polled word,
+// is written last so a poller never sees a half-written block.
+// The title reuses a block every ~39 frames: each begin bumps the block's generation, and a result
+// for an older generation is dropped instead of overwriting the newer query. D3D points the begin
+// at the second half of a 64-byte query (begin +0x30, end +0x10 in this title), so generations are
+// keyed by the 64-byte block.
+constexpr uint32_t kOcclusionFallbackSamples = 4096; // fully visible (a 64x64 test quad)
 inline std::mutex& OcclusionMutex() { static std::mutex m; return m; }
-inline std::unordered_map<uint32_t, uint32_t>& OcclusionResults() { static std::unordered_map<uint32_t, uint32_t> m; return m; }
-inline uint32_t OcclusionSamples(uint32_t address)
+inline std::unordered_map<uint32_t, uint32_t>& OcclusionGenerations() { static std::unordered_map<uint32_t, uint32_t> m; return m; }
+inline uint32_t OcclusionGeneration(uint32_t address)
 {
     std::lock_guard lock(OcclusionMutex());
-    auto it = OcclusionResults().find(address);
-    return it == OcclusionResults().end() ? 0 : it->second;
+    auto it = OcclusionGenerations().find(address & ~0x3Fu);
+    return it == OcclusionGenerations().end() ? 0 : it->second;
 }
-inline void SetOcclusionSamples(uint32_t address, uint32_t samples)
+inline uint32_t BumpOcclusionGeneration(uint32_t address)
 {
     std::lock_guard lock(OcclusionMutex());
-    OcclusionResults()[address] = samples;
+    return ++OcclusionGenerations()[address & ~0x3Fu];
+}
+// Writes samples as the block's result; false (nothing written) when a newer query owns the block.
+inline bool WriteOcclusionResult(uint32_t address, uint32_t generation, uint32_t samples)
+{
+    if (OcclusionGeneration(address) != generation)
+        return false;
+    const uint32_t le = __builtin_bswap32(samples); // GuestStore32 swaps again: little-endian in memory
+    for (uint32_t off : { 4u, 8u, 12u, 24u, 28u })
+        GuestStore32(address + off, 0);
+    GuestStore32(address + 0, le);  // Total_A
+    GuestStore32(address + 20, 0);  // ZPass_B
+    std::atomic_thread_fence(std::memory_order_release);
+    GuestStore32(address + 16, le); // ZPass_A
+    return true;
 }
 
 struct FrameStats
@@ -34,11 +58,29 @@ struct FrameStats
     uint64_t frame = 0;
 };
 
+// EVENT_WRITE_SHD: a GPU fence. The title takes a written fence as proof that everything before it
+// is done, occlusion query counts included (the Okhotsk precache reads a query right after its
+// fence and dereferences null when the marker is still there), so the renderer writes fences when
+// it reaches them and the earlier host queries have answered, instead of the CP writing them at
+// parse time. value is the host-order dword to store (endian swap already applied).
+struct Fence
+{
+    uint32_t drawIndex = 0;
+    uint32_t physical = 0;
+    uint32_t value = 0;
+};
+
+inline void WriteFence(const Fence& f)
+{
+    *reinterpret_cast<uint32_t*>(GuestPtr(f.physical)) = f.value;
+}
+
 struct Frame
 {
     std::vector<DrawCall> draws;
     std::vector<Resolve> resolves; // in stream order; Resolve::drawIndex places each among draws
     std::vector<OcclusionQuery> queries; // in stream order, like resolves
+    std::vector<Fence> fences;           // in stream order, like resolves
     // Register writes in stream order; DrawCall::regWritesEnd says how many precede each draw. The
     // renderer replays them into its own RegisterFile (state carries over from frame to frame).
     std::vector<RegisterWrite> regWrites;
@@ -53,6 +95,8 @@ struct Frame
     };
     std::vector<Snapshot> memory;
     FrameStats stats;
+    // The guest frame continues in the next Frame (FlushOpenIfWaiting): execute, do not present.
+    bool partial = false;
 };
 
 class FrameQueue
@@ -65,12 +109,27 @@ public:
     // Visible writes the command processor made to guest memory (fences, scratch mirrors, read
     // pointer, interrupts, swaps). The CPU can only observe that a draw is done through one, so a
     // range read before and after the same epoch cannot have been legally rewritten in between.
-    void SetEpoch(uint64_t epoch) { m_epoch = epoch; }
+    void SetEpoch(uint64_t epoch)
+    {
+        std::lock_guard lock(m_mutex);
+        m_epoch = epoch;
+    }
+    // A CPU-visible write from the renderer thread (an occlusion result, a fence): done under the
+    // queue lock together with an epoch the CP never issues. A snapshot either precedes the write
+    // (the CPU cannot have reacted to it yet) or sees the new epoch and compares bytes again.
+    template <class F> auto VisibleWrite(F&& write)
+    {
+        std::lock_guard lock(m_mutex);
+        auto result = write();
+        TouchEpochLocked();
+        return result;
+    }
 
     // Submits d after the register writes in pending (moved into the frame's log).
     void AddDraw(DrawCall d, std::vector<RegisterWrite>& pending)
     {
         std::lock_guard lock(m_mutex);
+        m_lastActivity = std::chrono::steady_clock::now();
         m_open.regWrites.insert(m_open.regWrites.end(), pending.begin(), pending.end());
         pending.clear();
         d.regWritesEnd = uint32_t(m_open.regWrites.size());
@@ -110,10 +169,61 @@ public:
         m_open.memory.push_back({ key, std::vector<uint8_t>(data, data + bytes) });
         return it->second.index;
     }
+    // A begin starts a new generation of its block; the end carries the same one. Every end is
+    // answered exactly once (result, fallback, or dropped as an older generation): QueryAnswered.
     void AddQuery(uint32_t address, bool end)
     {
+        const uint32_t generation = end ? OcclusionGeneration(address) : BumpOcclusionGeneration(address);
         std::lock_guard lock(m_mutex);
-        m_open.queries.push_back({ uint32_t(m_open.draws.size()), address, end });
+        m_lastActivity = std::chrono::steady_clock::now();
+        m_openSync += end;
+        m_unanswered += end;
+        m_open.queries.push_back({ uint32_t(m_open.draws.size()), address, end, generation });
+    }
+    void AddFence(uint32_t physical, uint32_t value)
+    {
+        std::lock_guard lock(m_mutex);
+        m_lastActivity = std::chrono::steady_clock::now();
+        m_openSync++;
+        m_open.fences.push_back({ uint32_t(m_open.draws.size()), physical, value });
+    }
+    // Fences in the open frame (the CP stalled on a memory wait may need them written).
+    bool OpenHasFences() const
+    {
+        std::lock_guard lock(m_mutex);
+        return !m_open.fences.empty();
+    }
+    void QueryAnswered() { m_unanswered--; }
+    // Ends issued whose block still holds the title's marker. A GPU fence must not complete while
+    // one exists: the title takes a fence as proof that the counts are in memory (the Okhotsk
+    // precache retries, then dereferences a null shader set, when a fence passes a pending query).
+    uint32_t UnansweredQueries() const { return m_unanswered; }
+    // Hands the open frame over as a partial frame now (the CP itself waits on memory a fence in
+    // the open frame writes); false when it holds nothing.
+    bool FlushOpenNow()
+    {
+        std::lock_guard lock(m_mutex);
+        if (m_open.draws.empty() && m_open.queries.empty() && m_open.resolves.empty() && m_open.fences.empty())
+            return false;
+        HandOverPartial(std::chrono::steady_clock::now());
+        return true;
+    }
+    // The command processor has consumed the whole ring (it is not stalled in a wait, the title
+    // has submitted nothing more): the title may be spinning on a query result.
+    void SetCpIdle(bool idle) { m_cpIdle = idle; }
+    // The title polls some query results and fences inside the frame (the first in-game Jail frame
+    // issues 151 ends, then spins before its swap). While the renderer is idle, the ring is empty,
+    // the open frame holds ends or fences and the CP has added nothing for 2 ms, the open frame is
+    // handed over as a partial frame so the host queries and fences run; the rest of the guest frame
+    // follows as the next Frame with the same number (its stats count the partial's draws too).
+    bool FlushOpenIfWaiting()
+    {
+        std::lock_guard lock(m_mutex);
+        const auto now = std::chrono::steady_clock::now();
+        if (!m_done.empty() || !m_openSync || !m_cpIdle || now - m_lastActivity < std::chrono::milliseconds(2))
+            return false;
+        HandOverPartial(now);
+        return true;
     }
     void AddResolve(Resolve r)
     {
@@ -127,8 +237,9 @@ public:
     {
         std::lock_guard lock(m_mutex);
         m_open.frontbuffer = frontbuffer;
-        m_open.stats.draws = uint32_t(m_open.draws.size());
-        m_open.stats.resolves = uint32_t(m_open.resolves.size());
+        m_open.stats.draws = uint32_t(m_open.draws.size()) + m_partialDraws;
+        m_open.stats.resolves = uint32_t(m_open.resolves.size()) + m_partialResolves;
+        m_partialDraws = m_partialResolves = 0;
         m_open.stats.shaders = uint32_t(ShaderCacheSize());
         m_open.stats.frame = m_next++;
         if (getenv("SCDA_TRACE_SNAP") && m_open.stats.frame % 100 == 0)
@@ -139,25 +250,28 @@ public:
         m_done.push_back(std::move(m_open));
         m_open = Frame{};
         m_latest.clear();
+        m_openSync = 0;
+        m_lastActivity = std::chrono::steady_clock::now();
         // SCDA_DROP_FRAMES=<n>: drop every n-th finished frame (reproduces a renderer that falls
         // behind): its register writes lead the next frame, like a frame dropped below.
         static const long dropEvery = getenv("SCDA_DROP_FRAMES") ? atol(getenv("SCDA_DROP_FRAMES")) : 0;
         if (dropEvery > 0 && m_next % uint64_t(dropEvery) == 0)
         {
-            m_open.regWrites = std::move(m_done.back().regWrites);
+            Frame dropped = std::move(m_done.back());
             m_done.pop_back();
-            m_dropped++;
+            Drop(dropped, m_open);
         }
+        // A guest frame may be split into partial Frames + its rest: drop all of it or nothing
+        // (presenting the rest without its partials would show a frame with whole passes missing).
         while (m_done.size() > m_max)
         {
-            // Its register writes still happened: they lead the next frame's log.
-            std::vector<RegisterWrite> carry = std::move(m_done.front().regWrites);
-            m_done.pop_front();
-            m_dropped++;
-            Frame& next = m_done.front();
-            next.regWrites.insert(next.regWrites.begin(), carry.begin(), carry.end());
-            for (auto& d : next.draws)
-                d.regWritesEnd += uint32_t(carry.size());
+            const uint64_t n = m_done.front().stats.frame;
+            do
+            {
+                Frame dropped = std::move(m_done.front());
+                m_done.pop_front();
+                Drop(dropped, m_done.empty() ? m_open : m_done.front());
+            } while (!m_done.empty() && m_done.front().stats.frame == n);
         }
     }
     bool PopFrame(Frame& out)
@@ -180,6 +294,12 @@ public:
         std::lock_guard lock(m_mutex);
         return m_dropped;
     }
+    // Partial frames handed over so far (FlushOpenIfWaiting).
+    uint64_t Partials() const
+    {
+        std::lock_guard lock(m_mutex);
+        return m_partials;
+    }
     uint64_t DroppedDraws() const
     {
         std::lock_guard lock(m_mutex);
@@ -187,6 +307,52 @@ public:
     }
 
 private:
+    void HandOverPartial(std::chrono::steady_clock::time_point now)
+    {
+        m_open.partial = true;
+        m_open.stats.draws = uint32_t(m_open.draws.size());
+        m_open.stats.resolves = uint32_t(m_open.resolves.size());
+        m_open.stats.frame = m_next;
+        m_partialDraws += m_open.stats.draws;
+        m_partialResolves += m_open.stats.resolves;
+        m_partials++;
+        m_done.push_back(std::move(m_open));
+        m_open = Frame{};
+        m_latest.clear();
+        m_openSync = 0;
+        m_lastActivity = now;
+    }
+    void TouchEpochLocked() { m_epoch = (m_epoch | 1ull << 63) + (1ull << 32); }
+    // A dropped Frame still happened for the title: its query ends get the fallback, its register
+    // writes and fences lead the next Frame (fences stay behind queries the renderer still runs).
+    void Drop(Frame& f, Frame& next)
+    {
+        FailQueries(f);
+        next.regWrites.insert(next.regWrites.begin(), f.regWrites.begin(), f.regWrites.end());
+        for (auto& d : next.draws)
+            d.regWritesEnd += uint32_t(f.regWrites.size());
+        for (auto& fence : f.fences)
+            fence.drawIndex = 0;
+        next.fences.insert(next.fences.begin(), f.fences.begin(), f.fences.end());
+        m_openSync += uint32_t(f.fences.size()) * (&next == &m_open);
+        m_dropped += !f.partial;
+    }
+    // A dropped frame's query ends never reach the renderer, but the title still polls their blocks.
+    void FailQueries(const Frame& f)
+    {
+        static const bool trace = getenv("SCDA_TRACE_QUERY") != nullptr;
+        for (const auto& q : f.queries)
+            if (q.end)
+            {
+                const bool written = WriteOcclusionResult(q.address, q.generation, kOcclusionFallbackSamples);
+                TouchEpochLocked(); // under m_mutex (EndFrame)
+                QueryAnswered();
+                if (trace)
+                    RuntimeLog("[query] frame %llu dropped: end %08X gen %u fallback %s\n", (unsigned long long)f.stats.frame, q.address, q.generation,
+                        written ? "written" : "dropped (older generation)");
+            }
+    }
+
     mutable std::mutex m_mutex;
     size_t m_max;
     Frame m_open;
@@ -199,6 +365,12 @@ private:
     uint64_t m_epoch = 0;
     std::deque<Frame> m_done;
     uint64_t m_next = 0, m_dropped = 0, m_droppedDraws = 0;
+    uint32_t m_openSync = 0; // query ends + fences in the open frame
+    uint32_t m_partialDraws = 0, m_partialResolves = 0; // of this guest frame's partial Frames
+    uint64_t m_partials = 0;
+    std::atomic<bool> m_cpIdle = false;
+    std::atomic<uint32_t> m_unanswered = 0;
+    std::chrono::steady_clock::time_point m_lastActivity{}; // last draw, query or swap added
     // SCDA_TRACE_SNAP=1: per-100-frame snapshot counters.
     unsigned long long statSkip = 0, statCmp = 0, statCmpBytes = 0, statDiff = 0, statDiffBytes = 0, statCopy = 0, statCopyBytes = 0;
 };

@@ -4,6 +4,7 @@
 #include <gpu/frame_queue.h>
 #include <gpu_state.h>
 #include <runtime.h>
+#include <thread>
 
 static std::vector<RegisterWrite> none; // draws submitted without register writes
 
@@ -42,10 +43,94 @@ TEST(occlusion_queries_sit_between_draws)
     CHECK(!f.queries[0].end);
     CHECK_EQ(f.queries[1].drawIndex, 2u);
     CHECK(f.queries[1].end);
-    // Results by sample-count address: 0 until the renderer reports one.
-    CHECK_EQ(OcclusionSamples(0x1000), 0u);
-    SetOcclusionSamples(0x1000, 37);
-    CHECK_EQ(OcclusionSamples(0x1000), 37u);
+    // The begin started a generation of the block; its end carries the same one.
+    CHECK_EQ(f.queries[0].generation, f.queries[1].generation);
+    CHECK_EQ(f.queries[1].generation, OcclusionGeneration(0x1000));
+    CHECK_EQ(BumpOcclusionGeneration(0x1000), f.queries[1].generation + 1);
+}
+
+// Review Focus: a title spinning on a query result inside the frame gets its draws and queries run
+// early: the open frame goes out as a partial frame (same frame number as the rest) once the CP has
+// been quiet for 5 ms and the renderer is idle. Without ends, or with frames queued, nothing moves.
+TEST(frame_queue_hands_over_partial_frame_for_waiting_query)
+{
+    FrameQueue q(3);
+    std::vector<RegisterWrite> none;
+    q.AddDraw(DrawCall{}, none);
+    CHECK(!q.FlushOpenIfWaiting()); // no query end pending
+    q.AddQuery(0x2000, false);
+    q.AddDraw(DrawCall{}, none);
+    q.AddQuery(0x2000, true);
+    CHECK_EQ(q.UnansweredQueries(), 1u);
+    CHECK(!q.FlushOpenIfWaiting()); // the CP was active just now
+    std::this_thread::sleep_for(std::chrono::milliseconds(8));
+    CHECK(!q.FlushOpenIfWaiting()); // the ring still holds packets (a vblank wait, more draws)
+    q.SetCpIdle(true);
+    CHECK(q.FlushOpenIfWaiting());
+    CHECK_EQ(q.Partials(), 1ull);
+    CHECK(!q.FlushOpenIfWaiting()); // nothing left in the open frame
+    Frame f;
+    CHECK(q.PopFrame(f));
+    CHECK(f.partial);
+    CHECK_EQ(f.draws.size(), (size_t)2);
+    CHECK_EQ(f.queries.size(), (size_t)2);
+    CHECK_EQ(f.stats.frame, 0ull);
+    q.AddDraw(DrawCall{}, none);
+    q.EndFrame();
+    CHECK(q.PopFrame(f));
+    CHECK(!f.partial);
+    CHECK_EQ(f.draws.size(), (size_t)1);
+    CHECK_EQ(f.stats.draws, 3u); // the whole guest frame
+    CHECK_EQ(f.stats.frame, 0ull); // the rest of the same guest frame
+    CHECK_EQ(q.FramesEnded(), 1ull);
+    q.QueryAnswered();
+    CHECK_EQ(q.UnansweredQueries(), 0u);
+    // The CP stalled on a memory wait hands the open frame over at once when it holds a fence.
+    CHECK(!q.FlushOpenNow()); // nothing open
+    CHECK(!q.OpenHasFences());
+    q.AddQuery(0x2000, false);
+    q.AddQuery(0x2000, true);
+    q.AddFence(0x3000, 0x77);
+    CHECK(q.OpenHasFences());
+    q.SetCpIdle(false);
+    CHECK(q.FlushOpenNow());
+    CHECK(q.PopFrame(f));
+    CHECK(f.partial);
+    CHECK_EQ(f.queries.size(), (size_t)2);
+    CHECK_EQ(f.fences.size(), (size_t)1);
+    CHECK_EQ(f.fences[0].drawIndex, 0u);
+    CHECK_EQ(f.fences[0].value, 0x77u);
+    CHECK_EQ(q.Partials(), 2ull);
+    q.QueryAnswered();
+}
+
+// Review Focus: a guest frame split into a partial Frame + its rest is dropped whole: the rest
+// never presents without the partial's draws. Its fences lead the next Frame (never written by
+// the CP), and its query ends get the fallback.
+TEST(frame_queue_drops_split_guest_frame_whole)
+{
+    FrameQueue q(1);
+    std::vector<RegisterWrite> none;
+    q.AddQuery(0xA0681C00, false);
+    q.AddDraw(DrawCall{}, none);
+    q.AddQuery(0xA0681C00, true);
+    q.AddFence(0xA0681C40, 0x55);
+    q.SetCpIdle(true);
+    CHECK(q.FlushOpenNow()); // partial of guest frame 0
+    q.AddDraw(DrawCall{}, none);
+    q.EndFrame();            // rest of guest frame 0: 2 Frames queued, cap 1
+    q.AddDraw(DrawCall{}, none);
+    q.EndFrame();            // guest frame 1: frame 0 (both parts) dropped
+    Frame f;
+    CHECK(q.PopFrame(f));
+    CHECK_EQ(f.stats.frame, 1ull);
+    CHECK(!f.partial);
+    CHECK_EQ(f.fences.size(), (size_t)1);  // frame 0's fence, ahead of frame 1's draws
+    CHECK_EQ(f.fences[0].drawIndex, 0u);
+    CHECK_EQ(f.fences[0].value, 0x55u);
+    CHECK(!q.PopFrame(f));
+    CHECK_EQ(q.Dropped(), 1ull);
+    CHECK_EQ(q.UnansweredQueries(), 0u); // the dropped end got the fallback
 }
 
 // Review Focus: a slow renderer never blocks the CP; the oldest frames are dropped.

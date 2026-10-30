@@ -43,6 +43,9 @@ public:
     const RegisterFile& Registers() const;
     // Reads one texel (as RGBA8) of the last RT0 drawn or resolved (tests); 0 when unavailable.
     uint32_t ReadTargetTexel(uint32_t x, uint32_t y);
+    // Writes completed occlusion query results into guest memory (also called while no frame is
+    // queued: a title waiting for a result swaps no frame until it lands).
+    void PollQueries();
 
 private:
     void CreateBackBufferView();
@@ -51,7 +54,8 @@ private:
     void ExecuteDraw(const DrawCall& d, const Frame& frame);
     void ExecuteResolve(const Resolve& r);
     void ExecuteQuery(const OcclusionQuery& q);
-    void PollQueries();
+    void ExecuteFence(const Fence& f);
+    void WritePendingFences();
     void BindRegisterState(const RegisterFile& regs, uint32_t texSlots);
     void ApplyRegisterWrites(const Frame& frame, size_t end);
     void UploadVertexMemory(const DrawCall& d, const Frame& frame);

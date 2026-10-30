@@ -147,6 +147,10 @@ static void RenderThread(DisplaySettings s)
             renderer.Resize(w, g_resizeH.load());
         if (!Frames().PopFrame(frame))
         {
+            // The title may be waiting for a query result before it swaps: run the queries it has
+            // issued so far (partial frame), then collect results.
+            Frames().FlushOpenIfWaiting();
+            renderer.PollQueries();
             Sleep(1);
             continue;
         }
@@ -154,7 +158,7 @@ static void RenderThread(DisplaySettings s)
         static const long long traceFrame = getenv("SCDA_TRACE_FRAME") ? atoll(getenv("SCDA_TRACE_FRAME")) : -1;
         // First frame at or after n: the renderer may drop frame n itself.
         static bool traced = false;
-        const bool tracing = !traced && traceFrame >= 0 && (long long)frame.stats.frame >= traceFrame;
+        const bool tracing = !traced && !frame.partial && traceFrame >= 0 && (long long)frame.stats.frame >= traceFrame;
         traced |= tracing;
         if (tracing)
         {
@@ -222,7 +226,7 @@ static void RenderThread(DisplaySettings s)
             return v;
         }();
         static size_t nextDump = 0;
-        bool dumping = nextDump < dumpFrames.size() && frame.stats.frame >= dumpFrames[nextDump];
+        bool dumping = !frame.partial && nextDump < dumpFrames.size() && frame.stats.frame >= dumpFrames[nextDump];
         if (dumping)
         {
             renderer.DumpNextFrame("scda_frame_" + std::to_string(frame.stats.frame) + ".bmp");
@@ -230,6 +234,8 @@ static void RenderThread(DisplaySettings s)
                 nextDump++;
         }
         renderer.Present(frame);
+        if (frame.partial)
+            continue;
         static uint64_t presents = 0;
         static const ULONGLONG startTick = GetTickCount64();
         presents++;
