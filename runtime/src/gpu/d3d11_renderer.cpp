@@ -145,6 +145,8 @@ struct DrawResources
     ComPtr<ID3D11VertexShader> blitVs;
     ComPtr<ID3D11PixelShader> blitPs;
     ComPtr<ID3D11Texture2D> gammaRamp; // 256x1 R10G10B10A2, display gamma ramp
+    // CleanGoggles: 1x1 average of a noise texture, by physical address | format << 32.
+    std::unordered_map<uint64_t, ComPtr<ID3D11ShaderResourceView>> averageTextures;
     ComPtr<ID3D11ShaderResourceView> gammaRampSrv;
     uint32_t gammaRampVersion = ~0u;
     ComPtr<ID3D11GeometryShader> rectListGs;
@@ -1061,8 +1063,27 @@ void D3D11Renderer::ExecuteDraw(const DrawCall& d, const Frame& frame)
             v.push_back(strtoull(p, nullptr, 16));
         return v;
     }();
-    const bool skipped = d.vs && d.ps &&
-        std::find_if(skipShaders.begin(), skipShaders.end(), [&](uint64_t h) { return h == d.vs->hash || h == d.ps->hash; }) != skipShaders.end();
+    // Goggle vision modes (SC:DA shaders, found by tracing night vision / thermal / EMF frames
+    // against goggles-off ones): after each mode's composite a full-screen quad (VS b1b1d377, PS
+    // e48aa6f4 = texture x c0) lays a 128x128 DXT1 scanline texture over the screen; goggles-off
+    // frames use that VS with another PS only. Thermal and EMF also run PS 40f6f3d3, which offsets
+    // the scene UV by a noise texture times PS c20 (2x2). Thermal's palette pass (PS 7439e53c)
+    // multiplies the palette colour by a screen-tiled noise texture (fetch slot 1, no mips).
+    // CleanGoggles skips the overlay, zeroes c20 for the displacement pass and gives the thermal
+    // palette pass a 1x1 texture of the noise's average colour (same brightness, no grain).
+    // SCDA_CLEAN_GOGGLES=1 forces it on.
+    constexpr uint64_t kGoggleOverlayVs = 0xb1b1d377476e298bull, kGoggleOverlayPs = 0xe48aa6f498700bf1ull;
+    constexpr uint64_t kGoggleNoisePs = 0x40f6f3d3c2f9b7e6ull, kThermalPalettePs = 0x7439e53c553bfde7ull;
+    static const bool cleanEnv = getenv("SCDA_CLEAN_GOGGLES") != nullptr;
+    const bool clean = m_cleanGoggles || cleanEnv;
+    const bool skipped = (d.vs && d.ps &&
+        std::find_if(skipShaders.begin(), skipShaders.end(), [&](uint64_t h) { return h == d.vs->hash || h == d.ps->hash; }) != skipShaders.end()) ||
+        (clean && d.vs && d.ps && d.vs->hash == kGoggleOverlayVs && d.ps->hash == kGoggleOverlayPs);
+    // PS constant to zero for this draw (component mask), 0 = none.
+    uint32_t noiseConst = 0, noiseMask = 0;
+    if (clean && d.ps && d.ps->hash == kGoggleNoisePs)
+        noiseConst = 20, noiseMask = 0xF;
+    const bool zeroNoise = noiseMask != 0;
     if (skipped || !topology || !d.vs || !d.ps || d.source == IndexSource::Immediate || (rectList && !r.rectListGs))
     {
         m_lastSkipped++;
@@ -1258,11 +1279,71 @@ void D3D11Renderer::ExecuteDraw(const DrawCall& d, const Frame& frame)
         return;
     }
     const uint32_t texSlots = ShaderTextureFetchSlots(*d.vs) | ShaderTextureFetchSlots(*d.ps);
+    // CleanGoggles: the noise weights = 0 for this draw only (restored after the bind).
+    const uint32_t kNoiseConst = kRegAluConstants + 1024 + noiseConst * 4;
+    uint32_t savedNoise[4] = {};
+    if (zeroNoise)
+    {
+        for (uint32_t i = 0; i < 4; i++)
+        {
+            savedNoise[i] = r.regs[kNoiseConst + i];
+            if (noiseMask >> i & 1)
+                r.regs.Set(kNoiseConst + i, 0);
+        }
+        r.aluDirty[1] = true;
+        r.stateDirty = true;
+    }
     if (r.stateDirty || (texSlots & ~r.lastTexSlots))
     {
         r.lastTexSlots = r.stateDirty ? texSlots : r.lastTexSlots | texSlots;
         BindRegisterState(r.regs, r.lastTexSlots);
         r.stateDirty = false;
+    }
+    if (zeroNoise)
+    {
+        for (uint32_t i = 0; i < 4; i++)
+            r.regs.Set(kNoiseConst + i, savedNoise[i]);
+        r.aluDirty[1] = true;
+        r.stateDirty = true; // the next draw uploads the real constants
+    }
+    if (clean && d.ps->hash == kThermalPalettePs)
+    {
+        const TextureFetch t = DecodeTextureFetch(r.regs, 1);
+        auto& avg = r.averageTextures[t.physical | uint64_t(t.format) << 32];
+        if (!avg && t.valid && TextureElementBytes(t.format))
+        {
+            const uint8_t* guest = PhysicalPtr(t.physical);
+            uint64_t sum[4] = {};
+            uint32_t mean = 0xFFFFFFFF;
+            if (GuestRangeReadable(guest, TextureGuestBytes(t)))
+            {
+                const std::vector<uint32_t> texels = ConvertTexture(t, guest);
+                for (uint32_t v : texels)
+                    for (uint32_t c = 0; c < 4; c++)
+                        sum[c] += (v >> (8 * c)) & 0xFF;
+                if (!texels.empty())
+                {
+                    mean = 0;
+                    for (uint32_t c = 0; c < 4; c++)
+                        mean |= uint32_t((sum[c] + texels.size() / 2) / texels.size()) << (8 * c);
+                }
+            }
+            D3D11_TEXTURE2D_DESC td{};
+            td.Width = td.Height = td.MipLevels = td.ArraySize = 1;
+            td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            td.SampleDesc.Count = 1;
+            td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            D3D11_SUBRESOURCE_DATA init{ &mean, 4, 4 };
+            ComPtr<ID3D11Texture2D> tex;
+            if (SUCCEEDED(m_device->CreateTexture2D(&td, &init, &tex)))
+                m_device->CreateShaderResourceView(tex.Get(), nullptr, &avg);
+        }
+        if (avg)
+        {
+            ID3D11ShaderResourceView* srv = avg.Get();
+            m_context->PSSetShaderResources(kHlslTex2DSlot + 1, 1, &srv);
+            r.stateDirty = true; // the next draw rebinds the guest textures
+        }
     }
     UploadVertexMemory(d, frame);
     m_context->VSSetShader(vs.Get(), nullptr, 0);

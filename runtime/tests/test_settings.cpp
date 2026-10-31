@@ -15,11 +15,13 @@ TEST(settings_defaults_when_missing)
     CHECK_EQ(s.scale, 1u);
     CHECK(s.mode == DisplaySettings::Windowed);
     CHECK(s.vsync);
+    CHECK(!s.cleanGoggles); // authentic goggle overlay unless asked
 }
 
 TEST(settings_parsed)
 {
-    DisplaySettings s = LoadDisplaySettings(Ini("[Display]\nScale=2\nMode=borderless\nVSync=0\n"));
+    DisplaySettings s = LoadDisplaySettings(Ini("[Display]\nScale=2\nMode=borderless\nVSync=0\nCleanGoggles=1\n"));
+    CHECK(s.cleanGoggles);
     CHECK_EQ(s.scale, 2u);
     CHECK(s.mode == DisplaySettings::Borderless);
     CHECK(!s.vsync);

@@ -79,6 +79,8 @@ DisplaySettings LoadDisplaySettings(const std::filesystem::path& ini)
             if (v >= 1 && v <= 16)
                 s.anisotropy = uint32_t(v);
         }
+        else if (key == "cleangoggles")
+            s.cleanGoggles = Truthy(value);
     });
     return s;
 }

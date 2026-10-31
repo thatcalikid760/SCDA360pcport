@@ -41,6 +41,8 @@ public:
     static void RequestReset();
     // Register state after the last frame executed (SCDA_TRACE_FRAME replays the next frame's log on it).
     const RegisterFile& Registers() const;
+    // [Display] CleanGoggles: drop the goggle scanline overlay and the noise displacement.
+    void SetCleanGoggles(bool on) { m_cleanGoggles = on; }
     // Reads one texel (as RGBA8) of the last RT0 drawn or resolved (tests); 0 when unavailable.
     uint32_t ReadTargetTexel(uint32_t x, uint32_t y);
     // Writes completed occlusion query results into guest memory (also called while no frame is
@@ -71,6 +73,7 @@ private:
     std::unique_ptr<DrawResources> m_draw;
     bool m_vsync = true;
     uint32_t m_scale = 1, m_anisotropy = 1;
+    bool m_cleanGoggles = false;
     uint64_t m_presented = 0;
     uint32_t m_lastDrawn = 0, m_lastSkipped = 0, m_lastResolved = 0;
     bool m_lastFrontbuffer = false;

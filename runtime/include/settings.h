@@ -9,6 +9,9 @@ struct DisplaySettings
     enum Mode { Windowed, Borderless, Fullscreen } mode = Windowed;
     bool vsync = true;
     uint32_t anisotropy = 1; // minimum anisotropic filtering for linear-filtered textures (1 = off .. 16)
+    // Quality of life, off by default (authentic): goggle vision modes without the scanline overlay
+    // and without the thermal/EMF noise displacement ([Display] CleanGoggles=1).
+    bool cleanGoggles = false;
 };
 
 struct InputSettings
