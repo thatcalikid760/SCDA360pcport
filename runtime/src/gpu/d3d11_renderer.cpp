@@ -224,6 +224,7 @@ struct DrawResources
         uint32_t rowBytes = 0; // guest bytes per row (RB_COPY_DEST_INFO format x width)
         uint32_t destFormat = 0; // RB_COPY_DEST_INFO bits 7-12
         uint32_t version = 0;    // bumped by each copy into texture
+        uint64_t lastCopy = 0;   // resolveSerial at the last copy into texture
         uint64_t guestHash = 0;  // SCDA_TRACE_STALE: guest bytes under the texture after the last copy
         uint64_t checkedAt = ~0ull; // SCDA_TRACE_STALE: presented frame of the last hash check
         uint64_t staleSince = 0;    // SCDA_TRACE_STALE: presented frame + 1 the change was seen, 0 = fresh
@@ -238,6 +239,7 @@ struct DrawResources
         std::unordered_map<uint32_t, Crop> crops; // by w << 16 | h
     };
     std::unordered_map<uint32_t, Resolved> resolved;
+    uint64_t resolveSerial = 0; // resolve copies so far (Resolved::lastCopy)
 };
 
 static std::atomic<bool> g_resetRequested;
@@ -1577,15 +1579,21 @@ void D3D11Renderer::ExecuteResolve(const Resolve& res)
         if (TraceResolveOnce((4ull << 60) | res.colorInfo | (uint64_t(res.surfaceInfo & 0x3FFF) << 32)))
             RuntimeLog("[resolve] source info %08X surf %08X from_depth %d -> dest %08X info %08X fmt %u %ux%u\n", res.colorInfo, res.surfaceInfo,
                 ResolveFromDepth(res), res.destBase, res.destInfo, (res.destInfo >> 7) & 0x3F, ResolveWidth(res), ResolveHeight(res));
+        // The most recently copied containing texture wins (tile 0's, just before): entries are never
+        // invalidated, so an older texture can also span this base, and the map's iteration order
+        // changes as it rehashes (Scale 2 Intro: screen tiles 1-2 went into a stale texture and the
+        // presented rows 256+ froze).
         uint32_t dy = 0;
         auto dstIt = r.resolved.end();
         for (auto it = r.resolved.begin(); it != r.resolved.end(); ++it)
             if (it->first < base && it->second.rowBytes && it->second.format == sd.Format && it->second.width == ResolveWidth(res) &&
                 (base - it->first) % it->second.rowBytes == 0 && (base - it->first) / it->second.rowBytes < it->second.height)
             {
-                dstIt = it;
-                dy = (base - it->first) / it->second.rowBytes;
-                break;
+                if (dstIt == r.resolved.end() || it->second.lastCopy > dstIt->second.lastCopy)
+                {
+                    dstIt = it;
+                    dy = (base - it->first) / it->second.rowBytes;
+                }
             }
             else if (it->first < base && base < it->first + it->second.rowBytes * it->second.height &&
                 TraceResolveOnce((5ull << 60) | (uint64_t(base) << 20) | ((it->first >> 12) & 0xFFFFF)))
@@ -1676,6 +1684,7 @@ void D3D11Renderer::ExecuteResolve(const Resolve& res)
                 }
                 m_lastResolved++;
                 dst.version++;
+                dst.lastCopy = ++r.resolveSerial;
                 static const bool traceStale = getenv("SCDA_TRACE_STALE") != nullptr;
                 if (traceStale)
                 {
