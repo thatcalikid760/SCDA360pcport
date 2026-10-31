@@ -137,6 +137,9 @@ struct HostSampler
 {
     uint32_t filter = 0x15, addressU = 1, addressV = 1, addressW = 1;
     uint32_t minLod = 0, maxLod = 0, anisotropy = 1;
+    // Fetch dword 5 bits 0-1 border_color for the clamp-to-border modes: 0 black (0,0,0,0), 1 white
+    // (1,1,1,1), 2/3 YCbCr blacks (shortcut: black).
+    uint32_t border = 0;
 };
 HostSampler DecodeSampler(const RegisterFile& regs, uint32_t slot);
 

@@ -404,6 +404,13 @@ TEST(sampler_mip_range_and_aniso)
     CHECK_EQ(s.minLod, 1u);
     CHECK_EQ(s.maxLod, 1u);
     CHECK_EQ(s.anisotropy, 1u);
+    CHECK_EQ(s.border, 0u);
+    // Clamp to border (6) with a white border (dword 5 bits 0-1 = 1), like the Kinshasa shadow map.
+    r.Set(kRegFetchConstants + 0, 2u | (6u << 10) | (6u << 13));
+    r.Set(kRegFetchConstants + 5, 1u);
+    s = DecodeSampler(r, 0);
+    CHECK_EQ(s.addressU, 4u); // D3D11_TEXTURE_ADDRESS_BORDER
+    CHECK_EQ(s.border, 1u);
 }
 
 // Guest mip layout (values hand-computed from Xenia texture_util GetGuestTextureLayout).

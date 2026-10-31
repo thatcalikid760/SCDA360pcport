@@ -543,6 +543,10 @@ HostSampler DecodeSampler(const RegisterFile& r, uint32_t slot)
     s.maxLod = ((c3 >> 23) & 3) == 2 ? s.minLod : std::max(s.minLod, (c4 >> 6) & 0xF);
     const uint32_t aniso = (c3 >> 25) & 7;
     s.anisotropy = aniso ? std::min(1u << (aniso - 1), 16u) : 1;
+    // Border colour (Xenia xe_gpu_texture_fetch_t dword_5 border_color). SC:DA samples its sun shadow
+    // map (32_FLOAT 512x512) clamp-to-border with a white border: outside the map is lit. The D3D11
+    // default (black) shadowed everything outside it: long dark wedges on Kinshasa's ground and walls.
+    s.border = r[kRegFetchConstants + slot * 6 + 5] & 3;
     return s;
 }
 

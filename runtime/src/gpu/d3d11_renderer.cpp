@@ -1029,7 +1029,7 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs, uint32_t texSlot
         // Anisotropy: the guest's, raised to the settings minimum for fully linear filtering.
         const uint32_t aniso = std::max(hs.anisotropy, hs.filter == 0x15 ? r.anisotropy : 1u);
         auto& state = r.samplers[(uint64_t(hs.filter) << 24) | (hs.addressU << 16) | (hs.addressV << 8) | hs.addressW |
-            (uint64_t(hs.minLod) << 32) | (uint64_t(hs.maxLod) << 36) | (uint64_t(aniso) << 40)];
+            (uint64_t(hs.minLod) << 32) | (uint64_t(hs.maxLod) << 36) | (uint64_t(aniso) << 40) | (uint64_t(hs.border == 1) << 48)];
         if (!state)
         {
             D3D11_SAMPLER_DESC sd{};
@@ -1040,6 +1040,8 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs, uint32_t texSlot
             sd.AddressW = D3D11_TEXTURE_ADDRESS_MODE(hs.addressW);
             sd.MinLOD = float(hs.minLod);
             sd.MaxLOD = float(hs.maxLod);
+            if (hs.border == 1)
+                sd.BorderColor[0] = sd.BorderColor[1] = sd.BorderColor[2] = sd.BorderColor[3] = 1.0f;
             m_device->CreateSamplerState(&sd, &state);
         }
         samplers[slot] = state ? state.Get() : r.sampler.Get();
