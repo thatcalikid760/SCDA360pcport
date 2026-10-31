@@ -217,3 +217,34 @@ TEST(written_profile_settings_persist)
     CHECK_EQ(GuestLoad32(s2), 0u);
     CHECK_EQ(GuestLoad32(s2 + 0x24), 0u);
 }
+
+TEST(menu_shortcut_never_reaches_title)
+{
+    bool wait = false;
+    XINPUT_GAMEPAD g{};
+    g.wButtons = XINPUT_GAMEPAD_LEFT_THUMB | XINPUT_GAMEPAD_RIGHT_THUMB | XINPUT_GAMEPAD_A;
+    FilterMenuShortcut(g, false, wait);
+    CHECK_EQ(g.wButtons, WORD(XINPUT_GAMEPAD_A)); // the combo is stripped, the rest passes
+    g = {};
+    g.wButtons = XINPUT_GAMEPAD_LEFT_THUMB; // L3 alone is the game's
+    FilterMenuShortcut(g, false, wait);
+    CHECK_EQ(g.wButtons, WORD(XINPUT_GAMEPAD_LEFT_THUMB));
+}
+
+TEST(menu_close_waits_for_release)
+{
+    bool wait = true; // the menu just closed
+    XINPUT_GAMEPAD g{};
+    g.wButtons = XINPUT_GAMEPAD_RIGHT_THUMB | XINPUT_GAMEPAD_B;
+    g.sThumbLX = 1000;
+    FilterMenuShortcut(g, false, wait);
+    CHECK(wait && g.wButtons == 0 && g.sThumbLX == 0);
+    g = {};
+    g.wButtons = XINPUT_GAMEPAD_START; // Esc still held (keyboard START)
+    FilterMenuShortcut(g, true, wait);
+    CHECK(wait && g.wButtons == 0);
+    g = {};
+    g.wButtons = XINPUT_GAMEPAD_A;
+    FilterMenuShortcut(g, false, wait);
+    CHECK(!wait && g.wButtons == XINPUT_GAMEPAD_A);
+}

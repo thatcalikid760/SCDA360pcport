@@ -158,9 +158,27 @@ uint16_t AutoPressButtons(const std::vector<AutoPress>& script, uint32_t frame)
     return g.wButtons;
 }
 
-static std::atomic<bool> g_inputBlocked;
-void SetInputBlocked(bool blocked) { g_inputBlocked = blocked; }
+static std::atomic<bool> g_inputBlocked, g_waitRelease;
+void SetInputBlocked(bool blocked)
+{
+    if (!blocked && g_inputBlocked)
+        g_waitRelease = true; // the closing L3+R3 / Esc is still held
+    g_inputBlocked = blocked;
+}
 bool InputBlocked() { return g_inputBlocked; }
+
+void FilterMenuShortcut(XINPUT_GAMEPAD& g, bool escapeDown, bool& waitRelease)
+{
+    constexpr WORD thumbs = XINPUT_GAMEPAD_LEFT_THUMB | XINPUT_GAMEPAD_RIGHT_THUMB;
+    if (waitRelease && ((g.wButtons & thumbs) || escapeDown))
+    {
+        g = XINPUT_GAMEPAD{};
+        return;
+    }
+    waitRelease = false;
+    if ((g.wButtons & thumbs) == thumbs)
+        g.wButtons &= ~thumbs;
+}
 
 static bool KeyDown(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
 
@@ -229,6 +247,12 @@ SCDA_IMPORT(XamInputGetState)
     }
     if (InputBlocked())
         g = XINPUT_GAMEPAD{};
+    else
+    {
+        bool wait = g_waitRelease;
+        FilterMenuShortcut(g, script.empty() && GameWindowFocused() && KeyDown(VK_ESCAPE), wait);
+        g_waitRelease = wait;
+    }
     AutoPressApply(script, uint32_t(Frames().FramesEnded()), g);
     // SCDA_TRACE_INPUT=1: every poll (frame, host thread, mouse delta, foreground, sticks/buttons).
     static const bool trace = getenv("SCDA_TRACE_INPUT") != nullptr;

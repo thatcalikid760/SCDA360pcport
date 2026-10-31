@@ -23,6 +23,9 @@ void MouseToStick(int dx, int dy, float sensitivity, bool invertY, int16_t& rx, 
 // The F1 menu is open: the title sees an idle pad (no pad, keyboard or mouse input reaches it).
 void SetInputBlocked(bool blocked);
 bool InputBlocked();
+// Menu shortcut hygiene: L3+R3 held together never reaches the title (it toggles the menu), and
+// after the menu closes (waitRelease) the title sees an idle pad until L3, R3 and Esc are released.
+void FilterMenuShortcut(XINPUT_GAMEPAD& g, bool escapeDown, bool& waitRelease);
 
 // A pad stick at rest inside the XInput deadzone (pads never rest at exactly 0): keyboard and mouse
 // may drive that stick instead.
