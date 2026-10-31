@@ -6,7 +6,7 @@
 
 **A native Windows port of *Splinter Cell: Double Agent* (Xbox 360), built by static recompilation.**
 
-![status](https://img.shields.io/badge/status-nearing%20first%20release-yellowgreen)
+![status](https://img.shields.io/badge/status-game%20complete%2C%20polishing-brightgreen)
 ![platform](https://img.shields.io/badge/platform-Windows%20x64-blue)
 ![renderer](https://img.shields.io/badge/renderer-Direct3D%2011-informational)
 ![license](https://img.shields.io/badge/license-GPL--3.0-green)
@@ -14,9 +14,9 @@
 </div>
 
 > [!NOTE]
-> **We're close to a first release.** Every map loads, plays and saves at the game's 30 fps cap, missions chain into
-> each other, and the big rendering bugs are fixed. What's left is polish, a full campaign playthrough by hand and a
-> prebuilt installer. Until then, expect some small glitches and build from source.
+> **The game is finished.** Every map loads, plays and saves at the game's 30 fps cap, missions chain into each
+> other, and the big rendering bugs are fixed. All that is left is the prebuilt installer and a playthrough of the
+> whole story to polish what turns up. Until the installer is out, build from source.
 
 ---
 
