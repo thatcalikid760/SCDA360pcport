@@ -45,7 +45,10 @@ int g_openTab = -1; // SCDA_MENU=<0-2>: the menu starts open on that tab (unatte
 constexpr double kToastSeconds = 8.0;
 bool g_toastStarted;
 std::chrono::steady_clock::time_point g_toastSince;
-bool g_padCombo; // L3+R3 held at the last poll
+bool g_padCombo;   // L3+R3 held at the last poll
+WORD g_padButtons;  // pad 0 buttons at the last poll
+bool g_padArmed;    // the menu may read the pad: every button was released since it opened
+bool g_wasOpen;     // the menu was open at the last poll (render thread)
 
 const char* const kModeNames[] = { "Windowed", "Borderless", "Fullscreen" };
 const char* const kModeIni[] = { "windowed", "borderless", "fullscreen" };
@@ -243,7 +246,7 @@ void Menu()
         }
         Save(before, g_settings);
         ImGui::SetCursorPosY(ImGui::GetWindowHeight() - em * 2.0f);
-        ImGui::TextDisabled("F1, L3+R3 or Esc: back to the game. Changes apply and save at once.");
+        ImGui::TextDisabled("Back to the game: F1 / Esc, or Start / L3+R3 on a pad. Changes save at once.");
     }
     ImGui::End();
 }
@@ -291,20 +294,34 @@ void Toast()
 }
 
 // L3+R3 on pad 0 (pressed together, on the press) asks the window thread to toggle the menu, like F1.
+// While open, Start or Back closes it. The buttons that opened it (A on the game's OPTIONS page,
+// L3+R3) must be released before the menu reads the pad (g_padArmed), so they do not act in it.
 void PollPadCombo()
 {
     static const bool scripted = getenv("SCDA_AUTOPRESS") != nullptr;
+    const bool open = g_open;
+    if (open && !g_wasOpen)
+        g_padArmed = false;
+    g_wasOpen = open;
     XINPUT_STATE pad{};
     if (scripted || XInputGetState(0, &pad) != ERROR_SUCCESS)
     {
         g_padCombo = false;
+        g_padButtons = 0;
+        g_padArmed = true;
         return;
     }
+    const WORD buttons = pad.Gamepad.wButtons, pressed = buttons & ~g_padButtons;
+    g_padButtons = buttons;
     constexpr WORD combo = XINPUT_GAMEPAD_LEFT_THUMB | XINPUT_GAMEPAD_RIGHT_THUMB;
-    const bool held = (pad.Gamepad.wButtons & combo) == combo;
+    const bool held = (buttons & combo) == combo;
     if (held && !g_padCombo)
         PostMessageW(g_hwnd, kOverlayToggleMessage, 0, 0);
+    else if (open && g_padArmed && (pressed & (XINPUT_GAMEPAD_START | XINPUT_GAMEPAD_BACK)))
+        PostMessageW(g_hwnd, kOverlayToggleMessage, 0, 0);
     g_padCombo = held;
+    if (!buttons)
+        g_padArmed = true;
 }
 
 void InitImGui()
@@ -314,10 +331,33 @@ void InitImGui()
     io.IniFilename = nullptr;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NoMouseCursorChange;
     ImGui::StyleColorsDark();
+    // The game's own menu look: square black panels, a thin grey-green border, green highlights, green nav cursor.
     ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding = 6.0f;
-    style.FrameRounding = 4.0f;
-    style.Colors[ImGuiCol_WindowBg].w = 0.92f;
+    style.WindowRounding = style.FrameRounding = style.TabRounding = style.GrabRounding = style.PopupRounding = 0.0f;
+    style.WindowBorderSize = 1.0f;
+    style.WindowPadding = ImVec2(14.0f, 12.0f);
+    style.ItemSpacing = ImVec2(10.0f, 7.0f);
+    const ImVec4 black(0.01f, 0.02f, 0.02f, 0.93f), panel(0.05f, 0.07f, 0.06f, 1.0f), green(0.53f, 0.78f, 0.60f, 1.0f),
+        greenDim(0.28f, 0.42f, 0.32f, 1.0f), title(0.55f, 0.95f, 0.55f, 1.0f), text(0.86f, 0.90f, 0.86f, 1.0f);
+    ImVec4* c = style.Colors;
+    c[ImGuiCol_Text] = text;
+    c[ImGuiCol_TextDisabled] = ImVec4(0.50f, 0.58f, 0.52f, 1.0f);
+    c[ImGuiCol_WindowBg] = c[ImGuiCol_PopupBg] = black;
+    c[ImGuiCol_Border] = ImVec4(0.32f, 0.40f, 0.35f, 1.0f);
+    c[ImGuiCol_TitleBg] = c[ImGuiCol_TitleBgActive] = c[ImGuiCol_TitleBgCollapsed] = black;
+    c[ImGuiCol_FrameBg] = panel;
+    c[ImGuiCol_FrameBgHovered] = c[ImGuiCol_FrameBgActive] = ImVec4(0.12f, 0.18f, 0.14f, 1.0f);
+    c[ImGuiCol_Button] = panel;
+    c[ImGuiCol_ButtonHovered] = c[ImGuiCol_Header] = c[ImGuiCol_HeaderHovered] = greenDim;
+    c[ImGuiCol_ButtonActive] = c[ImGuiCol_HeaderActive] = ImVec4(0.36f, 0.56f, 0.42f, 1.0f);
+    c[ImGuiCol_Tab] = panel;
+    c[ImGuiCol_TabHovered] = greenDim;
+    c[ImGuiCol_TabSelected] = ImVec4(0.36f, 0.56f, 0.42f, 1.0f);
+    c[ImGuiCol_TabSelectedOverline] = green;
+    c[ImGuiCol_TabDimmedSelected] = greenDim;
+    c[ImGuiCol_SliderGrab] = c[ImGuiCol_SliderGrabActive] = c[ImGuiCol_CheckMark] = green;
+    c[ImGuiCol_Separator] = c[ImGuiCol_SeparatorHovered] = c[ImGuiCol_SeparatorActive] = ImVec4(0.32f, 0.45f, 0.36f, 1.0f);
+    c[ImGuiCol_NavCursor] = title;
     // The default font is 13 px: scale with the window (720 rows = 1.25x).
     const float scale = std::clamp(float(g_renderer->Height()) / 576.0f, 1.0f, 3.5f);
     style.ScaleAllSizes(scale);
@@ -343,7 +383,9 @@ void Draw()
     for (const Message& m : queue)
         ImGui_ImplWin32_WndProcHandler(m.hwnd, m.msg, m.wp, m.lp);
     const bool open = g_open;
-    ImGui::GetIO().ConfigFlags = open ? ImGui::GetIO().ConfigFlags & ~ImGuiConfigFlags_NoMouse : ImGui::GetIO().ConfigFlags | ImGuiConfigFlags_NoMouse;
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags = open ? io.ConfigFlags & ~ImGuiConfigFlags_NoMouse : io.ConfigFlags | ImGuiConfigFlags_NoMouse;
+    io.ConfigFlags = open && g_padArmed ? io.ConfigFlags | ImGuiConfigFlags_NavEnableGamepad : io.ConfigFlags & ~ImGuiConfigFlags_NavEnableGamepad;
     ImGui_ImplDX11_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
@@ -403,6 +445,12 @@ bool OverlayToggle()
 }
 
 bool OverlayOpen() { return g_open; }
+
+void OverlayRequestOpen()
+{
+    if (g_hwnd && !g_open)
+        PostMessageW(g_hwnd, kOverlayOpenMessage, 0, 0);
+}
 
 bool OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {

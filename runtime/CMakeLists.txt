@@ -79,6 +79,7 @@ add_executable(scda
     src/settings.cpp
     src/host_window.cpp
     src/overlay.cpp
+    src/menu_hooks.cpp
     src/updater.cpp
     src/imports.cpp
     src/net.cpp

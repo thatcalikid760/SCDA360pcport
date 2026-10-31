@@ -244,6 +244,12 @@ TEST(menu_close_waits_for_release)
     FilterMenuShortcut(g, true, wait);
     CHECK(wait && g.wButtons == 0);
     g = {};
+    g.wButtons = XINPUT_GAMEPAD_A; // any button still held: idle
+    FilterMenuShortcut(g, false, wait);
+    CHECK(wait && g.wButtons == 0);
+    g = {};
+    FilterMenuShortcut(g, false, wait); // all released
+    CHECK(!wait);
     g.wButtons = XINPUT_GAMEPAD_A;
     FilterMenuShortcut(g, false, wait);
     CHECK(!wait && g.wButtons == XINPUT_GAMEPAD_A);

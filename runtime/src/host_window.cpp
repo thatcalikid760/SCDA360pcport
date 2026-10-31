@@ -45,7 +45,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     // F1 or L3+R3 (kOverlayToggleMessage) opens and closes the Extra Settings menu (Esc closes it too);
     // while it is open the cursor is free and mouse/keyboard messages go to the menu, not the game.
-    if ((msg == WM_KEYDOWN && !(lp & (1 << 30)) && (wp == VK_F1 || (wp == VK_ESCAPE && OverlayOpen()))) || msg == kOverlayToggleMessage)
+    if ((msg == WM_KEYDOWN && !(lp & (1 << 30)) && (wp == VK_F1 || (wp == VK_ESCAPE && OverlayOpen()))) || msg == kOverlayToggleMessage ||
+        (msg == kOverlayOpenMessage && !OverlayOpen()))
     {
         const bool open = OverlayToggle();
         if (g_mouseLook)

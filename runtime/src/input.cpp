@@ -170,7 +170,7 @@ bool InputBlocked() { return g_inputBlocked; }
 void FilterMenuShortcut(XINPUT_GAMEPAD& g, bool escapeDown, bool& waitRelease)
 {
     constexpr WORD thumbs = XINPUT_GAMEPAD_LEFT_THUMB | XINPUT_GAMEPAD_RIGHT_THUMB;
-    if (waitRelease && ((g.wButtons & thumbs) || escapeDown))
+    if (waitRelease && (g.wButtons || escapeDown))
     {
         g = XINPUT_GAMEPAD{};
         return;

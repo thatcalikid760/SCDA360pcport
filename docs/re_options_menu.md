@@ -25,7 +25,13 @@ frame 1060 shows it). One page:
 - Widgets are looked up by name in a tree: `sub_82BFC6A8` makes a name, `sub_82BFA690` finds a page,
   `sub_82C0BB90` finds a child (P_OptionPopup / LST_Options in `sub_82787EB8`).
 
-## Plan
+## Done (2026-10-31, runtime/src/menu_hooks.cpp)
+
+TV CALIBRATION is now EXTRA SETTINGS: `sub_8258C230` override rewrites the label (same length, English only),
+`sub_82A88E60` override opens the F1 menu for B_Adjust_display on P_Options (`SCDA_NATIVE_CALIBRATION=1` = old).
+Verified with autopress (`_run/re/nav_f`, `nav_g`). BRIGHTNESS and CONTRAST rows stay on the page.
+
+## Original plan (a new button instead of reusing calibration)
 
 1. Override `sub_82A89D90` (pattern: `runtime/src/audio_trace.cpp`, `PPC_FUNC(sub_X)` calling `__imp__sub_X`):
    after the original, add one more entry. Either a third button cloned from CONTROLLER LAYOUT's widget, or a row.

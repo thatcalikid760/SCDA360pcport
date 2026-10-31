@@ -13,6 +13,10 @@ void OverlayAttach(D3D11Renderer& renderer, HWND hwnd, const DisplaySettings& se
 
 // Posted to the game window by the render thread when L3+R3 is pressed: toggle like F1.
 constexpr UINT kOverlayToggleMessage = WM_APP + 1;
+// Posted by OverlayRequestOpen: open the menu if it is closed.
+constexpr UINT kOverlayOpenMessage = WM_APP + 2;
+// Any thread (the game's OPTIONS > EXTRA SETTINGS button, menu_hooks.cpp): open the menu.
+void OverlayRequestOpen();
 
 // Window thread. F1 (and Esc while open) toggles the menu; returns the new state. The menu never
 // opens by itself.

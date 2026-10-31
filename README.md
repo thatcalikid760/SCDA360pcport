@@ -135,7 +135,8 @@ Planned next, roughly in order:
    SHA-256, extracts the game files to `<dir>\game` and prepares the flat image.
 3. Run `scda.exe` from the install folder.
 
-Press **F1** (or **L3+R3** on a controller) in game for the **Extra Settings** menu. It has three tabs:
+Open the **Extra Settings** menu from the game's own **OPTIONS > EXTRA SETTINGS** (it replaces TV calibration;
+brightness and contrast stay on the OPTIONS page), or any time with **F1** / **L3+R3**. It has three tabs:
 
 - **Display:** window mode, VSync, internal resolution, anisotropic filtering, clean goggles.
 - **Graphics:** Low / Medium / High / Ultra presets, anti-aliasing (FXAA; the game's own 4x MSAA is always on),
@@ -144,7 +145,7 @@ Press **F1** (or **L3+R3** on a controller) in game for the **Extra Settings** m
 - **Update:** your version, the latest GitHub release, and a link to the releases page. After you sign in at the
   main menu, a notification in the top right says whether an update is out.
 
-Changes apply at once and are saved. The menu never opens by itself; Esc closes it.
+Changes apply at once and are saved. The menu never opens by itself; Esc, F1, Start or L3+R3 closes it.
 
 Settings live in `%LOCALAPPDATA%\SCDARecomp\settings.ini`:
 
