@@ -129,6 +129,7 @@ Planned next, roughly in order:
 
 > [!IMPORTANT]
 > **No game files are included or distributed.** You need your own copy of *Splinter Cell: Double Agent* for Xbox 360.
+> The port is built from the **USA, Europe** disc (`.iso`). Other versions are not supported.
 
 1. Build the runtime and the installer (`tools/installer/build.bat`). No prebuilt releases exist yet.
 2. Run `SCDA_Setup.exe`, pick your disc image (`.iso`) and an install folder. It checks the executable's
