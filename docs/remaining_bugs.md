@@ -12,17 +12,22 @@ Evidence paths under `_run/` are local only (git-ignored).
 - **Fix:** the most recently copied containing texture wins (`Resolved::lastCopy`). Verified on Intro frames
   380-440 at Scale 2 (`_run/s2/seq2/`); same frames froze before (`_run/s2/seq/`).
 
-## P1. Sniper scope lens renders purple, with a cyan band
+## FIXED. Sniper scope: cyan band and pink rows at the bottom of the screen (2026-10-31)
 
-- **Symptom:** looking through the rifle scope in Kinshasa, the lens was a flat purple/magenta disc (FIXED by the
-  resolve-container fix above: the lens now shows the scene). Still open: the lower screen outside the scope body
-  turns flat cyan `(0,198,198)` from about row 590, and the last 5 rows pink `(255,198,255)`.
-- **Repro:** `SCDA_LAUNCH_DATA=C:/SCDA-Recomp/_run/maps/07_Kinshasa01.launch`, scope raised around frames 2400-2800.
-- **Evidence:** `_run/scope/final.png` (sheet), `_run/scope/scda_frame_2400.bmp`..`2800`, draw dumps `_run/scope/dd2/`,
-  shader skips `_run/scope/skip_*.bmp`, traces `_run/scope/trace*.log`.
-- **Suspected cause:** unknown. The constant colours look like unwritten memory or an uncleared target sampled by a
-  full-screen scope pass. After-fix frame: `_run/s2/scope/scda_frame_2400.bmp`.
-- **Status:** open (band only).
+- **Symptom:** in Kinshasa scope view, the bottom ~20% of the screen turned flat cyan `(0,198,198)`, green over the
+  scope body, and the last 5 rows pink. (The purple lens was fixed earlier by the resolve-container fix.)
+- **Repro:** `SCDA_LAUNCH_DATA=C:/SCDA-Recomp/_run/maps/07_Kinshasa01.launch SCDA_AUTOPRESS=2150:X,2250:RS`
+  (X draws the rifle, R3 raises the scope), dump frame 2400.
+- **Cause:** the last post pass (PS `3a7a1a91e12b339a`) blends a 640x360 texture over the bottom of the screen with
+  alpha `a * 2 * (5y - 4)`. That texture is resolved from EDRAM base 0x1C0, which the title "clears" with two
+  D3D clear draws at the start of the frame. Both were lost:
+  1. The clears put z at -2^-28 with `PA_CL_CLIP_CNTL.CLIP_DISABLE` set; D3D11 depth-clipped them. The rasterizer now
+     honours bit 16 (`DepthClipEnable = !clip_disable`). This fixed the pink rows.
+  2. The second clear is depth-only (`RB_MODECONTROL` 5) through a 4x alias with depth at the colour base. On
+     Xenos the depth write replaces the colour tiles; our host depth target is separate, so the colour kept last
+     frame's mask (cyan background, green scope body, alpha 0.8). Such draws now also write colour 0
+     (`DepthOnlyOverwritesColor`).
+- **Evidence:** `_run/scope3/` (traces `t4.txt`..`t7.txt`, per-draw dumps `dd*/`, fixed frames `fix/`).
 
 ## Open feature. Extra Settings inside the game's own main menu
 

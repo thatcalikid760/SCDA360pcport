@@ -193,7 +193,8 @@ float4 Cas(float2 uv, float2 size)
 {
     float2 px = 1.0 / size;
     float3 a = Tap(uv + float2(-px.x, -px.y)).rgb, b = Tap(uv + float2(0, -px.y)).rgb, c = Tap(uv + float2(px.x, -px.y)).rgb;
-    float3 d = Tap(uv + float2(-px.x, 0)).rgb, e4 = Tap(uv), f = Tap(uv + float2(px.x, 0)).rgb;
+    float4 e4 = Tap(uv);
+    float3 d = Tap(uv + float2(-px.x, 0)).rgb, f = Tap(uv + float2(px.x, 0)).rgb;
     float3 g = Tap(uv + float2(-px.x, px.y)).rgb, h = Tap(uv + float2(0, px.y)).rgb, i = Tap(uv + px).rgb;
     float3 e = e4.rgb;
     float3 mn = min(min(min(d, e), min(f, b)), h);
@@ -809,6 +810,8 @@ void D3D11Renderer::UploadVertexMemory(const DrawCall& d, const Frame& frame)
 }
 
 // texSlots: texture fetch slots (bit n) the draw's shaders sample; only those are decoded and bound.
+bool D3D11Renderer::PostFxReady() const { return m_draw && m_draw->postPs; }
+
 const RegisterFile& D3D11Renderer::Registers() const
 {
     static const RegisterFile none;
@@ -835,6 +838,19 @@ void D3D11Renderer::ApplyRegisterWrites(const Frame& frame, size_t end)
         }
         r.stateDirty = true;
     }
+}
+
+// RB_MODECONTROL 5 (depth only) writing depth at its colour surface's EDRAM base: the title's D3D
+// clears depth through a 4x alias whose colour info names the same tiles. EDRAM holds both, so the
+// depth/stencil write replaces the colour there (Kinshasa scope: the scope mask's stale cyan showed
+// in a bottom-of-screen blend). Host depth is separate, so the colour target is written too.
+// shortcut: written as 0 (reversed-Z clear depth 0, stencil 0), not the actual depth/stencil bits.
+// SCDA_NO_DEPTH_COLOR_ALIAS=1 turns it off (A/B).
+static bool DepthOnlyOverwritesColor(const RegisterFile& regs)
+{
+    static const bool off = getenv("SCDA_NO_DEPTH_COLOR_ALIAS") != nullptr;
+    return !off && (regs[kRegRbModeControl] & 7) == 5 && (regs[0x2200] & 6) == 6 &&
+        (regs[kRegRbColorInfo] & 0xFFF) == (regs[kRegRbDepthInfo] & 0xFFF);
 }
 
 void D3D11Renderer::BindRegisterState(const RegisterFile& regs, uint32_t texSlots)
@@ -891,7 +907,15 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs, uint32_t texSlot
     }
 
     HostBlend b = DecodeBlend(regs);
-    if ((regs[kRegRbModeControl] & 7) == 5) // depth-only pass (Z prepass, occlusion queries)
+    const bool zeroColor = DepthOnlyOverwritesColor(regs);
+    if (zeroColor) // colour 0 whatever the PS returns
+    {
+        b.enable = true;
+        b.src = b.dst = b.srcAlpha = b.dstAlpha = D3D11_BLEND_ZERO;
+        b.op = b.opAlpha = D3D11_BLEND_OP_ADD;
+        b.writeMask = 0xF;
+    }
+    else if ((regs[kRegRbModeControl] & 7) == 5) // depth-only pass (Z prepass, occlusion queries)
         b.writeMask = 0;
     // SCDA_TRACE_BLEND=1: each RB_BLENDCONTROL0 per RT0 format and write mask once.
     static const bool traceBlend = getenv("SCDA_TRACE_BLEND") != nullptr;
@@ -899,7 +923,7 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs, uint32_t texSlot
     if (traceBlend && blendSeen.size() < 4000 &&
         blendSeen.insert((uint64_t(regs[0x2201]) << 12) | ((regs[kRegRbColorInfo] >> 16 & 0xF) << 4) | b.writeMask).second)
         RuntimeLog("[blend] frame %llu rt fmt %u blend %08X mask %X\n", m_presented, regs[kRegRbColorInfo] >> 16 & 0xF, regs[0x2201], b.writeMask);
-    auto& blend = r.blend[(uint64_t(regs[0x2201]) << 4) | b.writeMask];
+    auto& blend = r.blend[(uint64_t(regs[0x2201]) << 4) | b.writeMask | (uint64_t(zeroColor) << 36)];
     if (!blend)
     {
         D3D11_BLEND_DESC bd{};
@@ -916,15 +940,17 @@ void D3D11Renderer::BindRegisterState(const RegisterFile& regs, uint32_t texSlot
     }
     m_context->OMSetBlendState(blend.Get(), b.factor, 0xFFFFFFFF);
 
-    uint32_t cull = HostCullMode(regs), ccw = HostFrontCounterClockwise(regs);
-    auto& raster = r.raster[cull | (ccw << 4)];
+    // PA_CL_CLIP_CNTL bit 16 (CLIP_DISABLE): no 0 <= z <= w clip. The title's D3D clears draw at
+    // z = -2^-28 with clipping off (Kinshasa scope mask); clipped, they drew nothing.
+    uint32_t cull = HostCullMode(regs), ccw = HostFrontCounterClockwise(regs), noClip = (regs[0x2204] >> 16) & 1;
+    auto& raster = r.raster[cull | (ccw << 4) | (noClip << 5)];
     if (!raster)
     {
         D3D11_RASTERIZER_DESC rd{};
         rd.FillMode = D3D11_FILL_SOLID;
         rd.CullMode = D3D11_CULL_MODE(cull);
         rd.FrontCounterClockwise = ccw;
-        rd.DepthClipEnable = TRUE;
+        rd.DepthClipEnable = !noClip;
         m_device->CreateRasterizerState(&rd, &raster);
     }
     m_context->RSSetState(raster.Get());
@@ -1294,10 +1320,10 @@ void D3D11Renderer::ExecuteDraw(const DrawCall& d, const Frame& frame)
             if (count > 3)
                 used += " " + std::to_string(n);
         }
-        RuntimeLog("[rtrace] draw %u vs %016llx ps %016llx rt %08X/%08X mask %08X zctl %08X zinfo %08X vte %08X zs %08X zo %08X wo %08X sc %08X cc %08X aref %08X ib %08X n %u samples%s\n",
+        RuntimeLog("[rtrace] draw %u vs %016llx ps %016llx rt %08X/%08X mask %08X zctl %08X zinfo %08X vte %08X zs %08X zo %08X wo %08X sc %08X clip %08X cc %08X aref %08X ib %08X n %u samples%s\n",
             m_lastDrawn + m_lastSkipped, (unsigned long long)d.vs->hash, (unsigned long long)d.ps->hash, r.regs[kRegRbSurfaceInfo],
             r.regs[kRegRbColorInfo], r.regs[0x2104], r.regs[0x2200], r.regs[kRegRbDepthInfo], r.regs[0x2206], r.regs[0x2113],
-            r.regs[0x2114], r.regs[0x2080], r.regs[0x2205], r.regs[0x2202], r.regs[0x210E], d.indexBase, d.indexCount, used.c_str());
+            r.regs[0x2114], r.regs[0x2080], r.regs[0x2205], r.regs[0x2204], r.regs[0x2202], r.regs[0x210E], d.indexBase, d.indexCount, used.c_str());
         // SCDA_TRACE_PS=<ps hash hex>[,..]: draws with one of those PS also log PS c0-c7 and blend control.
         static const std::vector<uint64_t> tracePsList = []
         {
@@ -1542,7 +1568,7 @@ void D3D11Renderer::ExecuteDraw(const DrawCall& d, const Frame& frame)
     // PS left bound with another draw's texture) must not drop depth (Xenia xenos::ModeControl).
     // SCDA_DEPTH_ONLY_PS=1 runs it anyway (A/B).
     static const bool depthOnlyPs = getenv("SCDA_DEPTH_ONLY_PS") != nullptr;
-    const bool depthOnly = (r.regs[kRegRbModeControl] & 7) == 5 && !depthOnlyPs;
+    const bool depthOnly = (r.regs[kRegRbModeControl] & 7) == 5 && !depthOnlyPs && !DepthOnlyOverwritesColor(r.regs);
     m_context->PSSetShader(depthOnly ? nullptr : ps.Get(), nullptr, 0);
     m_context->GSSetShader(rectList ? r.rectListGs.Get() : nullptr, nullptr, 0);
     m_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY(topology));

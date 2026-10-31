@@ -18,6 +18,7 @@ TEST(d3d11_init_on_hidden_window)
         DestroyWindow(hwnd);
         return;
     }
+    CHECK(r.PostFxReady());
     Frame f;
     r.Present(f);
     r.Resize(640, 360);

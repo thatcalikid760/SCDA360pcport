@@ -35,6 +35,8 @@ public:
     // resolve (else the render target itself).
     uint32_t LastResolved() const { return m_lastResolved; }
     bool LastPresentedFrontbuffer() const { return m_lastFrontbuffer; }
+    // The post-processing shader (FXAA, sharpening, ...) compiled; without it the PostFx settings do nothing.
+    bool PostFxReady() const;
     // Writes the presented image (frontbuffer resolve, else the render target) as a 32-bit BMP
     // after the next frame (SCDA_DUMP_FRAME, tests).
     void DumpNextFrame(std::string path) { m_dumpPath = std::move(path); }
