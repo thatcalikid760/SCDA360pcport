@@ -158,9 +158,12 @@ static void RenderThread(DisplaySettings s)
         // SCDA_TRACE_FRAME=<n>: log every draw and resolve of the first frame >= n (renderer development).
         static const long long traceFrame = getenv("SCDA_TRACE_FRAME") ? atoll(getenv("SCDA_TRACE_FRAME")) : -1;
         // First frame at or after n: the renderer may drop frame n itself.
-        static bool traced = false;
-        const bool tracing = !traced && !frame.partial && traceFrame >= 0 && (long long)frame.stats.frame >= traceFrame;
-        traced |= tracing;
+        // Every Frame of that guest frame: its partial Frames hold most draws (each replays its log on
+        // the renderer's state after the previous Frame).
+        static long long tracedFrame = -1;
+        if (tracedFrame < 0 && traceFrame >= 0 && (long long)frame.stats.frame >= traceFrame)
+            tracedFrame = (long long)frame.stats.frame;
+        const bool tracing = tracedFrame >= 0 && (long long)frame.stats.frame == tracedFrame;
         if (tracing)
         {
             // Register state per draw: the renderer's (end of the last frame) plus this frame's log.

@@ -111,6 +111,9 @@ static void BumpEpoch() { Frames().SetEpoch(++g_epoch); }
 
 // IM_LOAD shaders by guest address: unchanged since the last load in the same epoch (the CPU
 // cannot have rewritten ucode the GPU may still read), else compared against the last bytes.
+// The epoch is the frame queue's: fences are written by the renderer (Frame::fences), and a title
+// that rewrites ucode after one must not get the old shader (CP-only epochs missed that: Scale 2
+// Intro showed stale tiles, the renderer being slower).
 struct LoadedShader
 {
     const ShaderBlob* blob;
@@ -124,13 +127,14 @@ static const ShaderBlob* LoadShader(ShaderType type, uint32_t guest, uint32_t dw
     const uint32_t* be = (const uint32_t*)GuestPtr(guest);
     auto [it, added] = g_loaded.try_emplace((uint64_t(dwords) << 32 | guest) * 2 + uint32_t(type), LoadedShader{});
     LoadedShader& l = it->second;
-    if (!added && (l.epoch == g_epoch || !memcmp(l.be.data(), be, dwords * 4ull)))
+    const uint64_t epoch = Frames().Epoch();
+    if (!added && (l.epoch == epoch || !memcmp(l.be.data(), be, dwords * 4ull)))
     {
-        l.epoch = g_epoch;
+        l.epoch = epoch;
         return l.blob;
     }
     l.blob = ShaderCacheInsert(type, be, dwords);
-    l.epoch = g_epoch;
+    l.epoch = epoch;
     l.be.assign(be, be + dwords);
     return l.blob;
 }
@@ -417,7 +421,13 @@ static bool ExecutePacket(uint32_t h, const Pm4Payload& p, int depth, CpStats& s
         // done. Written here at parse time (a GPU infinitely ahead) the Okhotsk precache read a
         // query behind a passed fence, retried, and crashed on a null shader set.
         const uint32_t value = (p(0) & 0x80000000u) ? Gpu().swapCounter.load() : p(2);
-        Frames().AddFence(GuestPhysical(p(1) & ~3u), GpuSwap(value, p(1)));
+        // SCDA_CP_FENCES=1: write fences here at parse time and never hand over partial frames
+        // (the pre-occlusion-fix behaviour; A/B for partial-frame side effects).
+        static const bool cpFences = getenv("SCDA_CP_FENCES") != nullptr; // =2: fences only, partial frames kept
+        if (cpFences)
+            GpuStore(p(1), value);
+        else
+            Frames().AddFence(GuestPhysical(p(1) & ~3u), GpuSwap(value, p(1)));
         st.fences++;
         return true;
     }

@@ -114,6 +114,12 @@ public:
         std::lock_guard lock(m_mutex);
         m_epoch = epoch;
     }
+    // The epoch now: CP writes and renderer writes (VisibleWrite) both change it.
+    uint64_t Epoch() const
+    {
+        std::lock_guard lock(m_mutex);
+        return m_epoch;
+    }
     // A CPU-visible write from the renderer thread (an occlusion result, a fence): done under the
     // queue lock together with an epoch the CP never issues. A snapshot either precedes the write
     // (the CPU cannot have reacted to it yet) or sees the new epoch and compares bytes again.
@@ -202,6 +208,9 @@ public:
     // the open frame writes); false when it holds nothing.
     bool FlushOpenNow()
     {
+        static const bool cpFences = getenv("SCDA_CP_FENCES") && atoi(getenv("SCDA_CP_FENCES")) != 2;
+        if (cpFences)
+            return false;
         std::lock_guard lock(m_mutex);
         if (m_open.draws.empty() && m_open.queries.empty() && m_open.resolves.empty() && m_open.fences.empty())
             return false;
@@ -218,6 +227,9 @@ public:
     // follows as the next Frame with the same number (its stats count the partial's draws too).
     bool FlushOpenIfWaiting()
     {
+        static const bool cpFences = getenv("SCDA_CP_FENCES") && atoi(getenv("SCDA_CP_FENCES")) != 2;
+        if (cpFences)
+            return false;
         std::lock_guard lock(m_mutex);
         const auto now = std::chrono::steady_clock::now();
         if (!m_done.empty() || !m_openSync || !m_cpIdle || now - m_lastActivity < std::chrono::milliseconds(2))
@@ -327,6 +339,9 @@ private:
     // writes and fences lead the next Frame (fences stay behind queries the renderer still runs).
     void Drop(Frame& f, Frame& next)
     {
+        static const bool traceFb = getenv("SCDA_TRACE_FB") != nullptr;
+        if (traceFb)
+            RuntimeLog("[fb] drop frame %llu%s (%zu resolves)\n", (unsigned long long)f.stats.frame, f.partial ? " partial" : "", f.resolves.size());
         FailQueries(f);
         next.regWrites.insert(next.regWrites.begin(), f.regWrites.begin(), f.regWrites.end());
         for (auto& d : next.draws)

@@ -1606,7 +1606,7 @@ void D3D11Renderer::ExecuteResolve(const Resolve& res)
                 {
                     char name[96];
                     snprintf(name, sizeof(name), "/p%llu_res_%02u_%08X_y%u.bmp", (unsigned long long)m_presented, m_lastResolved, base, dy);
-                    RuntimeLog("[resolve] dump #%u src fmt %u dest fmt %u\n", m_lastResolved, (res.colorInfo >> 16) & 0xF, (res.destInfo >> 7) & 0x3F);
+                    RuntimeLog("[resolve] dump #%u src fmt %u dest fmt %u host rect %d %d %d %d dy %u rect %d %d %d %d has %d\n", m_lastResolved, (res.colorInfo >> 16) & 0xF, (res.destInfo >> 7) & 0x3F, x0, y0, x1, y1, hostDy, res.rect[0], res.rect[1], res.rect[2], res.rect[3], int(res.hasRect));
                     Dump(std::string(dumpResolves) + name, dst.texture.Get());
                 }
             }
@@ -1737,7 +1737,15 @@ void D3D11Renderer::Present(const Frame& frame)
         for (size_t i = 0; i <= std::min(frame.draws.size(), drawLimit); i++)
         {
             for (; next < frame.resolves.size() && frame.resolves[next].drawIndex <= i; next++)
+            {
+                // SCDA_TRACE_FB=1: every 1280-wide fmt-6 resolve (frontbuffer tiles) with its Frame.
+                static const bool traceFb = getenv("SCDA_TRACE_FB") != nullptr;
+                if (traceFb && ResolveWidth(frame.resolves[next]) == 1280)
+                    RuntimeLog("[fb] present %llu frame %llu%s resolve dest %08X h %u draw %u/%zu\n", (unsigned long long)m_presented,
+                        (unsigned long long)frame.stats.frame, frame.partial ? " partial" : "", frame.resolves[next].destBase,
+                        ResolveHeight(frame.resolves[next]), frame.resolves[next].drawIndex, frame.draws.size());
                 ExecuteResolve(frame.resolves[next]);
+            }
             for (; nextQuery < frame.queries.size() && frame.queries[nextQuery].drawIndex <= i; nextQuery++)
                 ExecuteQuery(frame.queries[nextQuery]);
             for (; nextFence < frame.fences.size() && frame.fences[nextFence].drawIndex <= i; nextFence++)
