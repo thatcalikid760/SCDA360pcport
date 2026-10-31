@@ -28,6 +28,10 @@ uint32_t GuestTitleAllocatedBytes();
 
 void RuntimeLog(const char* fmt, ...);
 
+// The title has read the signed-in profile's settings (main menu, after the profile is picked):
+// the update notification waits for it.
+bool ProfileSignedIn();
+
 // Defines the host side of an imported guest function (name matches ppc_recomp_shared.h).
 // C++ linkage: generated code declares imports with PPC_EXTERN_FUNC. The body runs inside a
 // TitleImportScope (title.h): a title thread being stopped for a relaunch exits at entry.

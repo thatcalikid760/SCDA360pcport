@@ -15,6 +15,7 @@
 #include <gpu/shader_compiler.h>
 #include <host_window.h>
 #include <input.h>
+#include <overlay.h>
 #include <runtime.h>
 
 static std::atomic<HWND> g_hwnd;
@@ -42,6 +43,17 @@ static void HoldCursor(HWND hwnd, bool hold)
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
+    // F1 or L3+R3 (kOverlayToggleMessage) opens and closes the Extra Settings menu (Esc closes it too);
+    // while it is open the cursor is free and mouse/keyboard messages go to the menu, not the game.
+    if ((msg == WM_KEYDOWN && !(lp & (1 << 30)) && (wp == VK_F1 || (wp == VK_ESCAPE && OverlayOpen()))) || msg == kOverlayToggleMessage)
+    {
+        const bool open = OverlayToggle();
+        if (g_mouseLook)
+            HoldCursor(hwnd, !open && GetForegroundWindow() == hwnd);
+        return 0;
+    }
+    if (OverlayWndProc(hwnd, msg, wp, lp))
+        return 0;
     switch (msg)
     {
     case WM_SIZE:
@@ -56,7 +68,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     case WM_ACTIVATE:
         if (g_mouseLook)
-            HoldCursor(hwnd, LOWORD(wp) != WA_INACTIVE);
+            HoldCursor(hwnd, LOWORD(wp) != WA_INACTIVE && !OverlayOpen());
         break; // DefWindowProc gives the window keyboard focus
     case WM_INPUT:
     {
@@ -136,11 +148,12 @@ static void RenderThread(DisplaySettings s)
     GetClientRect(hwnd, &rc);
     D3D11Renderer renderer;
     renderer.SetCleanGoggles(s.cleanGoggles);
-    if (!renderer.Init(hwnd, rc.right, rc.bottom, s.vsync, s.scale, s.anisotropy))
+    if (!renderer.Init(hwnd, rc.right, rc.bottom, s.vsync, UpscalingScale(s.upscaling, uint32_t(rc.bottom), s.scale), s.anisotropy))
     {
         RuntimeLog("[window] no Direct3D 11 device\n");
         return;
     }
+    OverlayAttach(renderer, hwnd, s);
     Frame frame;
     DWORD lastTitle = 0;
     for (;;)
@@ -237,6 +250,10 @@ static void RenderThread(DisplaySettings s)
         if (dumping)
         {
             renderer.DumpNextFrame("scda_frame_" + std::to_string(frame.stats.frame) + ".bmp");
+            // SCDA_DUMP_BACKBUFFER=1: also the window image (post-processing, menu): scda_window_<n>.bmp.
+            static const bool backBuffer = getenv("SCDA_DUMP_BACKBUFFER") != nullptr;
+            if (backBuffer && !frame.partial)
+                renderer.DumpNextBackBuffer("scda_window_" + std::to_string(frame.stats.frame) + ".bmp");
             if (!frame.partial)
                 while (nextDump < dumpFrames.size() && dumpFrames[nextDump] <= frame.stats.frame)
                     nextDump++;

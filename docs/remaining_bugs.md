@@ -24,6 +24,13 @@ Evidence paths under `_run/` are local only (git-ignored).
   full-screen scope pass. After-fix frame: `_run/s2/scope/scda_frame_2400.bmp`.
 - **Status:** open (band only).
 
+## Open feature. Extra Settings inside the game's own main menu
+
+- **Wanted:** an "EXTRA SETTINGS" entry in the game's main menu that opens the same settings.
+- **Now:** the settings are the F1 / L3+R3 overlay; after sign-in the update notification names the shortcut.
+- **Needs:** reverse-engineering the title's UnrealScript menu pages (UE2.5 GUI in `game/System` packages) to add
+  an item and route its selection to the overlay. Not started.
+
 ## P2. Fog and light shafts differ slightly from the console
 
 - **Symptom:** small brightness differences in fog and light shafts (Iceland Osprey bay, Okhotsk ice-hole edge).

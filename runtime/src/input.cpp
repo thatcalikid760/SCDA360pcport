@@ -158,6 +158,10 @@ uint16_t AutoPressButtons(const std::vector<AutoPress>& script, uint32_t frame)
     return g.wButtons;
 }
 
+static std::atomic<bool> g_inputBlocked;
+void SetInputBlocked(bool blocked) { g_inputBlocked = blocked; }
+bool InputBlocked() { return g_inputBlocked; }
+
 static bool KeyDown(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
 
 static bool GameWindowFocused()
@@ -223,6 +227,8 @@ SCDA_IMPORT(XamInputGetState)
         if (mouse.mouseLook && wheel)
             g.wButtons |= wheel > 0 ? XINPUT_GAMEPAD_DPAD_UP : XINPUT_GAMEPAD_DPAD_DOWN;
     }
+    if (InputBlocked())
+        g = XINPUT_GAMEPAD{};
     AutoPressApply(script, uint32_t(Frames().FramesEnded()), g);
     // SCDA_TRACE_INPUT=1: every poll (frame, host thread, mouse delta, foreground, sticks/buttons).
     static const bool trace = getenv("SCDA_TRACE_INPUT") != nullptr;

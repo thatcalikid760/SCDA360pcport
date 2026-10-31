@@ -1,0 +1,1 @@
+Dear ImGui v1.91.9 (97428e8ac99e339ce05eee531cf55b77b29ea709), https://github.com/ocornut/imgui, MIT. Unmodified.

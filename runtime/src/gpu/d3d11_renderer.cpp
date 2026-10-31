@@ -63,6 +63,169 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target
 }
 )HLSL";
 
+// Post-processing passes (PostFx, F1 menu), one full-screen triangle each (kBlitVs):
+// mode 0 = scale (box filter down / bilinear up, as kBlitPs), 1 = Lanczos-2 upscale clamped to the
+// 2x2 texels around the tap (no ringing), 2 = FXAA (luma edge search, own implementation),
+// 3 = CAS sharpening (AMD FidelityFX CAS, MIT: per-channel adaptive 3x3 cross), 4 = copy.
+// ramp: apply the display gamma ramp (the last pass).
+static const char kPostPs[] = R"HLSL(
+Texture2D t : register(t0);
+Texture2D ramp : register(t1);
+SamplerState s : register(s0);
+cbuffer Post : register(b0) { int mode; int applyRamp; float sharpness; float pad; };
+float Ramp(float v, int channel)
+{
+    return ramp.SampleLevel(s, float2((saturate(v) * 255.0 + 0.5) / 256.0, 0.5), 0)[channel];
+}
+float Luma(float3 c) { return dot(c, float3(0.299, 0.587, 0.114)); }
+float4 Tap(float2 uv) { return t.SampleLevel(s, uv, 0); }
+float4 Box(float2 uv, float2 size, float2 duv)
+{
+    float2 texels = duv * size;
+    int2 n = clamp(int2(ceil(texels - 0.01)), 1, 4);
+    float2 last = n > 1 ? (size - 1.5) / size : 1.0;
+    float4 sum = 0;
+    for (int y = 0; y < n.y; y++)
+        for (int x = 0; x < n.x; x++)
+            sum += Tap(min(uv + ((float2(x, y) + 0.5) / float2(n) - 0.5) * texels / size, last));
+    return sum / float(n.x * n.y);
+}
+float Lanczos2(float x)
+{
+    x = abs(x);
+    if (x < 1e-4)
+        return 1.0;
+    if (x >= 2.0)
+        return 0.0;
+    float px = 3.14159265 * x;
+    return 2.0 * sin(px) * sin(px * 0.5) / (px * px);
+}
+float4 Lanczos(float2 uv, float2 size)
+{
+    float2 p = uv * size - 0.5;
+    float2 f = frac(p);
+    float2 base = floor(p) + 0.5;
+    float4 sum = 0;
+    float wsum = 0;
+    for (int y = -1; y <= 2; y++)
+    {
+        float wy = Lanczos2(float(y) - f.y);
+        for (int x = -1; x <= 2; x++)
+        {
+            float w = Lanczos2(float(x) - f.x) * wy;
+            sum += Tap((base + float2(x, y)) / size) * w;
+            wsum += w;
+        }
+    }
+    float4 c = sum / wsum;
+    float4 a = Tap(base / size), b = Tap((base + float2(1, 0)) / size), d = Tap((base + float2(0, 1)) / size), e = Tap((base + 1.0) / size);
+    return clamp(c, min(min(a, b), min(d, e)), max(max(a, b), max(d, e)));
+}
+float4 Fxaa(float2 uv, float2 size)
+{
+    float2 px = 1.0 / size;
+    float4 m = Tap(uv);
+    float lM = Luma(m.rgb);
+    float lN = Luma(Tap(uv + float2(0, -px.y)).rgb), lS = Luma(Tap(uv + float2(0, px.y)).rgb);
+    float lW = Luma(Tap(uv + float2(-px.x, 0)).rgb), lE = Luma(Tap(uv + float2(px.x, 0)).rgb);
+    float lMax = max(lM, max(max(lN, lS), max(lW, lE))), lMin = min(lM, min(min(lN, lS), min(lW, lE)));
+    float range = lMax - lMin;
+    if (range < max(0.0312, lMax * 0.125))
+        return m;
+    float lNW = Luma(Tap(uv - px).rgb), lSE = Luma(Tap(uv + px).rgb);
+    float lNE = Luma(Tap(uv + float2(px.x, -px.y)).rgb), lSW = Luma(Tap(uv + float2(-px.x, px.y)).rgb);
+    // Sub-pixel blend: how much the centre differs from its neighbourhood average.
+    float avg = (2.0 * (lN + lS + lW + lE) + lNW + lNE + lSW + lSE) / 12.0;
+    float sub = saturate(abs(avg - lM) / range);
+    sub = sub * sub * (3.0 - 2.0 * sub);
+    sub = sub * sub * 0.75;
+    // Edge direction: horizontal when the vertical second differences dominate.
+    float edgeH = abs(lNW - 2.0 * lW + lSW) + 2.0 * abs(lN - 2.0 * lM + lS) + abs(lNE - 2.0 * lE + lSE);
+    float edgeV = abs(lNW - 2.0 * lN + lNE) + 2.0 * abs(lW - 2.0 * lM + lE) + abs(lSW - 2.0 * lS + lSE);
+    bool horizontal = edgeH >= edgeV;
+    float l1 = horizontal ? lN : lW, l2 = horizontal ? lS : lE;
+    float g1 = abs(l1 - lM), g2 = abs(l2 - lM);
+    float stepLen = horizontal ? px.y : px.x;
+    float lEdge;
+    if (g1 >= g2)
+    {
+        stepLen = -stepLen;
+        lEdge = 0.5 * (l1 + lM);
+    }
+    else
+        lEdge = 0.5 * (l2 + lM);
+    float gradient = 0.25 * max(g1, g2);
+    float2 edgeUv = uv + (horizontal ? float2(0, stepLen * 0.5) : float2(stepLen * 0.5, 0));
+    float2 dir = horizontal ? float2(px.x, 0) : float2(0, px.y);
+    // Walk both ways along the edge until the luma leaves it.
+    static const float steps[10] = { 1.0, 1.0, 1.0, 1.5, 2.0, 2.0, 2.0, 2.0, 4.0, 8.0 };
+    float2 uvP = edgeUv + dir, uvN = edgeUv - dir;
+    float dP = Luma(Tap(uvP).rgb) - lEdge, dN = Luma(Tap(uvN).rgb) - lEdge;
+    bool doneP = abs(dP) >= gradient, doneN = abs(dN) >= gradient;
+    [unroll] for (int i = 0; i < 10 && !(doneP && doneN); i++)
+    {
+        if (!doneP)
+        {
+            uvP += dir * steps[i];
+            dP = Luma(Tap(uvP).rgb) - lEdge;
+            doneP = abs(dP) >= gradient;
+        }
+        if (!doneN)
+        {
+            uvN -= dir * steps[i];
+            dN = Luma(Tap(uvN).rgb) - lEdge;
+            doneN = abs(dN) >= gradient;
+        }
+    }
+    float distP = horizontal ? uvP.x - uv.x : uvP.y - uv.y;
+    float distN = horizontal ? uv.x - uvN.x : uv.y - uvN.y;
+    bool nearP = distP < distN;
+    float dist = min(distP, distN);
+    // Blend only when the nearer end's luma crosses the edge the opposite way to the centre.
+    bool centreBelow = lM - lEdge < 0.0;
+    bool good = ((nearP ? dP : dN) < 0.0) != centreBelow;
+    float edgeOffset = good ? 0.5 - dist / (distP + distN) : 0.0;
+    float offset = max(edgeOffset, sub);
+    float2 o = horizontal ? float2(0, offset * stepLen) : float2(offset * stepLen, 0);
+    return Tap(uv + o);
+}
+float4 Cas(float2 uv, float2 size)
+{
+    float2 px = 1.0 / size;
+    float3 a = Tap(uv + float2(-px.x, -px.y)).rgb, b = Tap(uv + float2(0, -px.y)).rgb, c = Tap(uv + float2(px.x, -px.y)).rgb;
+    float3 d = Tap(uv + float2(-px.x, 0)).rgb, e4 = Tap(uv), f = Tap(uv + float2(px.x, 0)).rgb;
+    float3 g = Tap(uv + float2(-px.x, px.y)).rgb, h = Tap(uv + float2(0, px.y)).rgb, i = Tap(uv + px).rgb;
+    float3 e = e4.rgb;
+    float3 mn = min(min(min(d, e), min(f, b)), h);
+    mn += min(mn, min(min(a, c), min(g, i)));
+    float3 mx = max(max(max(d, e), max(f, b)), h);
+    mx += max(mx, max(max(a, c), max(g, i)));
+    float3 amp = sqrt(saturate(min(mn, 2.0 - mx) / max(mx, 1e-5)));
+    float3 w = amp * (-1.0 / lerp(8.0, 5.0, sharpness));
+    return float4(saturate((b * w + d * w + f * w + h * w + e) / (1.0 + 4.0 * w)), e4.a);
+}
+float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target
+{
+    float2 size;
+    t.GetDimensions(size.x, size.y);
+    float2 duv = float2(ddx(uv.x), ddy(uv.y));
+    float4 c;
+    [branch] if (mode == 0)
+        c = Box(uv, size, duv);
+    else if (mode == 1)
+        c = Lanczos(uv, size);
+    else if (mode == 2)
+        c = Fxaa(uv, size);
+    else if (mode == 3)
+        c = Cas(uv, size);
+    else
+        c = Tap(uv);
+    if (applyRamp)
+        c.rgb = float3(Ramp(c.r, 0), Ramp(c.g, 1), Ramp(c.b, 2));
+    return c;
+}
+)HLSL";
+
 // Resolve copy: rect = destination host texels (x0 y0 x1 y1), written dy rows down; each reads the
 // samples.x x samples.y source texels of its guest pixel (MSAA supersampling), averaged (flags
 // bit 0, copy_sample_select 4+) or sample 0. flags bit 1: fixed-point destination format, so
@@ -144,6 +307,16 @@ struct DrawResources
     SurfaceLayout lastLayout{ 1280, 1, 1, 1280, 1280 }; // surface layout `last` was bound with
     ComPtr<ID3D11VertexShader> blitVs;
     ComPtr<ID3D11PixelShader> blitPs;
+    // PostFx (kPostPs): its constants and two intermediate targets, (re)made at the size a pass needs.
+    ComPtr<ID3D11PixelShader> postPs;
+    ComPtr<ID3D11Buffer> postConstants;
+    struct PostTarget
+    {
+        ComPtr<ID3D11Texture2D> texture;
+        ComPtr<ID3D11ShaderResourceView> srv;
+        ComPtr<ID3D11RenderTargetView> rtv;
+        uint32_t width = 0, height = 0;
+    } post[2];
     ComPtr<ID3D11Texture2D> gammaRamp; // 256x1 R10G10B10A2, display gamma ramp
     // CleanGoggles: 1x1 average of a noise texture, by physical address | format << 32.
     std::unordered_map<uint64_t, ComPtr<ID3D11ShaderResourceView>> averageTextures;
@@ -324,6 +497,17 @@ bool D3D11Renderer::CreateDrawResources()
     {
         printf("[d3d11] blit shader: %s\n", error.c_str());
         return false;
+    }
+    {
+        // Optional: without it the PostFx settings do nothing (plain blit).
+        auto post = CompileHlsl(kPostPs, true, &error);
+        D3D11_BUFFER_DESC bd{ 16, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER };
+        if (post.empty() || FAILED(m_device->CreatePixelShader(post.data(), post.size(), nullptr, &r->postPs)) ||
+            FAILED(m_device->CreateBuffer(&bd, nullptr, &r->postConstants)))
+        {
+            printf("[d3d11] post shader: %s\n", error.c_str());
+            r->postPs.Reset();
+        }
     }
     {
         D3D11_TEXTURE2D_DESC gd{};
@@ -1727,6 +1911,22 @@ void D3D11Renderer::ExecuteResolve(const Resolve& res)
 void D3D11Renderer::Blit(ID3D11ShaderResourceView* source)
 {
     DrawResources& r = *m_draw;
+    // SCDA_NO_GAMMA_RAMP=1: identity ramp (A/B against the title's display gamma ramp).
+    static const bool noRamp = getenv("SCDA_NO_GAMMA_RAMP") != nullptr;
+    const uint32_t version = noRamp ? 0 : DisplayGammaRamp().version.load();
+    if (version != r.gammaRampVersion)
+    {
+        r.gammaRampVersion = version;
+        std::array<uint32_t, 256> entries = noRamp ? GammaRamp().entries : DisplayGammaRamp().Copy();
+        for (auto& e : entries)
+            e |= 3u << 30;
+        m_context->UpdateSubresource(r.gammaRamp.Get(), 0, nullptr, entries.data(), sizeof(entries), 0);
+    }
+    if (r.postPs && (m_postFx.fxaa || m_postFx.upscale || m_postFx.sharpness > 0.0f))
+    {
+        BlitPost(source);
+        return;
+    }
     ID3D11ShaderResourceView* none = nullptr;
     m_context->PSSetShaderResources(0, 1, &none);
     m_context->OMSetRenderTargets(1, &m_backBuffer, nullptr);
@@ -1739,17 +1939,6 @@ void D3D11Renderer::Blit(ID3D11ShaderResourceView* source)
     m_context->VSSetShader(r.blitVs.Get(), nullptr, 0);
     m_context->GSSetShader(nullptr, nullptr, 0);
     m_context->PSSetShader(r.blitPs.Get(), nullptr, 0);
-    // SCDA_NO_GAMMA_RAMP=1: identity ramp (A/B against the title's display gamma ramp).
-    static const bool noRamp = getenv("SCDA_NO_GAMMA_RAMP") != nullptr;
-    const uint32_t version = noRamp ? 0 : DisplayGammaRamp().version.load();
-    if (version != r.gammaRampVersion)
-    {
-        r.gammaRampVersion = version;
-        std::array<uint32_t, 256> entries = noRamp ? GammaRamp().entries : DisplayGammaRamp().Copy();
-        for (auto& e : entries)
-            e |= 3u << 30;
-        m_context->UpdateSubresource(r.gammaRamp.Get(), 0, nullptr, entries.data(), sizeof(entries), 0);
-    }
     ID3D11ShaderResourceView* srvs[2] = { source, r.gammaRampSrv.Get() };
     m_context->PSSetShaderResources(0, 2, srvs);
     ID3D11SamplerState* s = r.sampler.Get();
@@ -1757,6 +1946,144 @@ void D3D11Renderer::Blit(ID3D11ShaderResourceView* source)
     m_context->Draw(3, 0);
     ID3D11ShaderResourceView* nones[2] = {};
     m_context->PSSetShaderResources(0, 2, nones);
+}
+
+// One kPostPs pass of source into target (width x height).
+void D3D11Renderer::PostPass(ID3D11ShaderResourceView* source, ID3D11RenderTargetView* target, uint32_t width, uint32_t height, int mode, bool ramp)
+{
+    DrawResources& r = *m_draw;
+    ID3D11ShaderResourceView* nones[2] = {};
+    m_context->PSSetShaderResources(0, 2, nones);
+    m_context->OMSetRenderTargets(1, &target, nullptr);
+    r.bound = false;
+    D3D11_VIEWPORT vp{ 0, 0, float(width), float(height), 0, 1 };
+    m_context->RSSetViewports(1, &vp);
+    m_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    m_context->IASetInputLayout(nullptr);
+    m_context->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);
+    m_context->OMSetDepthStencilState(nullptr, 0);
+    m_context->RSSetState(r.rasterizer.Get());
+    m_context->VSSetShader(r.blitVs.Get(), nullptr, 0);
+    m_context->GSSetShader(nullptr, nullptr, 0);
+    m_context->PSSetShader(r.postPs.Get(), nullptr, 0);
+    const struct { int32_t mode, ramp; float sharpness, pad; } constants{ mode, ramp ? 1 : 0, std::clamp(m_postFx.sharpness, 0.0f, 1.0f), 0.0f };
+    m_context->UpdateSubresource(r.postConstants.Get(), 0, nullptr, &constants, 0, 0);
+    m_context->PSSetConstantBuffers(0, 1, r.postConstants.GetAddressOf());
+    ID3D11ShaderResourceView* srvs[2] = { source, r.gammaRampSrv.Get() };
+    m_context->PSSetShaderResources(0, 2, srvs);
+    ID3D11SamplerState* s = r.sampler.Get();
+    m_context->PSSetSamplers(0, 1, &s);
+    m_context->Draw(3, 0);
+    m_context->PSSetShaderResources(0, 2, nones);
+    // The draws bind their own constant buffers per frame (Present), slot 0 included.
+}
+
+// FXAA at the source size, then scaling to the window (box filter down, Lanczos up when enabled,
+// else bilinear), then CAS + gamma ramp into the back buffer. Each pass after the first reads the
+// previous one's intermediate target (FP16, so the ramp still sees the unclamped values).
+void D3D11Renderer::BlitPost(ID3D11ShaderResourceView* source)
+{
+    DrawResources& r = *m_draw;
+    auto target = [&](int i, uint32_t w, uint32_t h) -> DrawResources::PostTarget&
+    {
+        auto& t = r.post[i];
+        if (t.width != w || t.height != h || !t.rtv)
+        {
+            t = {};
+            D3D11_TEXTURE2D_DESC td{};
+            td.Width = w;
+            td.Height = h;
+            td.MipLevels = td.ArraySize = 1;
+            td.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+            td.SampleDesc.Count = 1;
+            td.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+            if (SUCCEEDED(m_device->CreateTexture2D(&td, nullptr, &t.texture)) &&
+                SUCCEEDED(m_device->CreateShaderResourceView(t.texture.Get(), nullptr, &t.srv)) &&
+                SUCCEEDED(m_device->CreateRenderTargetView(t.texture.Get(), nullptr, &t.rtv)))
+                t.width = w, t.height = h;
+            else
+                t = {};
+        }
+        return t;
+    };
+    ComPtr<ID3D11Resource> res;
+    source->GetResource(&res);
+    D3D11_TEXTURE2D_DESC sd{};
+    if (ComPtr<ID3D11Texture2D> tex; SUCCEEDED(res.As(&tex)))
+        tex->GetDesc(&sd);
+    ID3D11ShaderResourceView* cur = source;
+    if (m_postFx.fxaa && sd.Width && sd.Height)
+        if (auto& t = target(0, sd.Width, sd.Height); t.rtv)
+        {
+            PostPass(cur, t.rtv.Get(), t.width, t.height, 2, false);
+            cur = t.srv.Get();
+        }
+    const int scaleMode = m_postFx.upscale && sd.Width && sd.Width < m_width ? 1 : 0;
+    if (m_postFx.sharpness > 0.0f)
+        if (auto& t = target(1, m_width, m_height); t.rtv)
+        {
+            PostPass(cur, t.rtv.Get(), m_width, m_height, scaleMode, false);
+            PostPass(t.srv.Get(), m_backBuffer, m_width, m_height, 3, true);
+            return;
+        }
+    PostPass(cur, m_backBuffer, m_width, m_height, scaleMode, true);
+}
+
+void D3D11Renderer::SetAnisotropy(uint32_t anisotropy)
+{
+    m_anisotropy = std::clamp<uint32_t>(anisotropy, 1, 16);
+    if (m_draw)
+        m_draw->anisotropy = m_anisotropy; // the sampler cache key holds the level
+}
+
+// A new internal resolution between guest frames: every resolve copy is stretched into a texture of
+// the new size (render-to-texture results made once, e.g. at load, survive); EDRAM targets are made
+// again at the new size by the next bind (the title clears or redraws them each frame).
+void D3D11Renderer::ApplyScale(uint32_t scale)
+{
+    DrawResources& r = *m_draw;
+    scale = std::clamp<uint32_t>(scale, 1, 4);
+    if (scale == r.scale)
+        return;
+    m_context->OMSetRenderTargets(0, nullptr, nullptr);
+    for (auto it = r.resolved.begin(); it != r.resolved.end();)
+    {
+        auto& old = it->second;
+        D3D11_TEXTURE2D_DESC td{};
+        old.texture->GetDesc(&td);
+        td.Width = old.width * scale;
+        td.Height = old.height * scale;
+        UINT support = 0;
+        const bool rtv = SUCCEEDED(m_device->CheckFormatSupport(td.Format, &support)) && (support & D3D11_FORMAT_SUPPORT_RENDER_TARGET);
+        td.BindFlags |= rtv ? D3D11_BIND_RENDER_TARGET : 0;
+        ComPtr<ID3D11Texture2D> tex;
+        ComPtr<ID3D11ShaderResourceView> srv;
+        ComPtr<ID3D11UnorderedAccessView> uav;
+        ComPtr<ID3D11RenderTargetView> view;
+        if (!rtv || !r.postPs || FAILED(m_device->CreateTexture2D(&td, nullptr, &tex)) ||
+            FAILED(m_device->CreateShaderResourceView(tex.Get(), nullptr, &srv)) ||
+            ((td.BindFlags & D3D11_BIND_UNORDERED_ACCESS) && FAILED(m_device->CreateUnorderedAccessView(tex.Get(), nullptr, &uav))) ||
+            FAILED(m_device->CreateRenderTargetView(tex.Get(), nullptr, &view)))
+        {
+            it = r.resolved.erase(it); // the next resolve to this base makes it again
+            continue;
+        }
+        PostPass(old.srv.Get(), view.Get(), td.Width, td.Height, 4, false);
+        old.texture = tex;
+        old.srv = srv;
+        old.uav = uav;
+        old.crops.clear();
+        old.version++;
+        ++it;
+    }
+    m_context->OMSetRenderTargets(0, nullptr, nullptr);
+    r.colorTargets.clear();
+    r.depthTargets.clear();
+    r.last = nullptr;
+    r.bound = false;
+    r.stateDirty = true;
+    r.scale = m_scale = scale;
+    RuntimeLog("[d3d11] internal resolution %ux%u (scale %u)\n", kTargetWidth * m_scale, 720 * m_scale, m_scale);
 }
 
 static std::vector<uint32_t> ReadTarget(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Texture2D* target);
@@ -1767,7 +2094,7 @@ void D3D11Renderer::Present(const Frame& frame)
     if (!m_backBuffer)
     {
         ReleaseAll();
-        if (!m_hwnd || !Init(m_hwnd, m_width, m_height, m_vsync))
+        if (!m_hwnd || !Init(m_hwnd, m_width, m_height, m_vsync, m_scale, m_anisotropy))
             return;
     }
     // Counters cover the whole guest frame: its partial Frames plus the rest.
@@ -1812,6 +2139,13 @@ void D3D11Renderer::Present(const Frame& frame)
             r.pendingQueries.clear();
             r.pendingFences.clear();
         }
+        // A new internal resolution (F1 menu) starts with a guest frame, never between its partials.
+        if (const uint32_t scale = m_pendingScale; scale && !m_midGuestFrame)
+        {
+            m_pendingScale = 0;
+            ApplyScale(scale);
+        }
+        m_midGuestFrame = frame.partial;
         // EDRAM surfaces persist across frames; only guest clears (resolves) clear them.
         r.bound = false; // the first bind sets the targets and their viewport
         m_context->RSSetState(r.rasterizer.Get());
@@ -1986,6 +2320,21 @@ void D3D11Renderer::Present(const Frame& frame)
             m_context->OMSetRenderTargets(1, &m_backBuffer, nullptr);
             m_context->ClearRenderTargetView(m_backBuffer, idle);
         }
+    }
+    if (m_overlay && m_backBuffer)
+    {
+        m_context->OMSetRenderTargets(1, &m_backBuffer, nullptr);
+        if (m_draw)
+            m_draw->bound = false;
+        m_overlay();
+    }
+    if (!m_backDumpPath.empty() && m_backBuffer)
+    {
+        ComPtr<ID3D11Resource> res;
+        m_backBuffer->GetResource(&res);
+        if (ComPtr<ID3D11Texture2D> tex; SUCCEEDED(res.As(&tex)))
+            Dump(m_backDumpPath, tex.Get());
+        m_backDumpPath.clear();
     }
     HRESULT hr = m_swapChain->Present(m_vsync ? 1 : 0, 0);
     if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)

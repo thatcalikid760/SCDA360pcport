@@ -20,6 +20,10 @@ void MouseAccumulate(int dx, int dy, int wheel);
 void MouseTake(int& dx, int& dy, int& wheel);
 void MouseToStick(int dx, int dy, float sensitivity, bool invertY, int16_t& rx, int16_t& ry);
 
+// The F1 menu is open: the title sees an idle pad (no pad, keyboard or mouse input reaches it).
+void SetInputBlocked(bool blocked);
+bool InputBlocked();
+
 // A pad stick at rest inside the XInput deadzone (pads never rest at exactly 0): keyboard and mouse
 // may drive that stick instead.
 bool StickIdle(int16_t x, int16_t y, int deadzone);

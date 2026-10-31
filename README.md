@@ -135,6 +135,17 @@ Planned next, roughly in order:
    SHA-256, extracts the game files to `<dir>\game` and prepares the flat image.
 3. Run `scda.exe` from the install folder.
 
+Press **F1** (or **L3+R3** on a controller) in game for the **Extra Settings** menu. It has three tabs:
+
+- **Display:** window mode, VSync, internal resolution, anisotropic filtering, clean goggles.
+- **Graphics:** Low / Medium / High / Ultra presets, anti-aliasing (FXAA; the game's own 4x MSAA is always on),
+  image sharpening (0-100%, AMD CAS), and upscaling (Native, Quality, Balanced, Performance, Ultra Performance:
+  picks the internal resolution from the window size, Lanczos upscale).
+- **Update:** your version, the latest GitHub release, and a link to the releases page. After you sign in at the
+  main menu, a notification in the top right says whether an update is out.
+
+Changes apply at once and are saved. The menu never opens by itself; Esc closes it.
+
 Settings live in `%LOCALAPPDATA%\SCDARecomp\settings.ini`:
 
 ```ini
@@ -144,6 +155,9 @@ Anisotropy=16
 Mode=borderless
 VSync=1
 CleanGoggles=0
+AntiAliasing=Off
+Sharpening=0
+Upscaling=Off
 [Input]
 MouseLook=1
 MouseSensitivity=1.0

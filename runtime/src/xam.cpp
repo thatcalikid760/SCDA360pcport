@@ -3,6 +3,7 @@
 // their items; any other enumeration returns none.
 #include <windows.h>
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <deque>
@@ -212,8 +213,13 @@ static void StoreSetting(uint32_t id, const std::vector<uint8_t>& data)
 // A written setting has source 2 (title) and its stored value. An unwritten one has source 0 and a
 // zeroed value, like Xenia: a string or blob gets size 0 and no pointer, so the title fills its own
 // default (sub_8279B678: a zeroed 1000-byte TITLE_SPECIFIC blob, which saving needs).
+static std::atomic<bool> g_profileRead;
+bool ProfileSignedIn() { return g_profileRead; }
+
 SCDA_IMPORT(XamUserReadProfileSettings)
 {
+    if (!g_profileRead.exchange(true))
+        RuntimeLog("[xam] profile settings read: signed in\n");
     constexpr uint32_t kErrorInsufficientBuffer = 122, kErrorInvalidParameter = 0x57;
     const uint32_t user = ctx.r4.u32, xuidCount = ctx.r5.u32, xuids = ctx.r6.u32, count = ctx.r7.u32, ids = ctx.r8.u32;
     const uint32_t pSize = ctx.r9.u32, buffer = ctx.r10.u32, ov = GuestLoad32(ctx.r1.u32 + 0x54);
