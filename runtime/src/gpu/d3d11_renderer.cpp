@@ -444,6 +444,9 @@ static bool TraceResolveFrame(uint64_t presented)
     return frame >= 0 && (n == frame || (period && n > frame && (n - frame) % period == 0));
 }
 
+// SCDA_DUMP_DRAWS file numbering: draws of this guest frame's earlier partial Frames.
+static size_t g_frameDrawBase = 0;
+
 static const uint8_t* PhysicalPtr(uint32_t physical) { return (const uint8_t*)GuestPtr(GuestPhysical(physical)); }
 
 static uint32_t ToUnorm8(float v) { return uint32_t(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); }
@@ -1762,7 +1765,10 @@ void D3D11Renderer::Present(const Frame& frame)
     // (A partial whose rest was dropped starts a new count: the next Frame has another number.)
     static uint64_t countedFrame = ~0ull;
     if (frame.stats.frame != countedFrame)
+    {
         m_lastDrawn = m_lastSkipped = m_lastResolved = 0;
+        g_frameDrawBase = 0;
+    }
     countedFrame = frame.stats.frame;
     m_lastFrontbuffer = false;
     static const bool traceDumped = getenv("SCDA_TRACE_DUMPED") != nullptr;
@@ -1847,10 +1853,10 @@ void D3D11Renderer::Present(const Frame& frame)
                 return true;
             }();
             (void)parsed;
-            if (dumpDraws && !m_dumpPath.empty() && r.last && i % step == 0 && i >= first && i <= last)
+            if (dumpDraws && !m_dumpPath.empty() && r.last && (g_frameDrawBase + i) % step == 0 && g_frameDrawBase + i >= first && g_frameDrawBase + i <= last)
             {
                 char name[96];
-                snprintf(name, sizeof(name), "/p%llu_draw_%04zu.bmp", (unsigned long long)m_presented, i);
+                snprintf(name, sizeof(name), "/p%llu_d%05zu.bmp", (unsigned long long)m_presented, g_frameDrawBase + i); // guest-frame draw number (partials continue it)
                 Dump(std::string(dumpDraws, strcspn(dumpDraws, ",")) + name, r.last->texture.Get());
                 // SCDA_DUMP_DEPTH=1: also the bound depth target (z_<n>.bmp, see TexelToRgba8).
                 static const bool dumpDepth = getenv("SCDA_DUMP_DEPTH") != nullptr;
@@ -1862,7 +1868,7 @@ void D3D11Renderer::Present(const Frame& frame)
                     z->second->GetResource(&res);
                     if (SUCCEEDED(res.As(&tex)))
                     {
-                        snprintf(name, sizeof(name), "/p%llu_z_%04zu.bmp", (unsigned long long)m_presented, i);
+                        snprintf(name, sizeof(name), "/p%llu_z%05zu.bmp", (unsigned long long)m_presented, g_frameDrawBase + i);
                         Dump(std::string(dumpDraws, strcspn(dumpDraws, ",")) + name, tex.Get());
                     }
                 }
@@ -1879,6 +1885,7 @@ void D3D11Renderer::Present(const Frame& frame)
         r.uploaded.clear();
         if (frame.partial) // the guest frame continues in the next Frame: no present
         {
+            g_frameDrawBase += frame.draws.size();
             m_context->Flush(); // the title waits for the host queries ended above
             return;
         }
