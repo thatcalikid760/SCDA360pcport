@@ -227,13 +227,17 @@ static void RenderThread(DisplaySettings s)
             return v;
         }();
         static size_t nextDump = 0;
-        bool dumping = !frame.partial && nextDump < dumpFrames.size() && frame.stats.frame >= dumpFrames[nextDump];
+        // Partial Frames of the dumped guest frame arm the dump too (their resolves and draws feed
+        // SCDA_DUMP_RESOLVES / SCDA_DUMP_DRAWS); the image is written by the rest of the frame.
+        bool dumping = nextDump < dumpFrames.size() && frame.stats.frame >= dumpFrames[nextDump];
         if (dumping)
         {
             renderer.DumpNextFrame("scda_frame_" + std::to_string(frame.stats.frame) + ".bmp");
-            while (nextDump < dumpFrames.size() && dumpFrames[nextDump] <= frame.stats.frame)
-                nextDump++;
+            if (!frame.partial)
+                while (nextDump < dumpFrames.size() && dumpFrames[nextDump] <= frame.stats.frame)
+                    nextDump++;
         }
+        dumping &= !frame.partial;
         renderer.Present(frame);
         if (frame.partial)
             continue;
