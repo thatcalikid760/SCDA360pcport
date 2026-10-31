@@ -6,16 +6,17 @@
 
 **A native Windows port of *Splinter Cell: Double Agent* (Xbox 360), built by static recompilation.**
 
-![status](https://img.shields.io/badge/status-work%20in%20progress-orange)
+![status](https://img.shields.io/badge/status-nearing%20first%20release-yellowgreen)
 ![platform](https://img.shields.io/badge/platform-Windows%20x64-blue)
 ![renderer](https://img.shields.io/badge/renderer-Direct3D%2011-informational)
 ![license](https://img.shields.io/badge/license-GPL--3.0-green)
 
 </div>
 
-> [!WARNING]
-> **This is a work in progress.** Every map loads, and you can play and save in it, but there are rendering glitches.
-> Some systems are still stubbed. Expect bugs, and don't expect a finished game yet.
+> [!NOTE]
+> **We're close to a first release.** Every map loads, plays and saves at the game's 30 fps cap, missions chain into
+> each other, and the big rendering bugs are fixed. What's left is polish, a full campaign playthrough by hand and a
+> prebuilt installer. Until then, expect some small glitches and build from source.
 
 ---
 
@@ -31,6 +32,19 @@ stands in for the console:
 
 ## Recent progress
 
+- **Display gamma matches the console.** The game uploads its own gamma ramp to the GPU at boot, which deepens the
+  shadows. The port now applies it at present, so night scenes and interiors are as dark as on the Xbox 360.
+- **Real 4x MSAA and no more glow streaks.** Multisampled surfaces are now emulated the way the Xenos GPU lays them
+  out. This removed the yellow and orange glow streaks in Jail and Iceland, and gives the scene real 4x anti-aliasing.
+- **Sea of Okhotsk fixed.** The screen no longer goes black under water or white when looking up at the ice. The
+  bloom shaders' 3D texture fetches now read the right texture.
+- **Sun shadows fixed.** Samplers now honour the game's border colour, so areas outside the sun's shadow map count
+  as lit. The long dark wedges and smeared wall and floor textures in Kinshasa are gone.
+- **Real occlusion queries.** The game's GPU visibility tests now return real results. Meshes no longer vanish in
+  alternating frames when the GPU is busy.
+- **New York at full speed.** `10_newyork_02` now holds the 30 fps cap too, so every map runs at full speed.
+- **Clean goggles option.** `CleanGoggles=1` shows night, thermal and EMF vision without the scanlines and noise.
+- **Seamless music loops** and real implementations for the last placeholder kernel calls.
 - **Missions end for real.** The game's own mission-ending script now runs end to end. 01_Intro shows MISSION
   COMPLETE, saves campaign progress to the profile, plays the Iceland-to-Jail cutscene and relaunches straight into
   Ellsworth Penitentiary, all in one session. Inside a mission, the move to the next part (for example Sea of
@@ -60,6 +74,8 @@ resolution setting; the rest are at the console's 1280x720.
 
 | | |
 |:-:|:-:|
+| ![Kinshasa with shadows and gamma](docs/images/kinshasa_shadows.jpg) | ![Iceland: clean night vision](docs/images/iceland_nightvision_clean.jpg) |
+| **Kinshasa**: current build, with the console's gamma and Sam's shadow | **Iceland**: night vision on the Osprey with `CleanGoggles=1` |
 | ![Kinshasa at Scale 3](docs/images/kinshasa_scale3.jpg) | ![Kinshasa gate at Scale 2](docs/images/kinshasa_gate.jpg) |
 | **Kinshasa**: retrieving the plans (*Scale 3*) | **Kinshasa**: through the gate (*Scale 2, 16x anisotropic*) |
 | ![Iceland: night vision](docs/images/iceland_nightvision.jpg) | ![Iceland: intake pipe](docs/images/iceland_pipe_dive.jpg) |
@@ -102,13 +118,12 @@ resolution setting; the rest are at the console's 1280x720.
 
 Planned next, roughly in order:
 
-1. **New York at full speed.** `10_newyork_02` runs at about 28 fps, the only map under the 30 fps cap. Profiling comes next.
-2. **Closer to the console's look.** The Xenos GPU clamps each blend write, and Direct3D 11 does not. Matching this
+1. **Full campaign playthrough.** Play every mission through by hand, start to finish.
+2. **Prebuilt releases.** An installer release for people who don't want to build from source. This is the first
+   release.
+3. **Closer to the console's look.** The Xenos GPU clamps each blend write, and Direct3D 11 does not. Matching this
    should fix the remaining small differences in fog and light shafts.
-3. **Seamless music loops.** A short seam (512 samples) remains where some music tracks loop.
-4. **Full campaign playthrough.** Play every mission through by hand, start to finish.
-5. **Prebuilt releases.** An installer release for people who don't want to build from source.
-6. **Ultrawide and more PC options**, once the renderer is stable.
+4. **Ultrawide and more PC options**, once the renderer is stable.
 
 ## Getting started
 
@@ -128,6 +143,7 @@ Scale=2
 Anisotropy=16
 Mode=borderless
 VSync=1
+CleanGoggles=0
 [Input]
 MouseLook=1
 MouseSensitivity=1.0
@@ -135,7 +151,8 @@ MouseInvertY=0
 ```
 
 `Scale` (1-4) renders at 1280x720 times Scale and downsamples to the window (2 = 2560x1440).
-`Anisotropy` (1-16, default 1) sets the minimum anisotropic filtering. `Mode` is `windowed`, `borderless` or `fullscreen`. The parser has no inline comments.
+`Anisotropy` (1-16, default 1) sets the minimum anisotropic filtering. `Mode` is `windowed`, `borderless` or `fullscreen`.
+`CleanGoggles=1` removes the goggle scanlines and noise. The parser has no inline comments.
 
 <img src="installer.png" width="640" alt="Installer">
 
